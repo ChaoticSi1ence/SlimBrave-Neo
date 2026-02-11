@@ -8,7 +8,10 @@
 
 ## Brave Browser Debloater
 
-SlimBrave is a powerful PowerShell script designed for Windows users to streamline their Brave Browser experience by toggling and configuring unwanted features. With SlimBrave, you can easily disable or enable various Brave functionalities, customize settings, and improve privacy.
+SlimBrave is a tool designed to streamline your Brave Browser experience by toggling and configuring unwanted features. With SlimBrave, you can easily disable or enable various Brave functionalities, customize settings, and improve privacy.
+
+- **Windows:** PowerShell GUI (`SlimBrave.ps1`) — sets registry policies
+- **Linux:** Python 3 curses TUI (`slimbrave.py`) — writes JSON policies to `/etc/brave/policies/managed/`
 
 ### Features:
 
@@ -86,11 +89,19 @@ SlimBrave is a powerful PowerShell script designed for Windows users to streamli
 
 # How to Run
 
-### Run the command below in PowerShell:
+### Windows (PowerShell)
 
 ```ps1
 iwr "https://raw.githubusercontent.com/ltx0101/SlimBrave/main/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; .\SlimBrave.ps1
 ```
+
+### Linux (Python 3)
+
+```bash
+sudo python3 slimbrave.py
+```
+
+Requires root privileges. Policies are written to `/etc/brave/policies/managed/slimbrave.json`. Restart Brave after applying changes and verify at `brave://policy`.
 
 ---
 
@@ -144,9 +155,15 @@ iwr "https://raw.githubusercontent.com/ltx0101/SlimBrave/main/SlimBrave.ps1" -Ou
 <details>
 <summary> Requirements </summary>
 
+**Windows:**
 - Windows 10/11
 - PowerShell
 - Administrator privileges
+
+**Linux:**
+- Python 3 (no external dependencies)
+- Root privileges
+- Brave Browser installed
 </details>
 
 <details>
@@ -179,7 +196,7 @@ In an era of increasingly bloated browsers, SlimBrave puts **you** back in contr
 ### Future Roadmap
 - [x] Add preset configurations (Privacy, Performance, etc.)
 - [x] Create backup/restore functionality
-- [ ] Add support for Linux/Mac (WIP)
+- [x] Add support for Linux
 
 ---
 <div align="center">
@@ -190,6 +207,6 @@ In an era of increasingly bloated browsers, SlimBrave puts **you** back in contr
 
 <div align="center">
   
-Made with ❤️ and PowerShell  
+Made with ❤️ PowerShell and Python  
 
 </div>
