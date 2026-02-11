@@ -8,10 +8,72 @@ Sets Chromium enterprise policies via JSON files at
 import curses
 import json
 import os
+import shutil
+import subprocess
 import sys
 
 POLICY_DIR = "/etc/brave/policies/managed"
 POLICY_FILE = os.path.join(POLICY_DIR, "slimbrave.json")
+
+# ---------------------------------------------------------------------------
+# Brave browser detection
+# ---------------------------------------------------------------------------
+
+
+def detect_brave():
+    """Detect Brave browser installation and packaging method.
+
+    Returns a dict with keys: found, method, path, warnings.
+    """
+    # Arch (brave-bin AUR package)
+    arch_path = "/opt/brave-bin/brave"
+    if os.path.isfile(arch_path):
+        return {"found": True, "method": "arch", "path": arch_path, "warnings": []}
+
+    # Deb / RPM (official brave-browser package)
+    for p in ("/opt/brave.com/brave/brave-browser", "/opt/brave.com/brave/brave"):
+        if os.path.isfile(p):
+            return {"found": True, "method": "deb/rpm", "path": p, "warnings": []}
+
+    # Flatpak (com.brave.Browser from Flathub)
+    try:
+        result = subprocess.run(
+            ["flatpak", "info", "com.brave.Browser"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        if result.returncode == 0:
+            return {
+                "found": True, "method": "flatpak",
+                "path": "com.brave.Browser",
+                "warnings": [],
+            }
+    except FileNotFoundError:
+        pass  # flatpak not installed
+
+    # Snap
+    snap_path = "/snap/brave/current/opt/brave.com/brave/brave"
+    if os.path.isfile(snap_path) or os.path.isdir("/snap/brave/current"):
+        return {
+            "found": True, "method": "snap", "path": snap_path,
+            "warnings": [
+                "Snap confinement may prevent policies from taking effect. "
+                "Native packages are recommended."
+            ],
+        }
+
+    # Fallback — check PATH
+    for name in ("brave-browser-stable", "brave-browser", "brave"):
+        found = shutil.which(name)
+        if found:
+            return {"found": True, "method": "unknown", "path": found, "warnings": []}
+
+    return {
+        "found": False, "method": "not found", "path": "",
+        "warnings": [
+            "Brave browser not found. Policies will be written but may have no effect."
+        ],
+    }
+
 
 # ---------------------------------------------------------------------------
 # Feature definitions — mirrors the Windows SlimBrave.ps1 categories
@@ -211,13 +273,17 @@ def selectable_indices(rows):
     return [i for i, r in enumerate(rows) if r["type"] in (ROW_FEATURE, ROW_DNS)]
 
 
-def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx, status_msg, status_ok):
+def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
+         status_msg, status_ok, install_method=""):
     stdscr.erase()
     max_y, max_x = stdscr.getmaxyx()
     usable_w = max_x - 1  # avoid writing to the last column
 
     # Title bar
-    title = " SlimBrave - Brave Browser Debloater "
+    if install_method:
+        title = f" SlimBrave - Brave Browser Debloater [{install_method}] "
+    else:
+        title = " SlimBrave - Brave Browser Debloater "
     pad = max(0, (usable_w - len(title)) // 2)
     try:
         stdscr.addnstr(0, 0, " " * usable_w, usable_w, curses.color_pair(CP_TITLE) | curses.A_BOLD)
@@ -320,6 +386,10 @@ def main(stdscr):
     if not sel:
         return
 
+    # Detect Brave installation
+    brave_info = detect_brave()
+    install_method = brave_info["method"]
+
     # Load existing policy and pre-check matching features
     policy = load_existing_policy()
     sync_rows_with_policy(rows, policy)
@@ -329,8 +399,14 @@ def main(stdscr):
     scroll_offset = 0
     focus = FOCUS_LIST
     btn_idx = 0
-    status_msg = ""
-    status_ok = True
+
+    # Show detection warnings on startup, if any
+    if brave_info["warnings"]:
+        status_msg = brave_info["warnings"][0]
+        status_ok = not brave_info["found"]  # red if not found, green if found with warning
+    else:
+        status_msg = ""
+        status_ok = True
 
     while True:
         # Compute scroll
@@ -348,7 +424,8 @@ def main(stdscr):
             if cursor_idx - 1 < scroll_offset:
                 scroll_offset = cursor_idx - 1
 
-        draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx, status_msg, status_ok)
+        draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
+             status_msg, status_ok, install_method)
 
         key = stdscr.getch()
 
@@ -427,7 +504,8 @@ def main(stdscr):
                     # Confirm reset
                     status_msg = "Reset all settings? Press Enter to confirm, any other key to cancel."
                     status_ok = True
-                    draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx, status_msg, status_ok)
+                    draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
+                         status_msg, status_ok, install_method)
                     confirm = stdscr.getch()
                     if confirm in (curses.KEY_ENTER, 10, 13):
                         status_ok, status_msg = reset_policy(rows)
