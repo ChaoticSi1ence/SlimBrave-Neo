@@ -247,7 +247,7 @@ CP_STATUS_OK = 7
 CP_STATUS_ERR = 8
 CP_TITLE = 9
 
-BUTTONS = ["Apply", "Reset", "Cancel"]
+BUTTONS = ["Apply", "Reset", "Quit"]
 
 # Focus zones
 FOCUS_LIST = 0
@@ -288,6 +288,13 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
     try:
         stdscr.addnstr(0, 0, " " * usable_w, usable_w, curses.color_pair(CP_TITLE) | curses.A_BOLD)
         stdscr.addnstr(0, pad, title, usable_w - pad, curses.color_pair(CP_TITLE) | curses.A_BOLD)
+    except curses.error:
+        pass
+
+    # Key hints below title
+    hint = " [Q/Esc] Quit  [Space/Enter] Toggle  [Tab] Switch to buttons "
+    try:
+        stdscr.addnstr(1, 0, hint.center(usable_w), usable_w, curses.color_pair(CP_NORMAL) | curses.A_DIM)
     except curses.error:
         pass
 
@@ -512,7 +519,7 @@ def main(stdscr):
                     else:
                         status_msg = "Reset cancelled."
                         status_ok = True
-                elif BUTTONS[btn_idx] == "Cancel":
+                elif BUTTONS[btn_idx] == "Quit":
                     break
             elif focus == FOCUS_LIST:
                 # Enter on a list item acts like spacebar
@@ -531,4 +538,7 @@ if __name__ == "__main__":
         print("Usage: sudo python3 slimbrave.py")
         sys.exit(1)
 
-    curses.wrapper(main)
+    try:
+        curses.wrapper(main)
+    except KeyboardInterrupt:
+        pass  # Clean exit on Ctrl+C
