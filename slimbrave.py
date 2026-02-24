@@ -90,6 +90,7 @@ CATEGORIES = [
     {
         "name": "Telemetry & Reporting",
         "features": [
+            {"name": "Disable Metrics Reporting", "key": "MetricsReportingEnabled", "value": False},
             {"name": "Disable Safe Browsing Reporting", "key": "SafeBrowsingExtendedReportingEnabled", "value": False},
             {"name": "Disable URL Data Collection", "key": "UrlKeyedAnonymizedDataCollectionEnabled", "value": False},
             {"name": "Disable Feedback Surveys", "key": "FeedbackSurveysEnabled", "value": False},
@@ -103,6 +104,7 @@ CATEGORIES = [
             {"name": "Disable Autofill (Credit Cards)", "key": "AutofillCreditCardEnabled", "value": False},
             {"name": "Disable Password Manager", "key": "PasswordManagerEnabled", "value": False},
             {"name": "Disable Browser Sign-in", "key": "BrowserSignin", "value": 0},
+            {"name": "Enable Do Not Track", "key": "EnableDoNotTrack", "value": True},
             {"name": "Disable WebRTC IP Leak", "key": "WebRtcIPHandling", "value": "disable_non_proxied_udp"},
             {"name": "Disable QUIC Protocol", "key": "QuicAllowed", "value": False},
             {"name": "Block Third Party Cookies", "key": "BlockThirdPartyCookies", "value": True},
@@ -119,6 +121,7 @@ CATEGORIES = [
             {"name": "Disable Brave VPN", "key": "BraveVPNDisabled", "value": True},
             {"name": "Disable Brave AI Chat", "key": "BraveAIChatEnabled", "value": False},
             {"name": "Disable Brave Shields", "key": "BraveShieldsDisabledForUrls", "value": ["https://*", "http://*"]},
+            {"name": "Disable IPFS", "key": "IPFSEnabled", "value": False},
             {"name": "Disable Tor", "key": "TorDisabled", "value": True},
             {"name": "Disable Sync", "key": "SyncDisabled", "value": True},
         ],

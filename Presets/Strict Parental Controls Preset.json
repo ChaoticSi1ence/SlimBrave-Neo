@@ -10,7 +10,7 @@
         "BraveVPNDisabled",
         "BraveAIChatEnabled",
         "TorDisabled",
-        "DeveloperToolsDisabled"
+        "DeveloperToolsAvailability"
     ],
     "DnsMode": "custom"
 }

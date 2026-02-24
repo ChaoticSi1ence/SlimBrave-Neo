@@ -33,7 +33,7 @@
         "SearchSuggestEnabled",
         "PrintingEnabled",
         "DefaultBrowserSettingEnabled",
-        "DeveloperToolsDisabled"
+        "DeveloperToolsAvailability"
     ],
     "DnsMode": "off"
 }
