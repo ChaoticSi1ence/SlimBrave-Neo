@@ -51,7 +51,7 @@ After applying, restart Brave and verify at `brave://policy`.
 ## Quick Start — Windows
 
 ```powershell
-iwr "https://raw.githubusercontent.com/ltx0101/SlimBrave/main/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; .\SlimBrave.ps1
+iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave/main/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; .\SlimBrave.ps1
 ```
 
 Requires Administrator privileges.
@@ -61,7 +61,6 @@ Requires Administrator privileges.
 ## Features
 
 ### Telemetry & Reporting
-- Disable Metrics Reporting
 - Disable Safe Browsing Reporting
 - Disable URL Data Collection
 - Disable Feedback Surveys
@@ -74,9 +73,7 @@ Requires Administrator privileges.
 - Disable WebRTC IP Leak
 - Disable QUIC Protocol
 - Block Third Party Cookies
-- Enable Do Not Track
 - Force Google SafeSearch
-- Disable IPFS
 - Disable / Force Incognito Mode
 
 ### Brave Features

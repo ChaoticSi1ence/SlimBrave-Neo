@@ -9,24 +9,54 @@ Add-Type -AssemblyName System.Drawing
 $registryPath = "HKLM:\SOFTWARE\Policies\BraveSoftware\Brave"
 
 if (-not (Test-Path -Path $registryPath)) {
-    New-Item -Path $registryPath -Force
+    New-Item -Path $registryPath -Force | Out-Null
 }
 
 Clear-Host
 
-function Set-DnsMode {
+# ---------------------------------------------------------------------------
+# DNS helper — handles both DnsOverHttpsMode and DnsOverHttpsTemplates
+# ---------------------------------------------------------------------------
+
+function Set-DnsSettings {
     param (
-        [string] $dnsMode
+        [string] $dnsMode,
+        [string] $dnsTemplates
     )
-    $regKey = "HKLM:\\Software\\Policies\\BraveSoftware\\Brave"
-    Set-ItemProperty -Path $regKey -Name "DnsOverHttpsMode" -Value $dnsMode -Type String -Force
-    [System.Windows.Forms.MessageBox]::Show("DNS Over HTTPS Mode has been set to $dnsMode.", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    $regKey = "HKLM:\Software\Policies\BraveSoftware\Brave"
+    $resolvedMode = $dnsMode
+
+    if ($dnsMode -eq "custom") {
+        if ([string]::IsNullOrWhiteSpace($dnsTemplates)) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Custom DoH requires a template URL (e.g. https://cloudflare-dns.com/dns-query).",
+                "Missing DoH Template",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+            return $false
+        }
+        $resolvedMode = "secure"
+        Set-ItemProperty -Path $regKey -Name "DnsOverHttpsTemplates" -Value $dnsTemplates -Type String -Force
+    } else {
+        # Remove the templates key if not using custom
+        if (Get-ItemProperty -Path $regKey -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue) {
+            Remove-ItemProperty -Path $regKey -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
+        }
+    }
+
+    Set-ItemProperty -Path $regKey -Name "DnsOverHttpsMode" -Value $resolvedMode -Type String -Force
+    return $true
 }
+
+# ---------------------------------------------------------------------------
+# Form setup
+# ---------------------------------------------------------------------------
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "SlimBrave"
 $form.ForeColor = [System.Drawing.Color]::White
-$form.Size = New-Object System.Drawing.Size(755, 670)
+$form.Size = New-Object System.Drawing.Size(755, 700)
 $form.StartPosition = "CenterScreen"
 $form.BackColor = [System.Drawing.Color]::FromArgb(255, 25, 25, 25)
 $form.MaximizeBox = $false
@@ -34,9 +64,13 @@ $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 
 $allFeatures = @()
 
+# ---------------------------------------------------------------------------
+# Left panel — Telemetry & Privacy
+# ---------------------------------------------------------------------------
+
 $leftPanel = New-Object System.Windows.Forms.Panel
 $leftPanel.Location = New-Object System.Drawing.Point(20, 20)
-$leftPanel.Size = New-Object System.Drawing.Size(340,500)
+$leftPanel.Size = New-Object System.Drawing.Size(340, 500)
 $leftPanel.BackColor = [System.Drawing.Color]::FromArgb(255, 35, 35, 35)
 $leftPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
 $form.Controls.Add($leftPanel)
@@ -50,7 +84,6 @@ $telemetryLabel.ForeColor = [System.Drawing.Color]::LightSalmon
 $leftPanel.Controls.Add($telemetryLabel)
 
 $telemetryFeatures = @(
-    @{ Name = "Disable Metrics Reporting"; Key = "MetricsReportingEnabled"; Value = 0; Type = "DWord" },
     @{ Name = "Disable Safe Browsing Reporting"; Key = "SafeBrowsingExtendedReportingEnabled"; Value = 0; Type = "DWord" },
     @{ Name = "Disable URL Data Collection"; Key = "UrlKeyedAnonymizedDataCollectionEnabled"; Value = 0; Type = "DWord" },
     @{ Name = "Disable Feedback Surveys"; Key = "FeedbackSurveysEnabled"; Value = 0; Type = "DWord" }
@@ -89,9 +122,7 @@ $privacyFeatures = @(
     @{ Name = "Disable WebRTC IP Leak"; Key = "WebRtcIPHandling"; Value = "disable_non_proxied_udp"; Type = "String" },
     @{ Name = "Disable QUIC Protocol"; Key = "QuicAllowed"; Value = 0; Type = "DWord" },
     @{ Name = "Block Third Party Cookies"; Key = "BlockThirdPartyCookies"; Value = 1; Type = "DWord" },
-    @{ Name = "Enable Do Not Track"; Key = "EnableDoNotTrack"; Value = 1; Type = "DWord" },
     @{ Name = "Force Google SafeSearch"; Key = "ForceGoogleSafeSearch"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable IPFS"; Key = "IPFSEnabled"; Value = 0; Type = "DWord" },
     @{ Name = "Disable Incognito Mode"; Key = "IncognitoModeAvailability"; Value = 1; Type = "DWord" },
     @{ Name = "Force Incognito Mode"; Key = "IncognitoModeAvailability"; Value = 2; Type = "DWord" }
 )
@@ -107,6 +138,10 @@ foreach ($feature in $privacyFeatures) {
     $allFeatures += $checkbox
     $y += 25
 }
+
+# ---------------------------------------------------------------------------
+# Right panel — Brave Features & Performance
+# ---------------------------------------------------------------------------
 
 $rightPanel = New-Object System.Windows.Forms.Panel
 $rightPanel.Location = New-Object System.Drawing.Point(380, 20)
@@ -134,7 +169,6 @@ $braveFeatures = @(
     @{ Name = "Disable Brave Shields"; Key = "BraveShieldsDisabledForUrls"; Value = '["https://*", "http://*"]'; Type = "String" },
     @{ Name = "Disable Tor"; Key = "TorDisabled"; Value = 1; Type = "DWord" },
     @{ Name = "Disable Sync"; Key = "SyncDisabled"; Value = 1; Type = "DWord" }
-    
 )
 
 foreach ($feature in $braveFeatures) {
@@ -171,7 +205,7 @@ $perfFeatures = @(
     @{ Name = "Disable Search Suggestions"; Key = "SearchSuggestEnabled"; Value = 0; Type = "DWord" },
     @{ Name = "Disable Printing"; Key = "PrintingEnabled"; Value = 0; Type = "DWord" },
     @{ Name = "Disable Default Browser Prompt"; Key = "DefaultBrowserSettingEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Developer Tools"; Key = "DeveloperToolsDisabled"; Value = 1; Type = "DWord" }
+    @{ Name = "Disable Developer Tools"; Key = "DeveloperToolsAvailability"; Value = 2; Type = "DWord" }
 )
 
 foreach ($feature in $perfFeatures) {
@@ -186,7 +220,9 @@ foreach ($feature in $perfFeatures) {
     $y += 25
 }
 
-$y = 780
+# ---------------------------------------------------------------------------
+# DNS controls
+# ---------------------------------------------------------------------------
 
 $dnsLabel = New-Object System.Windows.Forms.Label
 $dnsLabel.Text = "DNS Over HTTPS Mode:"
@@ -195,18 +231,39 @@ $dnsLabel.Size = New-Object System.Drawing.Size(140, 20)
 $form.Controls.Add($dnsLabel)
 
 $dnsDropdown = New-Object System.Windows.Forms.ComboBox
-$dnsDropdown.Location = New-Object System.Drawing.Point(180,530)
+$dnsDropdown.Location = New-Object System.Drawing.Point(180, 530)
 $dnsDropdown.Size = New-Object System.Drawing.Size(150, 20)
-$dnsDropdown.Items.AddRange(@("automatic", "off", "custom"))
+$dnsDropdown.Items.AddRange(@("off", "automatic", "secure", "custom"))
 $dnsDropdown.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $dnsDropdown.BackColor = [System.Drawing.Color]::FromArgb(255, 25, 25, 25)
 $dnsDropdown.ForeColor = [System.Drawing.Color]::White
 $form.Controls.Add($dnsDropdown)
-$y += 40
+
+$dnsTemplateLabel = New-Object System.Windows.Forms.Label
+$dnsTemplateLabel.Text = "Custom DoH template URL:"
+$dnsTemplateLabel.Location = New-Object System.Drawing.Point(35, 560)
+$dnsTemplateLabel.Size = New-Object System.Drawing.Size(170, 20)
+$form.Controls.Add($dnsTemplateLabel)
+
+$dnsTemplateBox = New-Object System.Windows.Forms.TextBox
+$dnsTemplateBox.Location = New-Object System.Drawing.Point(210, 557)
+$dnsTemplateBox.Size = New-Object System.Drawing.Size(510, 20)
+$dnsTemplateBox.BackColor = [System.Drawing.Color]::FromArgb(255, 25, 25, 25)
+$dnsTemplateBox.ForeColor = [System.Drawing.Color]::White
+$dnsTemplateBox.Enabled = $false
+$form.Controls.Add($dnsTemplateBox)
+
+$dnsDropdown.Add_SelectedIndexChanged({
+    $dnsTemplateBox.Enabled = ($dnsDropdown.SelectedItem -eq "custom")
+})
+
+# ---------------------------------------------------------------------------
+# Buttons
+# ---------------------------------------------------------------------------
 
 $exportButton = New-Object System.Windows.Forms.Button
 $exportButton.Text = "Export Settings"
-$exportButton.Location = New-Object System.Drawing.Point(50, 580)
+$exportButton.Location = New-Object System.Drawing.Point(50, 610)
 $exportButton.Size = New-Object System.Drawing.Size(120, 30)
 $form.Controls.Add($exportButton)
 $exportButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -217,7 +274,7 @@ $exportButton.ForeColor = [System.Drawing.Color]::LightSalmon
 
 $importButton = New-Object System.Windows.Forms.Button
 $importButton.Text = "Import Settings"
-$importButton.Location = New-Object System.Drawing.Point(210, 580)
+$importButton.Location = New-Object System.Drawing.Point(210, 610)
 $importButton.Size = New-Object System.Drawing.Size(120, 30)
 $form.Controls.Add($importButton)
 $importButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -228,7 +285,7 @@ $importButton.ForeColor = [System.Drawing.Color]::LightSkyBlue
 
 $saveButton = New-Object System.Windows.Forms.Button
 $saveButton.Text = "Apply Settings"
-$saveButton.Location = New-Object System.Drawing.Point(410,580)
+$saveButton.Location = New-Object System.Drawing.Point(410, 610)
 $saveButton.Size = New-Object System.Drawing.Size(120, 30)
 $form.Controls.Add($saveButton)
 $saveButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -237,51 +294,103 @@ $saveButton.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(120, 1
 $saveButton.BackColor = [System.Drawing.Color]::FromArgb(150, 102, 102, 102)
 $saveButton.ForeColor = [System.Drawing.Color]::LightGreen
 
+$resetButton = New-Object System.Windows.Forms.Button
+$resetButton.Text = "Reset All Settings"
+$resetButton.Location = New-Object System.Drawing.Point(570, 610)
+$resetButton.Size = New-Object System.Drawing.Size(120, 30)
+$form.Controls.Add($resetButton)
+$resetButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$resetButton.FlatAppearance.BorderSize = 1
+$resetButton.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
+$resetButton.BackColor = [System.Drawing.Color]::FromArgb(150, 102, 102, 102)
+$resetButton.ForeColor = [System.Drawing.Color]::LightCoral
+
+# ---------------------------------------------------------------------------
+# Apply — sets checked keys AND removes unchecked keys (fixes #25, #27, #19)
+# ---------------------------------------------------------------------------
+
 $saveButton.Add_Click({
+    # Build a hashtable of selected features keyed by policy key name.
+    # For keys shared by multiple checkboxes (e.g. IncognitoModeAvailability),
+    # the last checked one wins.
+    $selectedFeatures = @{}
     foreach ($checkbox in $allFeatures) {
         if ($checkbox.Checked) {
             $feature = $checkbox.Tag
+            $selectedFeatures[$feature.Key] = $feature
+        }
+    }
+
+    # Get every unique policy key across all features
+    $uniqueKeys = $allFeatures | ForEach-Object { $_.Tag.Key } | Select-Object -Unique
+
+    foreach ($key in $uniqueKeys) {
+        if ($selectedFeatures.ContainsKey($key)) {
+            $feature = $selectedFeatures[$key]
             try {
                 Set-ItemProperty -Path $registryPath -Name $feature.Key -Value $feature.Value -Type $feature.Type -Force
                 Write-Host "Set $($feature.Key) to $($feature.Value)"
             } catch {
                 Write-Host "Failed to set $($feature.Key): $_"
             }
+        } else {
+            # Remove the registry key if it exists but is no longer checked
+            if (Get-ItemProperty -Path $registryPath -Name $key -ErrorAction SilentlyContinue) {
+                try {
+                    Remove-ItemProperty -Path $registryPath -Name $key -ErrorAction SilentlyContinue
+                    Write-Host "Removed $key"
+                } catch {
+                    Write-Host "Failed to remove ${key}: $_"
+                }
+            }
         }
     }
-    
+
+    # DNS settings
     if ($dnsDropdown.SelectedItem) {
-        Set-DnsMode -dnsMode $dnsDropdown.SelectedItem
+        $dnsUpdated = Set-DnsSettings -dnsMode $dnsDropdown.SelectedItem -dnsTemplates $dnsTemplateBox.Text
+        if (-not $dnsUpdated) {
+            return
+        }
     }
 
-    [System.Windows.Forms.MessageBox]::Show("Settings applied successfully! Restart Brave to see changes.", "SlimBrave", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    [System.Windows.Forms.MessageBox]::Show(
+        "Settings applied successfully! Restart Brave to see changes.",
+        "SlimBrave",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Information
+    )
 })
+
+# ---------------------------------------------------------------------------
+# Reset
+# ---------------------------------------------------------------------------
 
 function Reset-AllSettings {
     $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "Warning: This will erase ALL Brave policy settings and restore them to their default state. Do you wish to continue?", 
-        "Confirm SlimBrave Reset", 
-        [System.Windows.Forms.MessageBoxButtons]::YesNo, 
+        "Warning: This will erase ALL Brave policy settings and restore them to their default state. Do you wish to continue?",
+        "Confirm SlimBrave Reset",
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Warning
     )
-    
+
     if ($confirm -eq "Yes") {
         try {
             Remove-Item -Path $registryPath -Recurse -Force
             New-Item -Path $registryPath -Force | Out-Null
 
             [System.Windows.Forms.MessageBox]::Show(
-                "All Brave policy settings have been successfully reset to their default values.", 
-                "Reset Successful", 
-                [System.Windows.Forms.MessageBoxButtons]::OK, 
+                "All Brave policy settings have been successfully reset to their default values.",
+                "Reset Successful",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Information
             )
             return $true
         } catch {
             [System.Windows.Forms.MessageBox]::Show(
-                "An error occurred while resetting the settings: $_", 
-                "Reset Failed", 
-                [System.Windows.Forms.MessageBoxButtons]::OK, 
+                "An error occurred while resetting the settings: $_",
+                "Reset Failed",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Error
             )
             return $false
@@ -291,25 +400,24 @@ function Reset-AllSettings {
     return $false
 }
 
-$resetButton = New-Object System.Windows.Forms.Button
-$resetButton.Text = "Reset All Settings"
-$resetButton.Location = New-Object System.Drawing.Point(570,580)
-$resetButton.Size = New-Object System.Drawing.Size(120, 30)
-$form.Controls.Add($resetButton)
-$resetButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$resetButton.FlatAppearance.BorderSize = 1
-$resetButton.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
-$resetButton.BackColor = [System.Drawing.Color]::FromArgb(150, 102, 102, 102)
-$resetButton.ForeColor = [System.Drawing.Color]::LightCoral
-$y += 40
-
 $resetButton.Add_Click({
     if (Reset-AllSettings) {
         if (-not (Test-Path -Path $registryPath)) {
             New-Item -Path $registryPath -Force | Out-Null
         }
+        # Uncheck all boxes and reset DNS controls
+        foreach ($checkbox in $allFeatures) {
+            $checkbox.Checked = $false
+        }
+        $dnsDropdown.SelectedItem = "off"
+        $dnsTemplateBox.Text = ""
+        $dnsTemplateBox.Enabled = $false
     }
 })
+
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
 
 $exportButton.Add_Click({
     $saveFileDialog = New-Object System.Windows.Forms.SaveFileDialog
@@ -317,42 +425,59 @@ $exportButton.Add_Click({
     $saveFileDialog.Title = "Export SlimBrave Settings"
     $saveFileDialog.InitialDirectory = [Environment]::GetFolderPath("MyDocuments")
     $saveFileDialog.FileName = "SlimBraveSettings.json"
-    
+
     if ($saveFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         $settingsToExport = @{
             Features = @()
             DnsMode = $dnsDropdown.SelectedItem
+            DnsTemplates = $dnsTemplateBox.Text
         }
-        
+
         foreach ($checkbox in $allFeatures) {
             if ($checkbox.Checked) {
                 $settingsToExport.Features += $checkbox.Tag.Key
             }
         }
-        
+
         try {
             $settingsToExport | ConvertTo-Json | Out-File -FilePath $saveFileDialog.FileName -Force
-            [System.Windows.Forms.MessageBox]::Show("Settings exported successfully to:`n$($saveFileDialog.FileName)", "Export Successful", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            [System.Windows.Forms.MessageBox]::Show(
+                "Settings exported successfully to:`n$($saveFileDialog.FileName)",
+                "Export Successful",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            )
         } catch {
-            [System.Windows.Forms.MessageBox]::Show("Failed to export settings: $_", "Export Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            [System.Windows.Forms.MessageBox]::Show(
+                "Failed to export settings: $_",
+                "Export Failed",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            )
         }
     }
 })
+
+# ---------------------------------------------------------------------------
+# Import
+# ---------------------------------------------------------------------------
 
 $importButton.Add_Click({
     $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
     $openFileDialog.Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*"
     $openFileDialog.Title = "Import SlimBrave Settings"
     $openFileDialog.InitialDirectory = [Environment]::GetFolderPath("MyDocuments")
-    
+
     if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         try {
             $importedSettings = Get-Content -Path $openFileDialog.FileName -Raw | ConvertFrom-Json
-            
+
+            # Uncheck everything first
             foreach ($checkbox in $allFeatures) {
                 $checkbox.Checked = $false
             }
-            
+
+            # Check matching features
             foreach ($featureKey in $importedSettings.Features) {
                 foreach ($checkbox in $allFeatures) {
                     if ($checkbox.Tag.Key -eq $featureKey) {
@@ -361,16 +486,88 @@ $importButton.Add_Click({
                     }
                 }
             }
-            
+
+            # DNS mode
             if ($importedSettings.DnsMode) {
                 $dnsDropdown.SelectedItem = $importedSettings.DnsMode
             }
-            
-            [System.Windows.Forms.MessageBox]::Show("Settings imported successfully from:`n$($openFileDialog.FileName)", "Import Successful", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+
+            # DNS template
+            if ($importedSettings.DnsTemplates) {
+                $dnsTemplateBox.Text = $importedSettings.DnsTemplates
+                if (-not $importedSettings.DnsMode) {
+                    $dnsDropdown.SelectedItem = "custom"
+                }
+            }
+
+            [System.Windows.Forms.MessageBox]::Show(
+                "Settings imported successfully from:`n$($openFileDialog.FileName)",
+                "Import Successful",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            )
         } catch {
-            [System.Windows.Forms.MessageBox]::Show("Failed to import settings: $_", "Import Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            [System.Windows.Forms.MessageBox]::Show(
+                "Failed to import settings: $_",
+                "Import Failed",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            )
         }
     }
 })
+
+# ---------------------------------------------------------------------------
+# Initialize — read current registry and pre-check matching features on startup
+# ---------------------------------------------------------------------------
+
+function Initialize-CurrentSettings {
+    $currentSettings = Get-ItemProperty -Path $registryPath -ErrorAction SilentlyContinue
+
+    foreach ($checkbox in $allFeatures) {
+        $feature = $checkbox.Tag
+        $currentValue = $null
+        if ($currentSettings -and ($currentSettings.PSObject.Properties.Name -contains $feature.Key)) {
+            $currentValue = $currentSettings.$($feature.Key)
+        }
+
+        if ($null -ne $currentValue) {
+            if ($feature.Type -eq "DWord") {
+                $checkbox.Checked = ([int]$currentValue -eq [int]$feature.Value)
+            } else {
+                $checkbox.Checked = ($currentValue.ToString() -eq $feature.Value.ToString())
+            }
+        } else {
+            $checkbox.Checked = $false
+        }
+    }
+
+    # DNS settings
+    if ($currentSettings) {
+        $currentDnsMode = $null
+        $currentDnsTemplates = $null
+        if ($currentSettings.PSObject.Properties.Name -contains "DnsOverHttpsMode") {
+            $currentDnsMode = $currentSettings.DnsOverHttpsMode
+        }
+        if ($currentSettings.PSObject.Properties.Name -contains "DnsOverHttpsTemplates") {
+            $currentDnsTemplates = $currentSettings.DnsOverHttpsTemplates
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($currentDnsTemplates)) {
+            $dnsDropdown.SelectedItem = "custom"
+            $dnsTemplateBox.Text = $currentDnsTemplates
+        } elseif (-not [string]::IsNullOrWhiteSpace($currentDnsMode)) {
+            $dnsDropdown.SelectedItem = $currentDnsMode
+        } else {
+            $dnsDropdown.SelectedItem = "off"
+        }
+    } else {
+        $dnsDropdown.SelectedItem = "off"
+    }
+
+    $dnsTemplateBox.Enabled = ($dnsDropdown.SelectedItem -eq "custom")
+}
+
+Initialize-CurrentSettings
 
 [void] $form.ShowDialog()

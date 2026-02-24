@@ -90,7 +90,6 @@ CATEGORIES = [
     {
         "name": "Telemetry & Reporting",
         "features": [
-            {"name": "Disable Metrics Reporting", "key": "MetricsReportingEnabled", "value": False},
             {"name": "Disable Safe Browsing Reporting", "key": "SafeBrowsingExtendedReportingEnabled", "value": False},
             {"name": "Disable URL Data Collection", "key": "UrlKeyedAnonymizedDataCollectionEnabled", "value": False},
             {"name": "Disable Feedback Surveys", "key": "FeedbackSurveysEnabled", "value": False},
@@ -107,9 +106,7 @@ CATEGORIES = [
             {"name": "Disable WebRTC IP Leak", "key": "WebRtcIPHandling", "value": "disable_non_proxied_udp"},
             {"name": "Disable QUIC Protocol", "key": "QuicAllowed", "value": False},
             {"name": "Block Third Party Cookies", "key": "BlockThirdPartyCookies", "value": True},
-            {"name": "Enable Do Not Track", "key": "EnableDoNotTrack", "value": True},
             {"name": "Force Google SafeSearch", "key": "ForceGoogleSafeSearch", "value": True},
-            {"name": "Disable IPFS", "key": "IPFSEnabled", "value": False},
             {"name": "Disable Incognito Mode", "key": "IncognitoModeAvailability", "value": 1},
             {"name": "Force Incognito Mode", "key": "IncognitoModeAvailability", "value": 2},
         ],
