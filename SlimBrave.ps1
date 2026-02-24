@@ -6,7 +6,9 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-$registryPath = "HKLM:\SOFTWARE\Policies\BraveSoftware\Brave"
+$machineRegistryPath = "HKLM:\SOFTWARE\Policies\BraveSoftware\Brave"
+$userRegistryPath   = "HKCU:\SOFTWARE\Policies\BraveSoftware\Brave"
+$registryPath       = $machineRegistryPath
 
 if (-not (Test-Path -Path $registryPath)) {
     New-Item -Path $registryPath -Force | Out-Null
@@ -241,12 +243,12 @@ $form.Controls.Add($dnsDropdown)
 
 $dnsTemplateLabel = New-Object System.Windows.Forms.Label
 $dnsTemplateLabel.Text = "Custom DoH template URL:"
-$dnsTemplateLabel.Location = New-Object System.Drawing.Point(35, 560)
+$dnsTemplateLabel.Location = New-Object System.Drawing.Point(35, 565)
 $dnsTemplateLabel.Size = New-Object System.Drawing.Size(170, 20)
 $form.Controls.Add($dnsTemplateLabel)
 
 $dnsTemplateBox = New-Object System.Windows.Forms.TextBox
-$dnsTemplateBox.Location = New-Object System.Drawing.Point(210, 557)
+$dnsTemplateBox.Location = New-Object System.Drawing.Point(210, 565)
 $dnsTemplateBox.Size = New-Object System.Drawing.Size(510, 20)
 $dnsTemplateBox.BackColor = [System.Drawing.Color]::FromArgb(255, 25, 25, 25)
 $dnsTemplateBox.ForeColor = [System.Drawing.Color]::White
@@ -330,18 +332,30 @@ $saveButton.Add_Click({
             try {
                 Set-ItemProperty -Path $registryPath -Name $feature.Key -Value $feature.Value -Type $feature.Type -Force
                 Write-Host "Set $($feature.Key) to $($feature.Value)"
+                # When enforcing a machine-level policy, clear any conflicting
+                # user-scope value so Brave does not merge the two.
+                if ((Test-Path -Path $userRegistryPath) -and
+                    (Get-ItemProperty -Path $userRegistryPath -Name $key -ErrorAction SilentlyContinue)) {
+                    Remove-ItemProperty -Path $userRegistryPath -Name $key -ErrorAction SilentlyContinue
+                }
             } catch {
                 Write-Host "Failed to set $($feature.Key): $_"
             }
         } else {
-            # Remove the registry key if it exists but is no longer checked
-            if (Get-ItemProperty -Path $registryPath -Name $key -ErrorAction SilentlyContinue) {
-                try {
+            # Remove the policy from both machine and user scopes so
+            # Brave falls back to its built-in default.
+            try {
+                if (Get-ItemProperty -Path $registryPath -Name $key -ErrorAction SilentlyContinue) {
                     Remove-ItemProperty -Path $registryPath -Name $key -ErrorAction SilentlyContinue
                     Write-Host "Removed $key"
-                } catch {
-                    Write-Host "Failed to remove ${key}: $_"
                 }
+                if ((Test-Path -Path $userRegistryPath) -and
+                    (Get-ItemProperty -Path $userRegistryPath -Name $key -ErrorAction SilentlyContinue)) {
+                    Remove-ItemProperty -Path $userRegistryPath -Name $key -ErrorAction SilentlyContinue
+                    Write-Host "Removed $key from user scope"
+                }
+            } catch {
+                Write-Host "Failed to remove ${key}: $_"
             }
         }
     }
@@ -377,6 +391,9 @@ function Reset-AllSettings {
     if ($confirm -eq "Yes") {
         try {
             Remove-Item -Path $registryPath -Recurse -Force
+            if (Test-Path -Path $userRegistryPath) {
+                Remove-Item -Path $userRegistryPath -Recurse -Force
+            }
             New-Item -Path $registryPath -Force | Out-Null
 
             [System.Windows.Forms.MessageBox]::Show(
@@ -522,13 +539,18 @@ $importButton.Add_Click({
 # ---------------------------------------------------------------------------
 
 function Initialize-CurrentSettings {
-    $currentSettings = Get-ItemProperty -Path $registryPath -ErrorAction SilentlyContinue
+    # Read from both machine (HKLM) and user (HKCU) policy scopes.
+    # Machine scope takes precedence; user scope is a fallback.
+    $machineSettings = Get-ItemProperty -Path $registryPath -ErrorAction SilentlyContinue
+    $userSettings    = Get-ItemProperty -Path $userRegistryPath -ErrorAction SilentlyContinue
 
     foreach ($checkbox in $allFeatures) {
         $feature = $checkbox.Tag
         $currentValue = $null
-        if ($currentSettings -and ($currentSettings.PSObject.Properties.Name -contains $feature.Key)) {
-            $currentValue = $currentSettings.$($feature.Key)
+        if ($machineSettings -and ($machineSettings.PSObject.Properties.Name -contains $feature.Key)) {
+            $currentValue = $machineSettings.$($feature.Key)
+        } elseif ($userSettings -and ($userSettings.PSObject.Properties.Name -contains $feature.Key)) {
+            $currentValue = $userSettings.$($feature.Key)
         }
 
         if ($null -ne $currentValue) {
@@ -543,14 +565,18 @@ function Initialize-CurrentSettings {
     }
 
     # DNS settings
-    if ($currentSettings) {
+    if ($machineSettings -or $userSettings) {
         $currentDnsMode = $null
         $currentDnsTemplates = $null
-        if ($currentSettings.PSObject.Properties.Name -contains "DnsOverHttpsMode") {
-            $currentDnsMode = $currentSettings.DnsOverHttpsMode
+        if ($machineSettings -and ($machineSettings.PSObject.Properties.Name -contains "DnsOverHttpsMode")) {
+            $currentDnsMode = $machineSettings.DnsOverHttpsMode
+        } elseif ($userSettings -and ($userSettings.PSObject.Properties.Name -contains "DnsOverHttpsMode")) {
+            $currentDnsMode = $userSettings.DnsOverHttpsMode
         }
-        if ($currentSettings.PSObject.Properties.Name -contains "DnsOverHttpsTemplates") {
-            $currentDnsTemplates = $currentSettings.DnsOverHttpsTemplates
+        if ($machineSettings -and ($machineSettings.PSObject.Properties.Name -contains "DnsOverHttpsTemplates")) {
+            $currentDnsTemplates = $machineSettings.DnsOverHttpsTemplates
+        } elseif ($userSettings -and ($userSettings.PSObject.Properties.Name -contains "DnsOverHttpsTemplates")) {
+            $currentDnsTemplates = $userSettings.DnsOverHttpsTemplates
         }
 
         if (-not [string]::IsNullOrWhiteSpace($currentDnsTemplates)) {
