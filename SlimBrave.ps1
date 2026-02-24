@@ -15,7 +15,7 @@ if (-not (Test-Path -Path $registryPath)) {
 Clear-Host
 
 # ---------------------------------------------------------------------------
-# DNS helper — handles both DnsOverHttpsMode and DnsOverHttpsTemplates
+# DNS helper - handles both DnsOverHttpsMode and DnsOverHttpsTemplates
 # ---------------------------------------------------------------------------
 
 function Set-DnsSettings {
@@ -65,7 +65,7 @@ $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $allFeatures = @()
 
 # ---------------------------------------------------------------------------
-# Left panel — Telemetry & Privacy
+# Left panel - Telemetry & Privacy
 # ---------------------------------------------------------------------------
 
 $leftPanel = New-Object System.Windows.Forms.Panel
@@ -140,7 +140,7 @@ foreach ($feature in $privacyFeatures) {
 }
 
 # ---------------------------------------------------------------------------
-# Right panel — Brave Features & Performance
+# Right panel - Brave Features & Performance
 # ---------------------------------------------------------------------------
 
 $rightPanel = New-Object System.Windows.Forms.Panel
@@ -306,7 +306,7 @@ $resetButton.BackColor = [System.Drawing.Color]::FromArgb(150, 102, 102, 102)
 $resetButton.ForeColor = [System.Drawing.Color]::LightCoral
 
 # ---------------------------------------------------------------------------
-# Apply — sets checked keys AND removes unchecked keys (fixes #25, #27, #19)
+# Apply - sets checked keys AND removes unchecked keys (fixes #25, #27, #19)
 # ---------------------------------------------------------------------------
 
 $saveButton.Add_Click({
@@ -518,7 +518,7 @@ $importButton.Add_Click({
 })
 
 # ---------------------------------------------------------------------------
-# Initialize — read current registry and pre-check matching features on startup
+# Initialize - read current registry and pre-check matching features on startup
 # ---------------------------------------------------------------------------
 
 function Initialize-CurrentSettings {

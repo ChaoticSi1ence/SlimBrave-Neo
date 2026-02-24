@@ -68,7 +68,7 @@ def detect_brave():
             ],
         }
 
-    # Fallback — check PATH
+    # Fallback - check PATH
     for name in ("brave-browser-stable", "brave-browser", "brave"):
         found = shutil.which(name)
         if found:
@@ -83,7 +83,7 @@ def detect_brave():
 
 
 # ---------------------------------------------------------------------------
-# Feature definitions — mirrors the Windows SlimBrave Neo PS1 categories
+# Feature definitions - mirrors the Windows SlimBrave Neo PS1 categories
 # ---------------------------------------------------------------------------
 
 CATEGORIES = [
@@ -606,7 +606,7 @@ def prompt_text_input(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
 
         key = stdscr.getch()
 
-        if key == 27:  # Escape — cancel
+        if key == 27:  # Escape - cancel
             return False, ""
         elif key in (curses.KEY_ENTER, 10, 13):
             return True, "".join(buf).strip()

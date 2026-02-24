@@ -14,19 +14,19 @@
 
 SlimBrave Neo uses Chromium enterprise managed policies to disable telemetry,
 bloat, and unwanted features from Brave Browser. No browser extensions,
-no hacks — just clean policy enforcement that Brave respects natively.
+no hacks, just clean policy enforcement that Brave respects natively.
 
 ---
 
 <img src="assets/tui-screenshot.png" width="620" alt="SlimBrave Neo Linux TUI">
 
-*Interactive curses TUI — zero dependencies, runs in any terminal.*
+*Interactive curses TUI. Zero dependencies, runs in any terminal.*
 
 </div>
 
 ---
 
-## Quick Start — Linux
+## Quick Start - Linux
 
 ```bash
 git clone https://github.com/ChaoticSi1ence/SlimBrave-Neo.git
@@ -48,7 +48,7 @@ After applying, restart Brave and verify at `brave://policy`.
 
 ---
 
-## Quick Start — Windows
+## Quick Start - Windows
 
 ```powershell
 iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/main/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; .\SlimBrave.ps1
@@ -116,8 +116,8 @@ Requires Administrator privileges.
 | `--doh-templates URL` | Set custom DNS-over-HTTPS template URL |
 | `-h`, `--help` | Show help |
 
-Import/export uses the same JSON format as the Windows PowerShell version —
-configs are cross-platform compatible.
+Import/export uses the same JSON format as the Windows PowerShell version.
+Configs are cross-platform compatible.
 
 ---
 
@@ -168,11 +168,11 @@ configs are cross-platform compatible.
 
 SlimBrave Neo writes Chromium [managed enterprise policies](https://chromeenterprise.google/policies/)
 to `/etc/brave/policies/managed/slimbrave.json`. Brave reads this directory on
-startup and enforces the policies — no browser modifications needed.
+startup and enforces the policies. No browser modifications needed.
 
 - Auto-detects Brave installations: Arch (`brave-bin`), deb/rpm, Flatpak, Snap, and PATH fallback
 - Reads existing policies on startup and pre-checks matching features
-- Full overwrite on Apply — unchecked features are cleanly removed
+- Full overwrite on Apply, so unchecked features are cleanly removed
 - Import/export compatible with Windows PowerShell version (handles UTF-16 BOM encoding)
 
 ---
@@ -220,6 +220,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned
 
 Made with Python and PowerShell.
 
+[![Donate with PayPal](https://img.shields.io/badge/Donate-PayPal-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/donate/?hosted_button_id=N9ZF2VGQJ9CXG)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 
 </div>
