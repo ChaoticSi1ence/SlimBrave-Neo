@@ -1,6 +1,6 @@
 <div align="center">
 
-# SlimBrave
+# SlimBrave Neo
 
 <img src="https://github.com/user-attachments/assets/3e90a996-a74a-4ca1-bea6-0869275bab58" width="160" height="240">
 
@@ -12,13 +12,13 @@
 [![Linux](https://img.shields.io/badge/Linux-Supported-FCC624?logo=linux&logoColor=black)]()
 [![Windows](https://img.shields.io/badge/Windows-Supported-0078D6?logo=windows&logoColor=white)]()
 
-SlimBrave uses Chromium enterprise managed policies to disable telemetry,
+SlimBrave Neo uses Chromium enterprise managed policies to disable telemetry,
 bloat, and unwanted features from Brave Browser. No browser extensions,
 no hacks — just clean policy enforcement that Brave respects natively.
 
 ---
 
-<img src="assets/tui-screenshot.png" width="620" alt="SlimBrave Linux TUI">
+<img src="assets/tui-screenshot.png" width="620" alt="SlimBrave Neo Linux TUI">
 
 *Interactive curses TUI — zero dependencies, runs in any terminal.*
 
@@ -29,8 +29,8 @@ no hacks — just clean policy enforcement that Brave respects natively.
 ## Quick Start — Linux
 
 ```bash
-git clone https://github.com/ChaoticSi1ence/SlimBrave.git
-cd SlimBrave
+git clone https://github.com/ChaoticSi1ence/SlimBrave-Neo.git
+cd SlimBrave-Neo
 sudo python3 slimbrave.py
 ```
 
@@ -40,7 +40,7 @@ That's it. No `pip install`, no `jq`, no external dependencies. Just Python 3 an
 
 ```bash
 sudo python3 slimbrave.py --import "./Presets/Maximum Privacy Preset.json"
-sudo python3 slimbrave.py --export ~/SlimBraveSettings.json
+sudo python3 slimbrave.py --export ~/SlimBraveNeoSettings.json
 sudo python3 slimbrave.py --reset
 ```
 
@@ -51,7 +51,7 @@ After applying, restart Brave and verify at `brave://policy`.
 ## Quick Start — Windows
 
 ```powershell
-iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave/main/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; .\SlimBrave.ps1
+iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/main/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; .\SlimBrave.ps1
 ```
 
 Requires Administrator privileges.
@@ -109,8 +109,8 @@ Requires Administrator privileges.
 
 | Flag | Description |
 |------|-------------|
-| `--import PATH` | Import a SlimBrave JSON config and apply policies |
-| `--export PATH` | Export current policy to a SlimBrave JSON config |
+| `--import PATH` | Import a SlimBrave Neo JSON config and apply policies |
+| `--export PATH` | Export current policy to a SlimBrave Neo JSON config |
 | `--reset` | Remove the managed policy file |
 | `--policy-file PATH` | Override policy file path (default: `/etc/brave/policies/managed/slimbrave.json`) |
 | `--doh-templates URL` | Set custom DNS-over-HTTPS template URL |
@@ -166,7 +166,7 @@ configs are cross-platform compatible.
 
 ## How It Works
 
-SlimBrave writes Chromium [managed enterprise policies](https://chromeenterprise.google/policies/)
+SlimBrave Neo writes Chromium [managed enterprise policies](https://chromeenterprise.google/policies/)
 to `/etc/brave/policies/managed/slimbrave.json`. Brave reads this directory on
 startup and enforces the policies — no browser modifications needed.
 

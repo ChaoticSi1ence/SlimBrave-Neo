@@ -54,7 +54,7 @@ function Set-DnsSettings {
 # ---------------------------------------------------------------------------
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "SlimBrave"
+$form.Text = "SlimBrave Neo"
 $form.ForeColor = [System.Drawing.Color]::White
 $form.Size = New-Object System.Drawing.Size(755, 700)
 $form.StartPosition = "CenterScreen"
@@ -356,7 +356,7 @@ $saveButton.Add_Click({
 
     [System.Windows.Forms.MessageBox]::Show(
         "Settings applied successfully! Restart Brave to see changes.",
-        "SlimBrave",
+        "SlimBrave Neo",
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Information
     )
@@ -369,7 +369,7 @@ $saveButton.Add_Click({
 function Reset-AllSettings {
     $confirm = [System.Windows.Forms.MessageBox]::Show(
         "Warning: This will erase ALL Brave policy settings and restore them to their default state. Do you wish to continue?",
-        "Confirm SlimBrave Reset",
+        "Confirm SlimBrave Neo Reset",
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Warning
     )
@@ -422,9 +422,9 @@ $resetButton.Add_Click({
 $exportButton.Add_Click({
     $saveFileDialog = New-Object System.Windows.Forms.SaveFileDialog
     $saveFileDialog.Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*"
-    $saveFileDialog.Title = "Export SlimBrave Settings"
+    $saveFileDialog.Title = "Export SlimBrave Neo Settings"
     $saveFileDialog.InitialDirectory = [Environment]::GetFolderPath("MyDocuments")
-    $saveFileDialog.FileName = "SlimBraveSettings.json"
+    $saveFileDialog.FileName = "SlimBraveNeoSettings.json"
 
     if ($saveFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         $settingsToExport = @{
@@ -465,7 +465,7 @@ $exportButton.Add_Click({
 $importButton.Add_Click({
     $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
     $openFileDialog.Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*"
-    $openFileDialog.Title = "Import SlimBrave Settings"
+    $openFileDialog.Title = "Import SlimBrave Neo Settings"
     $openFileDialog.InitialDirectory = [Environment]::GetFolderPath("MyDocuments")
 
     if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {

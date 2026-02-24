@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SlimBrave - Linux TUI for debloating and hardening Brave Browser.
+"""SlimBrave Neo - Linux TUI for debloating and hardening Brave Browser.
 
 Sets Chromium enterprise policies via JSON files at
 /etc/brave/policies/managed/slimbrave.json. Requires root.
@@ -83,7 +83,7 @@ def detect_brave():
 
 
 # ---------------------------------------------------------------------------
-# Feature definitions — mirrors the Windows SlimBrave.ps1 categories
+# Feature definitions — mirrors the Windows SlimBrave Neo PS1 categories
 # ---------------------------------------------------------------------------
 
 CATEGORIES = [
@@ -323,7 +323,7 @@ def sync_rows_with_policy(rows, policy):
 
 
 def export_settings(rows, path):
-    """Export current TUI selections to a SlimBrave JSON config file."""
+    """Export current TUI selections to a SlimBrave Neo JSON config file."""
     features = []
     dns_mode = None
     dns_template = ""
@@ -353,7 +353,7 @@ def export_settings(rows, path):
 
 
 def import_settings(rows, path):
-    """Import a SlimBrave JSON config and update TUI row states."""
+    """Import a SlimBrave Neo JSON config and update TUI row states."""
     try:
         config = read_json_file(path)
     except FileNotFoundError:
@@ -440,9 +440,9 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
 
     # Title bar
     if install_method:
-        title = f" SlimBrave - Brave Browser Debloater [{install_method}] "
+        title = f" SlimBrave Neo - Brave Browser Debloater [{install_method}] "
     else:
-        title = " SlimBrave - Brave Browser Debloater "
+        title = " SlimBrave Neo - Brave Browser Debloater "
     pad = max(0, (usable_w - len(title)) // 2)
     try:
         stdscr.addnstr(0, 0, " " * usable_w, usable_w,
@@ -859,7 +859,7 @@ def main(stdscr):
                         stdscr, rows, cursor_idx, scroll_offset,
                         btn_idx, install_method,
                         "Export path (Esc=cancel)",
-                        default="./SlimBraveSettings.json")
+                        default="./SlimBraveNeoSettings.json")
                     if ok and path:
                         status_ok, status_msg = export_settings(rows, path)
                     else:
@@ -943,20 +943,20 @@ def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         prog="slimbrave",
-        description="SlimBrave - Brave Browser debloater for Linux",
+        description="SlimBrave Neo - Brave Browser debloater for Linux",
         epilog="Run without arguments to launch the interactive TUI.",
     )
     parser.add_argument(
         "--import", dest="import_path", metavar="PATH",
-        help="import a SlimBrave JSON config and apply policies",
+        help="import a SlimBrave Neo JSON config and apply policies",
     )
     parser.add_argument(
         "--export", dest="export_path", metavar="PATH",
-        help="export current policy to a SlimBrave JSON config",
+        help="export current policy to a SlimBrave Neo JSON config",
     )
     parser.add_argument(
         "--reset", action="store_true",
-        help="remove the SlimBrave managed policy file",
+        help="remove the SlimBrave Neo managed policy file",
     )
     parser.add_argument(
         "--policy-file", metavar="PATH",
@@ -984,7 +984,7 @@ if __name__ == "__main__":
     is_cli = args.import_path or args.export_path or args.reset
 
     if os.geteuid() != 0:
-        print("SlimBrave must be run as root.")
+        print("SlimBrave Neo must be run as root.")
         if is_cli:
             print("Usage: sudo python3 slimbrave.py --import preset.json")
         else:
