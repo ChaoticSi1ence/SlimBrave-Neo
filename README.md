@@ -4,12 +4,13 @@
 
 <img src="https://github.com/user-attachments/assets/3e90a996-a74a-4ca1-bea6-0869275bab58" width="160" height="240">
 
-**Debloat and harden Brave Browser on Linux and Windows.**
+**Debloat and harden Brave Browser on Linux, macOS, and Windows.**
 
 [![Python 3](https://img.shields.io/badge/Python_3-stdlib_only-3776AB?logo=python&logoColor=white)](https://python.org)
 [![No Dependencies](https://img.shields.io/badge/Dependencies-None-brightgreen)]()
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Linux](https://img.shields.io/badge/Linux-Supported-FCC624?logo=linux&logoColor=black)]()
+[![macOS](https://img.shields.io/badge/macOS-Supported-000000?logo=apple&logoColor=white)]()
 [![Windows](https://img.shields.io/badge/Windows-Supported-0078D6?logo=windows&logoColor=white)]()
 
 SlimBrave Neo uses Chromium enterprise managed policies to disable telemetry,
@@ -31,7 +32,7 @@ no hacks, just clean policy enforcement that Brave respects natively.
 ```bash
 git clone https://github.com/ChaoticSi1ence/SlimBrave-Neo.git
 cd SlimBrave-Neo
-sudo python3 slimbrave.py
+sudo python3 slimbrave-linux.py
 ```
 
 That's it. No `pip install`, no `jq`, no external dependencies. Just Python 3 and root.
@@ -39,9 +40,31 @@ That's it. No `pip install`, no `jq`, no external dependencies. Just Python 3 an
 ### CLI Mode (non-interactive)
 
 ```bash
-sudo python3 slimbrave.py --import "./Presets/Maximum Privacy Preset.json"
-sudo python3 slimbrave.py --export ~/SlimBraveNeoSettings.json
-sudo python3 slimbrave.py --reset
+sudo python3 slimbrave-linux.py --import "./Presets/Maximum Privacy Preset.json"
+sudo python3 slimbrave-linux.py --export ~/SlimBraveNeoSettings.json
+sudo python3 slimbrave-linux.py --reset
+```
+
+After applying, restart Brave and verify at `brave://policy`.
+
+---
+
+## Quick Start - macOS
+
+```bash
+git clone https://github.com/ChaoticSi1ence/SlimBrave-Neo.git
+cd SlimBrave-Neo
+sudo python3 slimbrave-mac.py
+```
+
+Policies are written to `/Library/Managed Preferences/com.brave.Browser.plist`. Requires root.
+
+### CLI Mode (non-interactive)
+
+```bash
+sudo python3 slimbrave-mac.py --import "./Presets/Maximum Privacy Preset.json"
+sudo python3 slimbrave-mac.py --export ~/SlimBraveNeoSettings.json
+sudo python3 slimbrave-mac.py --reset
 ```
 
 After applying, restart Brave and verify at `brave://policy`.
@@ -112,7 +135,7 @@ Requires Administrator privileges.
 | `--import PATH` | Import a SlimBrave Neo JSON config and apply policies |
 | `--export PATH` | Export current policy to a SlimBrave Neo JSON config |
 | `--reset` | Remove the managed policy file |
-| `--policy-file PATH` | Override policy file path (default: `/etc/brave/policies/managed/slimbrave.json`) |
+| `--policy-file PATH` | Override policy file path |
 | `--doh-templates URL` | Set custom DNS-over-HTTPS template URL |
 | `-h`, `--help` | Show help |
 
@@ -167,10 +190,13 @@ Configs are cross-platform compatible.
 ## How It Works
 
 SlimBrave Neo writes Chromium [managed enterprise policies](https://chromeenterprise.google/policies/)
-to `/etc/brave/policies/managed/slimbrave.json`. Brave reads this directory on
-startup and enforces the policies. No browser modifications needed.
+to platform-specific locations. Brave reads these on startup and enforces the policies. No browser modifications needed.
 
-- Auto-detects Brave installations: Arch (`brave-bin`), deb/rpm, Flatpak, Snap, and PATH fallback
+- **Linux:** `/etc/brave/policies/managed/slimbrave.json`
+- **macOS:** `/Library/Managed Preferences/com.brave.Browser.plist`
+- **Windows:** Registry keys via PowerShell
+
+- Auto-detects Brave installations: Arch (`brave-bin`), deb/rpm, Flatpak, Snap, macOS App, and PATH fallback
 - Reads existing policies on startup and pre-checks matching features
 - Full overwrite on Apply, so unchecked features are cleanly removed
 - Import/export compatible with Windows PowerShell version (handles UTF-16 BOM encoding)
@@ -184,6 +210,11 @@ startup and enforces the policies. No browser modifications needed.
 - Python 3 (no external dependencies)
 - Root privileges (`sudo`)
 - Brave Browser installed (any packaging method)
+
+**macOS:**
+- Python 3 (no external dependencies)
+- Root privileges (`sudo`)
+- Brave Browser installed
 
 **Windows:**
 - Windows 10/11
@@ -211,6 +242,13 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned
 - [x] Add Linux support with full interactive TUI
 - [x] DNS-over-HTTPS with custom template URLs
 - [x] CLI mode for scripting and automation
+- [x] macOS support via managed plist policies
+
+---
+
+## Contributors
+
+- **[@alsyundawy](https://github.com/alsyundawy)** - macOS version
 
 ---
 

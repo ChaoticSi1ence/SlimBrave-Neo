@@ -44,7 +44,7 @@ def detect_brave():
             mac_paths.append(f"/Users/{sudo_user}/Applications/Brave Browser.app")
         else:
             mac_paths.append(os.path.expanduser("~/Applications/Brave Browser.app"))
-            
+
         for p in mac_paths:
             if os.path.isdir(p):
                 return {"found": True, "method": "macOS App", "path": p, "warnings": []}
