@@ -58,7 +58,7 @@ function Set-DnsSettings {
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "SlimBrave Neo"
 $form.ForeColor = [System.Drawing.Color]::White
-$form.Size = New-Object System.Drawing.Size(755, 700)
+$form.Size = New-Object System.Drawing.Size(755, 825)
 $form.StartPosition = "CenterScreen"
 $form.BackColor = [System.Drawing.Color]::FromArgb(255, 25, 25, 25)
 $form.MaximizeBox = $false
@@ -72,7 +72,7 @@ $allFeatures = @()
 
 $leftPanel = New-Object System.Windows.Forms.Panel
 $leftPanel.Location = New-Object System.Drawing.Point(20, 20)
-$leftPanel.Size = New-Object System.Drawing.Size(340, 500)
+$leftPanel.Size = New-Object System.Drawing.Size(340, 575)
 $leftPanel.BackColor = [System.Drawing.Color]::FromArgb(255, 35, 35, 35)
 $leftPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
 $form.Controls.Add($leftPanel)
@@ -89,7 +89,9 @@ $telemetryFeatures = @(
     @{ Name = "Disable Metrics Reporting"; Key = "MetricsReportingEnabled"; Value = 0; Type = "DWord" },
     @{ Name = "Disable Safe Browsing Reporting"; Key = "SafeBrowsingExtendedReportingEnabled"; Value = 0; Type = "DWord" },
     @{ Name = "Disable URL Data Collection"; Key = "UrlKeyedAnonymizedDataCollectionEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Feedback Surveys"; Key = "FeedbackSurveysEnabled"; Value = 0; Type = "DWord" }
+    @{ Name = "Disable Feedback Surveys"; Key = "FeedbackSurveysEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "Disable P3A Analytics"; Key = "BraveP3AEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "Disable Stats Ping"; Key = "BraveStatsPingEnabled"; Value = 0; Type = "DWord" }
 )
 
 $y = 35
@@ -123,6 +125,7 @@ $privacyFeatures = @(
     @{ Name = "Disable Password Manager"; Key = "PasswordManagerEnabled"; Value = 0; Type = "DWord" },
     @{ Name = "Disable Browser Sign-in"; Key = "BrowserSignin"; Value = 0; Type = "DWord" },
     @{ Name = "Enable Do Not Track"; Key = "EnableDoNotTrack"; Value = 1; Type = "DWord" },
+    @{ Name = "Enable Global Privacy Control"; Key = "BraveGlobalPrivacyControlEnabled"; Value = 1; Type = "DWord" },
     @{ Name = "Disable WebRTC IP Leak"; Key = "WebRtcIPHandling"; Value = "disable_non_proxied_udp"; Type = "String" },
     @{ Name = "Disable QUIC Protocol"; Key = "QuicAllowed"; Value = 0; Type = "DWord" },
     @{ Name = "Block Third Party Cookies"; Key = "BlockThirdPartyCookies"; Value = 1; Type = "DWord" },
@@ -149,7 +152,7 @@ foreach ($feature in $privacyFeatures) {
 
 $rightPanel = New-Object System.Windows.Forms.Panel
 $rightPanel.Location = New-Object System.Drawing.Point(380, 20)
-$rightPanel.Size = New-Object System.Drawing.Size(340, 540)
+$rightPanel.Size = New-Object System.Drawing.Size(340, 665)
 $rightPanel.BackColor = [System.Drawing.Color]::FromArgb(255, 35, 35, 35)
 $rightPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
 $form.Controls.Add($rightPanel)
@@ -171,7 +174,11 @@ $braveFeatures = @(
     @{ Name = "Disable Brave VPN"; Key = "BraveVPNDisabled"; Value = 1; Type = "DWord" },
     @{ Name = "Disable Brave AI Chat"; Key = "BraveAIChatEnabled"; Value = 0; Type = "DWord" },
     @{ Name = "Disable Brave Shields"; Key = "BraveShieldsDisabledForUrls"; Value = '["https://*", "http://*"]'; Type = "String" },
-    @{ Name = "Disable IPFS"; Key = "IPFSEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "Disable Brave News"; Key = "BraveNewsDisabled"; Value = 1; Type = "DWord" },
+    @{ Name = "Disable Brave Talk"; Key = "BraveTalkDisabled"; Value = 1; Type = "DWord" },
+    @{ Name = "Disable Brave Playlist"; Key = "BravePlaylistEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "Disable Web Discovery"; Key = "BraveWebDiscoveryEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "Disable Speedreader"; Key = "BraveSpeedreaderEnabled"; Value = 0; Type = "DWord" },
     @{ Name = "Disable Tor"; Key = "TorDisabled"; Value = 1; Type = "DWord" },
     @{ Name = "Disable Sync"; Key = "SyncDisabled"; Value = 1; Type = "DWord" }
 )
@@ -210,7 +217,8 @@ $perfFeatures = @(
     @{ Name = "Disable Search Suggestions"; Key = "SearchSuggestEnabled"; Value = 0; Type = "DWord" },
     @{ Name = "Disable Printing"; Key = "PrintingEnabled"; Value = 0; Type = "DWord" },
     @{ Name = "Disable Default Browser Prompt"; Key = "DefaultBrowserSettingEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Developer Tools"; Key = "DeveloperToolsAvailability"; Value = 2; Type = "DWord" }
+    @{ Name = "Disable Developer Tools"; Key = "DeveloperToolsAvailability"; Value = 2; Type = "DWord" },
+    @{ Name = "Disable Wayback Machine"; Key = "BraveWaybackMachineEnabled"; Value = 0; Type = "DWord" }
 )
 
 foreach ($feature in $perfFeatures) {
@@ -231,12 +239,12 @@ foreach ($feature in $perfFeatures) {
 
 $dnsLabel = New-Object System.Windows.Forms.Label
 $dnsLabel.Text = "DNS Over HTTPS Mode:"
-$dnsLabel.Location = New-Object System.Drawing.Point(35, 535)
+$dnsLabel.Location = New-Object System.Drawing.Point(35, 660)
 $dnsLabel.Size = New-Object System.Drawing.Size(140, 20)
 $form.Controls.Add($dnsLabel)
 
 $dnsDropdown = New-Object System.Windows.Forms.ComboBox
-$dnsDropdown.Location = New-Object System.Drawing.Point(180, 530)
+$dnsDropdown.Location = New-Object System.Drawing.Point(180, 655)
 $dnsDropdown.Size = New-Object System.Drawing.Size(150, 20)
 $dnsDropdown.Items.AddRange(@("off", "automatic", "secure", "custom"))
 $dnsDropdown.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -246,12 +254,12 @@ $form.Controls.Add($dnsDropdown)
 
 $dnsTemplateLabel = New-Object System.Windows.Forms.Label
 $dnsTemplateLabel.Text = "Custom DoH template URL:"
-$dnsTemplateLabel.Location = New-Object System.Drawing.Point(35, 565)
+$dnsTemplateLabel.Location = New-Object System.Drawing.Point(35, 690)
 $dnsTemplateLabel.Size = New-Object System.Drawing.Size(170, 20)
 $form.Controls.Add($dnsTemplateLabel)
 
 $dnsTemplateBox = New-Object System.Windows.Forms.TextBox
-$dnsTemplateBox.Location = New-Object System.Drawing.Point(210, 565)
+$dnsTemplateBox.Location = New-Object System.Drawing.Point(210, 690)
 $dnsTemplateBox.Size = New-Object System.Drawing.Size(510, 20)
 $dnsTemplateBox.BackColor = [System.Drawing.Color]::FromArgb(255, 25, 25, 25)
 $dnsTemplateBox.ForeColor = [System.Drawing.Color]::White
@@ -268,7 +276,7 @@ $dnsDropdown.Add_SelectedIndexChanged({
 
 $exportButton = New-Object System.Windows.Forms.Button
 $exportButton.Text = "Export Settings"
-$exportButton.Location = New-Object System.Drawing.Point(50, 610)
+$exportButton.Location = New-Object System.Drawing.Point(50, 735)
 $exportButton.Size = New-Object System.Drawing.Size(120, 30)
 $form.Controls.Add($exportButton)
 $exportButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -279,7 +287,7 @@ $exportButton.ForeColor = [System.Drawing.Color]::LightSalmon
 
 $importButton = New-Object System.Windows.Forms.Button
 $importButton.Text = "Import Settings"
-$importButton.Location = New-Object System.Drawing.Point(210, 610)
+$importButton.Location = New-Object System.Drawing.Point(210, 735)
 $importButton.Size = New-Object System.Drawing.Size(120, 30)
 $form.Controls.Add($importButton)
 $importButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -290,7 +298,7 @@ $importButton.ForeColor = [System.Drawing.Color]::LightSkyBlue
 
 $saveButton = New-Object System.Windows.Forms.Button
 $saveButton.Text = "Apply Settings"
-$saveButton.Location = New-Object System.Drawing.Point(410, 610)
+$saveButton.Location = New-Object System.Drawing.Point(410, 735)
 $saveButton.Size = New-Object System.Drawing.Size(120, 30)
 $form.Controls.Add($saveButton)
 $saveButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -301,7 +309,7 @@ $saveButton.ForeColor = [System.Drawing.Color]::LightGreen
 
 $resetButton = New-Object System.Windows.Forms.Button
 $resetButton.Text = "Reset All Settings"
-$resetButton.Location = New-Object System.Drawing.Point(570, 610)
+$resetButton.Location = New-Object System.Drawing.Point(570, 735)
 $resetButton.Size = New-Object System.Drawing.Size(120, 30)
 $form.Controls.Add($resetButton)
 $resetButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat

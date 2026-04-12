@@ -8,6 +8,8 @@
         "BraveWalletDisabled",
         "BraveVPNDisabled",
         "BraveAIChatEnabled",
+        "BraveNewsDisabled",
+        "BraveTalkDisabled",
         "BackgroundModeEnabled",
         "MediaRecommendationsEnabled",
         "ShoppingListEnabled",

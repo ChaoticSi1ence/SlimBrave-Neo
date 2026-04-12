@@ -87,12 +87,15 @@ Requires Administrator privileges.
 - Disable Safe Browsing Reporting
 - Disable URL Data Collection
 - Disable Feedback Surveys
+- Disable P3A Analytics
+- Disable Stats Ping
 
 ### Privacy & Security
 - Disable Safe Browsing
 - Disable Autofill (Addresses & Credit Cards)
 - Disable Password Manager
 - Disable Browser Sign-in
+- Enable Global Privacy Control
 - Disable WebRTC IP Leak
 - Disable QUIC Protocol
 - Block Third Party Cookies
@@ -105,6 +108,11 @@ Requires Administrator privileges.
 - Disable Brave VPN
 - Disable Brave AI Chat
 - Disable Brave Shields
+- Disable Brave News
+- Disable Brave Talk
+- Disable Brave Playlist
+- Disable Web Discovery
+- Disable Speedreader
 - Disable Tor
 - Disable Sync
 
@@ -120,6 +128,7 @@ Requires Administrator privileges.
 - Disable Printing
 - Disable Default Browser Prompt
 - Disable Developer Tools
+- Disable Wayback Machine
 
 ### DNS Over HTTPS
 - Four modes: `automatic`, `off`, `secure`, `custom`

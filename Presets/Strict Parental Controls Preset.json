@@ -1,5 +1,7 @@
 {
     "Features": [
+        "BraveP3AEnabled",
+        "BraveStatsPingEnabled",
         "IncognitoModeAvailability",
         "ForceGoogleSafeSearch",
         "SafeBrowsingProtectionLevel",
@@ -9,6 +11,9 @@
         "BraveWalletDisabled",
         "BraveVPNDisabled",
         "BraveAIChatEnabled",
+        "BraveNewsDisabled",
+        "BraveTalkDisabled",
+        "BraveWebDiscoveryEnabled",
         "TorDisabled",
         "DeveloperToolsAvailability"
     ],

@@ -6,11 +6,15 @@
         "BraveWalletDisabled",
         "BraveVPNDisabled",
         "BraveAIChatEnabled",
+        "BraveNewsDisabled",
+        "BraveTalkDisabled",
+        "BravePlaylistEnabled",
         "BackgroundModeEnabled",
         "MediaRecommendationsEnabled",
         "ShoppingListEnabled",
         "PromotionsEnabled",
-        "DefaultBrowserSettingEnabled"
+        "DefaultBrowserSettingEnabled",
+        "BraveWaybackMachineEnabled"
     ],
     "DnsMode": "automatic"
 }
