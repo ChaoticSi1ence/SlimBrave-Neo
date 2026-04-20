@@ -52,6 +52,71 @@ function Set-DnsSettings {
 }
 
 # ---------------------------------------------------------------------------
+# List-policy helpers
+#
+# Chromium list policies on Windows live in a subkey with numbered REG_SZ
+# values (e.g. ...\BraveShieldsDisabledForUrls\1 = "https://*"). Writing the
+# list as a single REG_SZ holding a JSON array has no effect — Chromium
+# won't parse it, and the corresponding policy silently stays at its
+# default.
+# ---------------------------------------------------------------------------
+
+function Set-ListPolicy {
+    param (
+        [string]   $RegistryPath,
+        [string]   $Name,
+        [string[]] $Values
+    )
+    $listKey = Join-Path $RegistryPath $Name
+    # Drop any stale subkey and any legacy REG_SZ that used to live at the
+    # parent with the same name, so old broken SlimBrave writes are cleaned.
+    if (Test-Path $listKey) {
+        Remove-Item -Path $listKey -Recurse -Force
+    }
+    if (Get-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue) {
+        Remove-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue
+    }
+    New-Item -Path $listKey -Force | Out-Null
+    for ($i = 0; $i -lt $Values.Count; $i++) {
+        Set-ItemProperty -Path $listKey -Name ($i + 1) -Value $Values[$i] -Type String -Force
+    }
+}
+
+function Remove-ListPolicy {
+    param (
+        [string] $RegistryPath,
+        [string] $Name
+    )
+    $listKey = Join-Path $RegistryPath $Name
+    if (Test-Path $listKey) {
+        Remove-Item -Path $listKey -Recurse -Force
+    }
+    if (Get-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue) {
+        Remove-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-ListPolicyMatches {
+    param (
+        [string]   $RegistryPath,
+        [string]   $Name,
+        [string[]] $Expected
+    )
+    $listKey = Join-Path $RegistryPath $Name
+    if (-not (Test-Path $listKey)) { return $false }
+    $props = Get-ItemProperty -Path $listKey -ErrorAction SilentlyContinue
+    if (-not $props) { return $false }
+    $actual = @()
+    foreach ($p in $props.PSObject.Properties) {
+        if ($p.Name -match '^\d+$') { $actual += [string]$p.Value }
+    }
+    foreach ($e in $Expected) {
+        if ($actual -notcontains $e) { return $false }
+    }
+    return $true
+}
+
+# ---------------------------------------------------------------------------
 # Form setup
 # ---------------------------------------------------------------------------
 
@@ -173,7 +238,7 @@ $braveFeatures = @(
     @{ Name = "Disable Brave Wallet"; Key = "BraveWalletDisabled"; Value = 1; Type = "DWord" },
     @{ Name = "Disable Brave VPN"; Key = "BraveVPNDisabled"; Value = 1; Type = "DWord" },
     @{ Name = "Disable Brave AI Chat"; Key = "BraveAIChatEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Brave Shields"; Key = "BraveShieldsDisabledForUrls"; Value = '["https://*", "http://*"]'; Type = "String" },
+    @{ Name = "Disable Brave Shields"; Key = "BraveShieldsDisabledForUrls"; Value = @("https://*", "http://*"); Type = "List" },
     @{ Name = "Disable Brave News"; Key = "BraveNewsDisabled"; Value = 1; Type = "DWord" },
     @{ Name = "Disable Brave Talk"; Key = "BraveTalkDisabled"; Value = 1; Type = "DWord" },
     @{ Name = "Disable Brave Playlist"; Key = "BravePlaylistEnabled"; Value = 0; Type = "DWord" },
@@ -341,30 +406,34 @@ $saveButton.Add_Click({
         if ($selectedFeatures.ContainsKey($key)) {
             $feature = $selectedFeatures[$key]
             try {
-                Set-ItemProperty -Path $registryPath -Name $feature.Key -Value $feature.Value -Type $feature.Type -Force
-                Write-Host "Set $($feature.Key) to $($feature.Value)"
-                # When enforcing a machine-level policy, clear any conflicting
-                # user-scope value so Brave does not merge the two.
-                if ((Test-Path -Path $userRegistryPath) -and
-                    (Get-ItemProperty -Path $userRegistryPath -Name $key -ErrorAction SilentlyContinue)) {
-                    Remove-ItemProperty -Path $userRegistryPath -Name $key -ErrorAction SilentlyContinue
+                if ($feature.Type -eq "List") {
+                    Set-ListPolicy -RegistryPath $registryPath -Name $feature.Key -Values $feature.Value
+                    Write-Host "Set $($feature.Key) to [$(($feature.Value) -join ', ')]"
+                    # Clear any conflicting user-scope value / subkey so Brave
+                    # does not merge machine and user policies.
+                    Remove-ListPolicy -RegistryPath $userRegistryPath -Name $feature.Key
+                } else {
+                    Set-ItemProperty -Path $registryPath -Name $feature.Key -Value $feature.Value -Type $feature.Type -Force
+                    Write-Host "Set $($feature.Key) to $($feature.Value)"
+                    # When enforcing a machine-level policy, clear any conflicting
+                    # user-scope value so Brave does not merge the two.
+                    if ((Test-Path -Path $userRegistryPath) -and
+                        (Get-ItemProperty -Path $userRegistryPath -Name $key -ErrorAction SilentlyContinue)) {
+                        Remove-ItemProperty -Path $userRegistryPath -Name $key -ErrorAction SilentlyContinue
+                    }
                 }
             } catch {
                 Write-Host "Failed to set $($feature.Key): $_"
             }
         } else {
             # Remove the policy from both machine and user scopes so
-            # Brave falls back to its built-in default.
+            # Brave falls back to its built-in default. Remove-ListPolicy
+            # handles both REG_SZ values and list subkeys, so it is safe to
+            # call without knowing the feature's Type here.
             try {
-                if (Get-ItemProperty -Path $registryPath -Name $key -ErrorAction SilentlyContinue) {
-                    Remove-ItemProperty -Path $registryPath -Name $key -ErrorAction SilentlyContinue
-                    Write-Host "Removed $key"
-                }
-                if ((Test-Path -Path $userRegistryPath) -and
-                    (Get-ItemProperty -Path $userRegistryPath -Name $key -ErrorAction SilentlyContinue)) {
-                    Remove-ItemProperty -Path $userRegistryPath -Name $key -ErrorAction SilentlyContinue
-                    Write-Host "Removed $key from user scope"
-                }
+                Remove-ListPolicy -RegistryPath $registryPath -Name $key
+                Remove-ListPolicy -RegistryPath $userRegistryPath -Name $key
+                Write-Host "Removed $key"
             } catch {
                 Write-Host "Failed to remove ${key}: $_"
             }
@@ -557,6 +626,12 @@ function Initialize-CurrentSettings {
 
     foreach ($checkbox in $allFeatures) {
         $feature = $checkbox.Tag
+        if ($feature.Type -eq "List") {
+            $checkbox.Checked =
+                (Test-ListPolicyMatches -RegistryPath $registryPath     -Name $feature.Key -Expected $feature.Value) -or
+                (Test-ListPolicyMatches -RegistryPath $userRegistryPath -Name $feature.Key -Expected $feature.Value)
+            continue
+        }
         $currentValue = $null
         if ($machineSettings -and ($machineSettings.PSObject.Properties.Name -contains $feature.Key)) {
             $currentValue = $machineSettings.$($feature.Key)

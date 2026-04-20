@@ -17,15 +17,67 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 IS_MAC = sys.platform == "darwin"
 if IS_MAC:
     import plistlib
     POLICY_DIR = "/Library/Managed Preferences"
     POLICY_FILE = os.path.join(POLICY_DIR, "com.brave.Browser.plist")
+    # Directories a `--policy-file` argument is permitted to target on macOS.
+    # Allowed locations mirror the documented Chromium managed-policy paths.
+    ALLOWED_POLICY_DIRS = (
+        "/Library/Managed Preferences",
+        "/Library/Preferences",
+    )
 else:
     POLICY_DIR = "/etc/brave/policies/managed"
     POLICY_FILE = os.path.join(POLICY_DIR, "slimbrave.json")
+    ALLOWED_POLICY_DIRS = (
+        "/etc/brave/policies/managed",
+        "/etc/chromium/policies/managed",
+    )
+
+
+def _is_within_allowed_policy_dir(path):
+    """Return True if `path`'s realpath lives under an allowed policy dir.
+
+    Prevents `--policy-file /etc/shadow --reset` (run under a permissive
+    sudoers rule) from deleting arbitrary files. Chromium only reads
+    policies from the paths in ALLOWED_POLICY_DIRS anyway.
+    """
+    real_path = os.path.realpath(path)
+    for allowed in ALLOWED_POLICY_DIRS:
+        real_allowed = (
+            os.path.realpath(allowed) if os.path.exists(allowed) else allowed
+        )
+        if real_path.startswith(real_allowed + os.sep):
+            return True
+    return False
+
+
+def _atomic_write(path, data, *, binary=False, mode=0o644):
+    """Write `data` to `path` atomically via a same-directory tempfile.
+
+    `tempfile.mkstemp` uses O_CREAT|O_EXCL so it cannot be tricked into
+    writing through a symlink, and `os.replace` atomically replaces the
+    target directory entry without following a symlink that happened to
+    exist there. Also avoids leaving a half-written policy if the
+    process is killed mid-write.
+    """
+    directory = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".slimbrave.", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "wb" if binary else "w") as f:
+            f.write(data)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 # ---------------------------------------------------------------------------
 # Brave browser detection
@@ -307,11 +359,9 @@ def apply_policy(rows):
     try:
         os.makedirs(POLICY_DIR, exist_ok=True)
         if IS_MAC:
-            with open(POLICY_FILE, "wb") as f:
-                plistlib.dump(policy, f)
+            _atomic_write(POLICY_FILE, plistlib.dumps(policy), binary=True)
         else:
-            with open(POLICY_FILE, "w") as f:
-                json.dump(policy, f, indent=4)
+            _atomic_write(POLICY_FILE, json.dumps(policy, indent=4))
         return True, "Settings applied. Restart Brave to see changes."
     except PermissionError:
         return False, "Permission denied. Run as root."
@@ -389,8 +439,7 @@ def export_settings(rows, path):
         out_dir = os.path.dirname(path)
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
-        with open(path, "w") as f:
-            json.dump(settings, f, indent=4)
+        _atomic_write(path, json.dumps(settings, indent=4))
         return True, f"Exported to {path}"
     except OSError as e:
         return False, f"Export failed: {e}"
@@ -1022,7 +1071,13 @@ if __name__ == "__main__":
 
     # Override policy file path if requested
     if args.policy_file:
-        POLICY_FILE = args.policy_file
+        if not _is_within_allowed_policy_dir(args.policy_file):
+            print(
+                "--policy-file must resolve to a path inside one of: "
+                + ", ".join(ALLOWED_POLICY_DIRS)
+            )
+            sys.exit(2)
+        POLICY_FILE = os.path.realpath(args.policy_file)
         POLICY_DIR = os.path.dirname(POLICY_FILE)
 
     is_cli = args.import_path or args.export_path or args.reset
