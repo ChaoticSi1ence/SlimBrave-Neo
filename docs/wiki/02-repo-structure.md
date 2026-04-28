@@ -24,10 +24,9 @@
 
 ## 预置配置（Presets）
 
-Presets 目录：[Presets/](file:///workspace/Presets)
+预置目录（Presets）：[Presets/](file:///workspace/Presets)
 
-- 预置文件采用统一 JSON 格式（详见 [06. Presets 与配置格式](./06-presets-config.md)）
+- 预置文件采用统一 JSON 格式（详见 [06. 预置与配置格式](./06-presets-config.md)）
 - 示例：
-  - [Maximum Privacy Preset.json](file:///workspace/Presets/Maximum%20Privacy%20Preset.json)
-  - [Strict Parental Controls Preset.json](file:///workspace/Presets/Strict%20Parental%20Controls%20Preset.json)
-
+  - [Maximum Privacy Preset.json](file:///workspace/Presets/Maximum%20Privacy%20Preset.json)（最大隐私）
+  - [Strict Parental Controls Preset.json](file:///workspace/Presets/Strict%20Parental%20Controls%20Preset.json)（严格家长控制）

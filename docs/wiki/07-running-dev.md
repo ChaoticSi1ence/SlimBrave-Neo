@@ -2,7 +2,7 @@
 
 ## 运行前提
 
-该仓库不包含构建系统与依赖清单，运行方式即“直接执行脚本”（参见 [SECURITY.md](file:///workspace/SECURITY.md) 的 source-only 声明）。
+该仓库不包含构建系统与依赖清单，运行方式即“直接执行脚本”（参见 [SECURITY.md](file:///workspace/SECURITY.md) 的“仅源码分发（source-only）”声明）。
 
 ### Linux
 
@@ -80,8 +80,8 @@ iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/main/SlimBra
 
 ## 验证生效
 
-1. 执行 Apply / CLI import 后，重启 Brave
-2. 打开 `brave://policy` 查看策略是否被识别为 managed policies
+1. 执行 Apply（应用）/ CLI import（导入并应用）后，重启 Brave
+2. 打开 `brave://policy` 查看策略是否被识别为托管策略（managed policies）
 
 ## 开发与调试建议（仓库视角）
 
@@ -90,4 +90,3 @@ iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/main/SlimBra
 - 直接运行 `python3 slimbrave-linux.py -h` 检查参数解析是否正常
 - 在非 root 场景运行验证错误提示是否符合预期（脚本会拒绝执行）
 - 在临时目录模拟 `--policy-file` 写入（注意：受允许目录限制）
-

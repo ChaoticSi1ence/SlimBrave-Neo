@@ -1,12 +1,12 @@
-# 06. Presets 与配置格式
+# 06. 预置（Presets）与配置格式
 
 ## 文件位置
 
 预置配置目录：[Presets/](file:///workspace/Presets)
 
-这些 JSON 文件既可作为“预置 Preset”，也可作为导入/导出时的跨平台配置载体。
+这些 JSON 文件既可作为“预置（Preset）”，也可作为导入/导出时的跨平台配置载体。
 
-## 配置 Schema（推荐的新格式）
+## 配置结构（Schema，推荐的新格式）
 
 顶层结构：
 
@@ -24,7 +24,7 @@
 字段含义：
 
 - `Features`（必选）：策略键值映射（policyKey → value）
-  - key 为 Chromium/Brave managed policy 的名字（例如 `MetricsReportingEnabled`）
+  - key 为 Chromium/Brave 托管策略键名（例如 `MetricsReportingEnabled`）
   - value 为对应策略值（bool / number / string / array）
 - `DnsMode`（可选）：DoH 模式（与 UI/CLI 一致）
 - `DnsTemplates`（可选）：DoH 模板 URL；在 `DnsMode=custom`（或 secure 且希望指定模板）时使用
@@ -55,8 +55,8 @@
 
 该 key 在不同 value 下含义不同（并且互斥）：
 
-- `1`：Disable Incognito
-- `2`：Force Incognito
+- `1`：禁用隐身模式
+- `2`：强制隐身模式
 
 Python 通过 `group="incognito"` 实现互斥：
 
@@ -80,4 +80,3 @@ Python 通过 `group="incognito"` 实现互斥：
 - Linux/macOS：策略文件支持 JSON array / plist array，直接写入即可
 - Windows：需要写入注册表子键 + 数字序号项，代码通过 `Set-ListPolicy` 处理  
   [SlimBrave.ps1:L64-L83](file:///workspace/SlimBrave.ps1#L64-L83)
-
