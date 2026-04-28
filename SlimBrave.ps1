@@ -31,8 +31,8 @@ function Set-DnsSettings {
     if ($dnsMode -eq "custom") {
         if ([string]::IsNullOrWhiteSpace($dnsTemplates)) {
             [System.Windows.Forms.MessageBox]::Show(
-                "Custom DoH requires a template URL (e.g. https://cloudflare-dns.com/dns-query).",
-                "Missing DoH Template",
+                "自定义 DoH 需要提供模板 URL（例如 https://cloudflare-dns.com/dns-query）。",
+                "缺少 DoH 模板",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Warning
             )
@@ -157,7 +157,7 @@ $leftPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
 $form.Controls.Add($leftPanel)
 
 $telemetryLabel = New-Object System.Windows.Forms.Label
-$telemetryLabel.Text = "Telemetry & Reporting"
+$telemetryLabel.Text = "遥测与报告"
 $telemetryLabel.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 10.5, [System.Drawing.FontStyle]::Bold)
 $telemetryLabel.Location = New-Object System.Drawing.Point(28, 10)
 $telemetryLabel.Size = New-Object System.Drawing.Size(300, 20)
@@ -165,11 +165,11 @@ $telemetryLabel.ForeColor = [System.Drawing.Color]::LightSalmon
 $leftPanel.Controls.Add($telemetryLabel)
 
 $telemetryFeatures = @(
-    @{ Name = "Disable Metrics Reporting"; Key = "MetricsReportingEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Safe Browsing Reporting"; Key = "SafeBrowsingExtendedReportingEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable URL Data Collection"; Key = "UrlKeyedAnonymizedDataCollectionEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable P3A Analytics"; Key = "BraveP3AEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Stats Ping"; Key = "BraveStatsPingEnabled"; Value = 0; Type = "DWord" }
+    @{ Name = "禁用指标上报"; Key = "MetricsReportingEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用安全浏览报告上报"; Key = "SafeBrowsingExtendedReportingEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用 URL 匿名化数据收集"; Key = "UrlKeyedAnonymizedDataCollectionEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用 P3A 分析"; Key = "BraveP3AEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用统计心跳（Stats Ping）"; Key = "BraveStatsPingEnabled"; Value = 0; Type = "DWord" }
 )
 
 $y = 35
@@ -188,7 +188,7 @@ foreach ($feature in $telemetryFeatures) {
 $y += 10
 
 $privacyLabel = New-Object System.Windows.Forms.Label
-$privacyLabel.Text = "Privacy & Security"
+$privacyLabel.Text = "隐私与安全"
 $privacyLabel.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 11, [System.Drawing.FontStyle]::Bold)
 $privacyLabel.Location = New-Object System.Drawing.Point(28, $y)
 $privacyLabel.Size = New-Object System.Drawing.Size(300, 20)
@@ -197,23 +197,23 @@ $leftPanel.Controls.Add($privacyLabel)
 $y += 25
 
 $privacyFeatures = @(
-    @{ Name = "Disable Safe Browsing"; Key = "SafeBrowsingProtectionLevel"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Autofill (Addresses)"; Key = "AutofillAddressEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Autofill (Credit Cards)"; Key = "AutofillCreditCardEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Password Manager"; Key = "PasswordManagerEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Browser Sign-in"; Key = "BrowserSignin"; Value = 0; Type = "DWord" },
-    @{ Name = "Enable Do Not Track"; Key = "EnableDoNotTrack"; Value = 1; Type = "DWord" },
-    @{ Name = "Enable Global Privacy Control"; Key = "BraveGlobalPrivacyControlEnabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Enable De-AMP"; Key = "BraveDeAmpEnabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Enable Debouncing"; Key = "BraveDebouncingEnabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Strip Tracking URL Parameters"; Key = "BraveTrackingQueryParametersFilteringEnabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Reduce Language Fingerprinting"; Key = "BraveReduceLanguageEnabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable WebRTC IP Leak"; Key = "WebRtcIPHandling"; Value = "disable_non_proxied_udp"; Type = "String" },
-    @{ Name = "Disable QUIC Protocol"; Key = "QuicAllowed"; Value = 0; Type = "DWord" },
-    @{ Name = "Block Third Party Cookies"; Key = "BlockThirdPartyCookies"; Value = 1; Type = "DWord" },
-    @{ Name = "Force Google SafeSearch"; Key = "ForceGoogleSafeSearch"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable Incognito Mode"; Key = "IncognitoModeAvailability"; Value = 1; Type = "DWord"; Group = "incognito" },
-    @{ Name = "Force Incognito Mode"; Key = "IncognitoModeAvailability"; Value = 2; Type = "DWord"; Group = "incognito" }
+    @{ Name = "禁用安全浏览"; Key = "SafeBrowsingProtectionLevel"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用自动填充（地址）"; Key = "AutofillAddressEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用自动填充（信用卡）"; Key = "AutofillCreditCardEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用密码管理器"; Key = "PasswordManagerEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用浏览器登录"; Key = "BrowserSignin"; Value = 0; Type = "DWord" },
+    @{ Name = "启用“请勿跟踪”"; Key = "EnableDoNotTrack"; Value = 1; Type = "DWord" },
+    @{ Name = "启用全局隐私控制（GPC）"; Key = "BraveGlobalPrivacyControlEnabled"; Value = 1; Type = "DWord" },
+    @{ Name = "启用 De-AMP（移除 AMP 包装）"; Key = "BraveDeAmpEnabled"; Value = 1; Type = "DWord" },
+    @{ Name = "启用去跳转追踪（Debouncing）"; Key = "BraveDebouncingEnabled"; Value = 1; Type = "DWord" },
+    @{ Name = "移除跟踪型 URL 参数"; Key = "BraveTrackingQueryParametersFilteringEnabled"; Value = 1; Type = "DWord" },
+    @{ Name = "降低语言指纹"; Key = "BraveReduceLanguageEnabled"; Value = 1; Type = "DWord" },
+    @{ Name = "防止 WebRTC IP 泄漏"; Key = "WebRtcIPHandling"; Value = "disable_non_proxied_udp"; Type = "String" },
+    @{ Name = "禁用 QUIC 协议"; Key = "QuicAllowed"; Value = 0; Type = "DWord" },
+    @{ Name = "阻止第三方 Cookie"; Key = "BlockThirdPartyCookies"; Value = 1; Type = "DWord" },
+    @{ Name = "强制 Google 安全搜索（SafeSearch）"; Key = "ForceGoogleSafeSearch"; Value = 1; Type = "DWord" },
+    @{ Name = "禁用隐身模式"; Key = "IncognitoModeAvailability"; Value = 1; Type = "DWord"; Group = "incognito" },
+    @{ Name = "强制隐身模式"; Key = "IncognitoModeAvailability"; Value = 2; Type = "DWord"; Group = "incognito" }
 )
 
 foreach ($feature in $privacyFeatures) {
@@ -242,7 +242,7 @@ $form.Controls.Add($rightPanel)
 $y = 5
 
 $braveLabel = New-Object System.Windows.Forms.Label
-$braveLabel.Text = "Brave Features"
+$braveLabel.Text = "Brave 功能"
 $braveLabel.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 11, [System.Drawing.FontStyle]::Bold)
 $braveLabel.Location = New-Object System.Drawing.Point(28, $y)
 $braveLabel.Size = New-Object System.Drawing.Size(300, 20)
@@ -251,19 +251,19 @@ $rightPanel.Controls.Add($braveLabel)
 $y += 25
 
 $braveFeatures = @(
-    @{ Name = "Disable Brave Rewards"; Key = "BraveRewardsDisabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable Brave Wallet"; Key = "BraveWalletDisabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable Brave VPN"; Key = "BraveVPNDisabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable Brave AI Chat"; Key = "BraveAIChatEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Brave Shields"; Key = "BraveShieldsDisabledForUrls"; Value = @("https://*", "http://*"); Type = "List" },
-    @{ Name = "Disable Brave News"; Key = "BraveNewsDisabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable Brave Talk"; Key = "BraveTalkDisabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable Brave Playlist"; Key = "BravePlaylistEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Web Discovery"; Key = "BraveWebDiscoveryEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Speedreader"; Key = "BraveSpeedreaderEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Tor"; Key = "TorDisabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable Sync"; Key = "SyncDisabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable IPFS"; Key = "IPFSEnabled"; Value = 0; Type = "DWord" }
+    @{ Name = "禁用 Brave Rewards"; Key = "BraveRewardsDisabled"; Value = 1; Type = "DWord" },
+    @{ Name = "禁用 Brave Wallet"; Key = "BraveWalletDisabled"; Value = 1; Type = "DWord" },
+    @{ Name = "禁用 Brave VPN"; Key = "BraveVPNDisabled"; Value = 1; Type = "DWord" },
+    @{ Name = "禁用 Brave AI Chat"; Key = "BraveAIChatEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用 Brave Shields"; Key = "BraveShieldsDisabledForUrls"; Value = @("https://*", "http://*"); Type = "List" },
+    @{ Name = "禁用 Brave News"; Key = "BraveNewsDisabled"; Value = 1; Type = "DWord" },
+    @{ Name = "禁用 Brave Talk"; Key = "BraveTalkDisabled"; Value = 1; Type = "DWord" },
+    @{ Name = "禁用 Brave Playlist"; Key = "BravePlaylistEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用 Web Discovery"; Key = "BraveWebDiscoveryEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用 Speedreader"; Key = "BraveSpeedreaderEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用 Tor"; Key = "TorDisabled"; Value = 1; Type = "DWord" },
+    @{ Name = "禁用同步（Sync）"; Key = "SyncDisabled"; Value = 1; Type = "DWord" },
+    @{ Name = "禁用 IPFS"; Key = "IPFSEnabled"; Value = 0; Type = "DWord" }
 )
 
 foreach ($feature in $braveFeatures) {
@@ -281,7 +281,7 @@ foreach ($feature in $braveFeatures) {
 $y += 10
 
 $perfLabel = New-Object System.Windows.Forms.Label
-$perfLabel.Text = "Performance & Bloat"
+$perfLabel.Text = "性能与精简"
 $perfLabel.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 11, [System.Drawing.FontStyle]::Bold)
 $perfLabel.Location = New-Object System.Drawing.Point(28, $y)
 $perfLabel.Size = New-Object System.Drawing.Size(300, 20)
@@ -290,16 +290,16 @@ $rightPanel.Controls.Add($perfLabel)
 $y += 25
 
 $perfFeatures = @(
-    @{ Name = "Disable Background Mode"; Key = "BackgroundModeEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Shopping List"; Key = "ShoppingListEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Always Open PDF Externally"; Key = "AlwaysOpenPdfExternally"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable Translate"; Key = "TranslateEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Spellcheck"; Key = "SpellcheckEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Search Suggestions"; Key = "SearchSuggestEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Printing"; Key = "PrintingEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Default Browser Prompt"; Key = "DefaultBrowserSettingEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Developer Tools"; Key = "DeveloperToolsAvailability"; Value = 2; Type = "DWord" },
-    @{ Name = "Disable Wayback Machine"; Key = "BraveWaybackMachineEnabled"; Value = 0; Type = "DWord" }
+    @{ Name = "禁用后台模式"; Key = "BackgroundModeEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用购物清单"; Key = "ShoppingListEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "总是外部打开 PDF"; Key = "AlwaysOpenPdfExternally"; Value = 1; Type = "DWord" },
+    @{ Name = "禁用翻译"; Key = "TranslateEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用拼写检查"; Key = "SpellcheckEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用搜索建议"; Key = "SearchSuggestEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用打印"; Key = "PrintingEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用默认浏览器提示"; Key = "DefaultBrowserSettingEnabled"; Value = 0; Type = "DWord" },
+    @{ Name = "禁用开发者工具"; Key = "DeveloperToolsAvailability"; Value = 2; Type = "DWord" },
+    @{ Name = "禁用 Wayback Machine"; Key = "BraveWaybackMachineEnabled"; Value = 0; Type = "DWord" }
 )
 
 foreach ($feature in $perfFeatures) {
@@ -352,7 +352,7 @@ foreach ($cb in $allFeatures) {
 # ---------------------------------------------------------------------------
 
 $dnsLabel = New-Object System.Windows.Forms.Label
-$dnsLabel.Text = "DNS Over HTTPS Mode:"
+$dnsLabel.Text = "DNS over HTTPS（DoH）模式："
 $dnsLabel.Location = New-Object System.Drawing.Point(35, 735)
 $dnsLabel.Size = New-Object System.Drawing.Size(140, 20)
 $form.Controls.Add($dnsLabel)
@@ -367,7 +367,7 @@ $dnsDropdown.ForeColor = [System.Drawing.Color]::White
 $form.Controls.Add($dnsDropdown)
 
 $dnsTemplateLabel = New-Object System.Windows.Forms.Label
-$dnsTemplateLabel.Text = "Custom DoH template URL:"
+$dnsTemplateLabel.Text = "自定义 DoH 模板 URL："
 $dnsTemplateLabel.Location = New-Object System.Drawing.Point(35, 765)
 $dnsTemplateLabel.Size = New-Object System.Drawing.Size(170, 20)
 $form.Controls.Add($dnsTemplateLabel)
@@ -389,7 +389,7 @@ $dnsDropdown.Add_SelectedIndexChanged({
 # ---------------------------------------------------------------------------
 
 $exportButton = New-Object System.Windows.Forms.Button
-$exportButton.Text = "Export Settings"
+$exportButton.Text = "导出设置"
 $exportButton.Location = New-Object System.Drawing.Point(50, 810)
 $exportButton.Size = New-Object System.Drawing.Size(120, 30)
 $form.Controls.Add($exportButton)
@@ -400,7 +400,7 @@ $exportButton.BackColor = [System.Drawing.Color]::FromArgb(150, 102, 102, 102)
 $exportButton.ForeColor = [System.Drawing.Color]::LightSalmon
 
 $importButton = New-Object System.Windows.Forms.Button
-$importButton.Text = "Import Settings"
+$importButton.Text = "导入设置"
 $importButton.Location = New-Object System.Drawing.Point(210, 810)
 $importButton.Size = New-Object System.Drawing.Size(120, 30)
 $form.Controls.Add($importButton)
@@ -411,7 +411,7 @@ $importButton.BackColor = [System.Drawing.Color]::FromArgb(150, 102, 102, 102)
 $importButton.ForeColor = [System.Drawing.Color]::LightSkyBlue
 
 $saveButton = New-Object System.Windows.Forms.Button
-$saveButton.Text = "Apply Settings"
+$saveButton.Text = "应用设置"
 $saveButton.Location = New-Object System.Drawing.Point(410, 810)
 $saveButton.Size = New-Object System.Drawing.Size(120, 30)
 $form.Controls.Add($saveButton)
@@ -422,7 +422,7 @@ $saveButton.BackColor = [System.Drawing.Color]::FromArgb(150, 102, 102, 102)
 $saveButton.ForeColor = [System.Drawing.Color]::LightGreen
 
 $resetButton = New-Object System.Windows.Forms.Button
-$resetButton.Text = "Reset All Settings"
+$resetButton.Text = "重置所有设置"
 $resetButton.Location = New-Object System.Drawing.Point(570, 810)
 $resetButton.Size = New-Object System.Drawing.Size(120, 30)
 $form.Controls.Add($resetButton)
@@ -444,8 +444,8 @@ $saveButton.Add_Click({
     if ($dnsDropdown.SelectedItem -eq "custom" -and
         [string]::IsNullOrWhiteSpace($dnsTemplateBox.Text)) {
         [System.Windows.Forms.MessageBox]::Show(
-            "Custom DoH requires a template URL (e.g. https://cloudflare-dns.com/dns-query).",
-            "Missing DoH Template",
+            "自定义 DoH 需要提供模板 URL（例如 https://cloudflare-dns.com/dns-query）。",
+            "缺少 DoH 模板",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning
         )
@@ -472,13 +472,13 @@ $saveButton.Add_Click({
             try {
                 if ($feature.Type -eq "List") {
                     Set-ListPolicy -RegistryPath $registryPath -Name $feature.Key -Values $feature.Value
-                    Write-Host "Set $($feature.Key) to [$(($feature.Value) -join ', ')]"
+                    Write-Host "已设置 $($feature.Key) 为 [$(($feature.Value) -join ', ')]"
                     # Clear any conflicting user-scope value / subkey so Brave
                     # does not merge machine and user policies.
                     Remove-ListPolicy -RegistryPath $userRegistryPath -Name $feature.Key
                 } else {
                     Set-ItemProperty -Path $registryPath -Name $feature.Key -Value $feature.Value -Type $feature.Type -Force
-                    Write-Host "Set $($feature.Key) to $($feature.Value)"
+                    Write-Host "已设置 $($feature.Key) 为 $($feature.Value)"
                     # When enforcing a machine-level policy, clear any conflicting
                     # user-scope value so Brave does not merge the two.
                     if ((Test-Path -Path $userRegistryPath) -and
@@ -487,7 +487,7 @@ $saveButton.Add_Click({
                     }
                 }
             } catch {
-                Write-Host "Failed to set $($feature.Key): $_"
+                Write-Host "设置 $($feature.Key) 失败：$_"
             }
         } else {
             # Remove the policy from both machine and user scopes so
@@ -497,9 +497,9 @@ $saveButton.Add_Click({
             try {
                 Remove-ListPolicy -RegistryPath $registryPath -Name $key
                 Remove-ListPolicy -RegistryPath $userRegistryPath -Name $key
-                Write-Host "Removed $key"
+                Write-Host "已移除 $key"
             } catch {
-                Write-Host "Failed to remove ${key}: $_"
+                Write-Host "移除 ${key} 失败：$_"
             }
         }
     }
@@ -513,7 +513,7 @@ $saveButton.Add_Click({
     }
 
     [System.Windows.Forms.MessageBox]::Show(
-        "Settings applied successfully! Restart Brave to see changes.",
+        "设置已应用成功！请重启 Brave 以生效。",
         "SlimBrave Neo",
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Information
@@ -526,8 +526,8 @@ $saveButton.Add_Click({
 
 function Reset-AllSettings {
     $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "Warning: This will erase ALL Brave policy settings and restore them to their default state. Do you wish to continue?",
-        "Confirm SlimBrave Neo Reset",
+        "警告：这将清除所有 Brave 策略设置并恢复为默认状态。是否继续？",
+        "确认重置 SlimBrave Neo",
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Warning
     )
@@ -541,16 +541,16 @@ function Reset-AllSettings {
             New-Item -Path $registryPath -Force | Out-Null
 
             [System.Windows.Forms.MessageBox]::Show(
-                "All Brave policy settings have been successfully reset to their default values.",
-                "Reset Successful",
+                "已成功将所有 Brave 策略设置重置为默认值。",
+                "重置成功",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Information
             )
             return $true
         } catch {
             [System.Windows.Forms.MessageBox]::Show(
-                "An error occurred while resetting the settings: $_",
-                "Reset Failed",
+                "重置时发生错误：$_",
+                "重置失败",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Error
             )
@@ -582,8 +582,8 @@ $resetButton.Add_Click({
 
 $exportButton.Add_Click({
     $saveFileDialog = New-Object System.Windows.Forms.SaveFileDialog
-    $saveFileDialog.Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*"
-    $saveFileDialog.Title = "Export SlimBrave Neo Settings"
+    $saveFileDialog.Filter = "JSON 文件 (*.json)|*.json|所有文件 (*.*)|*.*"
+    $saveFileDialog.Title = "导出 SlimBrave Neo 设置"
     $saveFileDialog.InitialDirectory = [Environment]::GetFolderPath("MyDocuments")
     $saveFileDialog.FileName = "SlimBraveNeoSettings.json"
 
@@ -607,15 +607,15 @@ $exportButton.Add_Click({
             # -Depth 5 covers Features -> key -> list values (Shields).
             $settingsToExport | ConvertTo-Json -Depth 5 | Out-File -FilePath $saveFileDialog.FileName -Force
             [System.Windows.Forms.MessageBox]::Show(
-                "Settings exported successfully to:`n$($saveFileDialog.FileName)",
-                "Export Successful",
+                "已成功导出设置到：`n$($saveFileDialog.FileName)",
+                "导出成功",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Information
             )
         } catch {
             [System.Windows.Forms.MessageBox]::Show(
-                "Failed to export settings: $_",
-                "Export Failed",
+                "导出设置失败：$_",
+                "导出失败",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Error
             )
@@ -629,8 +629,8 @@ $exportButton.Add_Click({
 
 $importButton.Add_Click({
     $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
-    $openFileDialog.Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*"
-    $openFileDialog.Title = "Import SlimBrave Neo Settings"
+    $openFileDialog.Filter = "JSON 文件 (*.json)|*.json|所有文件 (*.*)|*.*"
+    $openFileDialog.Title = "导入 SlimBrave Neo 设置"
     $openFileDialog.InitialDirectory = [Environment]::GetFolderPath("MyDocuments")
 
     if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
@@ -685,15 +685,15 @@ $importButton.Add_Click({
             }
 
             [System.Windows.Forms.MessageBox]::Show(
-                "Settings imported successfully from:`n$($openFileDialog.FileName)",
-                "Import Successful",
+                "已成功从以下文件导入设置：`n$($openFileDialog.FileName)",
+                "导入成功",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Information
             )
         } catch {
             [System.Windows.Forms.MessageBox]::Show(
-                "Failed to import settings: $_",
-                "Import Failed",
+                "导入设置失败：$_",
+                "导入失败",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Error
             )

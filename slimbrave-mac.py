@@ -103,7 +103,7 @@ def detect_brave():
         return {
             "found": False, "method": "not found", "path": "",
             "warnings": [
-                "Brave browser not found. Policies will be written but may have no effect."
+                "未检测到 Brave 浏览器。仍会写入策略，但可能不会生效。"
             ],
         }
 
@@ -138,8 +138,8 @@ def detect_brave():
         return {
             "found": True, "method": "snap", "path": snap_path,
             "warnings": [
-                "Snap confinement may prevent policies from taking effect. "
-                "Native packages are recommended."
+                "Snap 沙盒限制可能导致策略无法生效。"
+                "建议使用原生安装包版本。"
             ],
         }
 
@@ -152,7 +152,7 @@ def detect_brave():
     return {
         "found": False, "method": "not found", "path": "",
         "warnings": [
-            "Brave browser not found. Policies will be written but may have no effect."
+            "未检测到 Brave 浏览器。仍会写入策略，但可能不会生效。"
         ],
     }
 
@@ -167,68 +167,68 @@ def detect_brave():
 # conflicting values for the same policy.
 CATEGORIES = [
     {
-        "name": "Telemetry & Reporting",
+        "name": "遥测与报告",
         "features": [
-            {"name": "Disable Metrics Reporting", "key": "MetricsReportingEnabled", "value": False},
-            {"name": "Disable Safe Browsing Reporting", "key": "SafeBrowsingExtendedReportingEnabled", "value": False},
-            {"name": "Disable URL Data Collection", "key": "UrlKeyedAnonymizedDataCollectionEnabled", "value": False},
-            {"name": "Disable P3A Analytics", "key": "BraveP3AEnabled", "value": False},
-            {"name": "Disable Stats Ping", "key": "BraveStatsPingEnabled", "value": False},
+            {"name": "禁用指标上报", "key": "MetricsReportingEnabled", "value": False},
+            {"name": "禁用安全浏览报告上报", "key": "SafeBrowsingExtendedReportingEnabled", "value": False},
+            {"name": "禁用 URL 匿名化数据收集", "key": "UrlKeyedAnonymizedDataCollectionEnabled", "value": False},
+            {"name": "禁用 P3A 分析", "key": "BraveP3AEnabled", "value": False},
+            {"name": "禁用统计心跳（Stats Ping）", "key": "BraveStatsPingEnabled", "value": False},
         ],
     },
     {
-        "name": "Privacy & Security",
+        "name": "隐私与安全",
         "features": [
-            {"name": "Disable Safe Browsing", "key": "SafeBrowsingProtectionLevel", "value": 0},
-            {"name": "Disable Autofill (Addresses)", "key": "AutofillAddressEnabled", "value": False},
-            {"name": "Disable Autofill (Credit Cards)", "key": "AutofillCreditCardEnabled", "value": False},
-            {"name": "Disable Password Manager", "key": "PasswordManagerEnabled", "value": False},
-            {"name": "Disable Browser Sign-in", "key": "BrowserSignin", "value": 0},
-            {"name": "Enable Do Not Track", "key": "EnableDoNotTrack", "value": True},
-            {"name": "Enable Global Privacy Control", "key": "BraveGlobalPrivacyControlEnabled", "value": True},
-            {"name": "Enable De-AMP", "key": "BraveDeAmpEnabled", "value": True},
-            {"name": "Enable Debouncing", "key": "BraveDebouncingEnabled", "value": True},
-            {"name": "Strip Tracking URL Parameters", "key": "BraveTrackingQueryParametersFilteringEnabled", "value": True},
-            {"name": "Reduce Language Fingerprinting", "key": "BraveReduceLanguageEnabled", "value": True},
-            {"name": "Disable WebRTC IP Leak", "key": "WebRtcIPHandling", "value": "disable_non_proxied_udp"},
-            {"name": "Disable QUIC Protocol", "key": "QuicAllowed", "value": False},
-            {"name": "Block Third Party Cookies", "key": "BlockThirdPartyCookies", "value": True},
-            {"name": "Force Google SafeSearch", "key": "ForceGoogleSafeSearch", "value": True},
-            {"name": "Disable Incognito Mode", "key": "IncognitoModeAvailability", "value": 1, "group": "incognito"},
-            {"name": "Force Incognito Mode", "key": "IncognitoModeAvailability", "value": 2, "group": "incognito"},
+            {"name": "禁用安全浏览", "key": "SafeBrowsingProtectionLevel", "value": 0},
+            {"name": "禁用自动填充（地址）", "key": "AutofillAddressEnabled", "value": False},
+            {"name": "禁用自动填充（信用卡）", "key": "AutofillCreditCardEnabled", "value": False},
+            {"name": "禁用密码管理器", "key": "PasswordManagerEnabled", "value": False},
+            {"name": "禁用浏览器登录", "key": "BrowserSignin", "value": 0},
+            {"name": "启用“请勿跟踪”", "key": "EnableDoNotTrack", "value": True},
+            {"name": "启用全局隐私控制（GPC）", "key": "BraveGlobalPrivacyControlEnabled", "value": True},
+            {"name": "启用 De-AMP（移除 AMP 包装）", "key": "BraveDeAmpEnabled", "value": True},
+            {"name": "启用去跳转追踪（Debouncing）", "key": "BraveDebouncingEnabled", "value": True},
+            {"name": "移除跟踪型 URL 参数", "key": "BraveTrackingQueryParametersFilteringEnabled", "value": True},
+            {"name": "降低语言指纹", "key": "BraveReduceLanguageEnabled", "value": True},
+            {"name": "防止 WebRTC IP 泄漏", "key": "WebRtcIPHandling", "value": "disable_non_proxied_udp"},
+            {"name": "禁用 QUIC 协议", "key": "QuicAllowed", "value": False},
+            {"name": "阻止第三方 Cookie", "key": "BlockThirdPartyCookies", "value": True},
+            {"name": "强制 Google 安全搜索（SafeSearch）", "key": "ForceGoogleSafeSearch", "value": True},
+            {"name": "禁用隐身模式", "key": "IncognitoModeAvailability", "value": 1, "group": "incognito"},
+            {"name": "强制隐身模式", "key": "IncognitoModeAvailability", "value": 2, "group": "incognito"},
         ],
     },
     {
-        "name": "Brave Features",
+        "name": "Brave 功能",
         "features": [
-            {"name": "Disable Brave Rewards", "key": "BraveRewardsDisabled", "value": True},
-            {"name": "Disable Brave Wallet", "key": "BraveWalletDisabled", "value": True},
-            {"name": "Disable Brave VPN", "key": "BraveVPNDisabled", "value": True},
-            {"name": "Disable Brave AI Chat", "key": "BraveAIChatEnabled", "value": False},
-            {"name": "Disable Brave Shields", "key": "BraveShieldsDisabledForUrls", "value": ["https://*", "http://*"]},
-            {"name": "Disable Brave News", "key": "BraveNewsDisabled", "value": True},
-            {"name": "Disable Brave Talk", "key": "BraveTalkDisabled", "value": True},
-            {"name": "Disable Brave Playlist", "key": "BravePlaylistEnabled", "value": False},
-            {"name": "Disable Web Discovery", "key": "BraveWebDiscoveryEnabled", "value": False},
-            {"name": "Disable Speedreader", "key": "BraveSpeedreaderEnabled", "value": False},
-            {"name": "Disable Tor", "key": "TorDisabled", "value": True},
-            {"name": "Disable Sync", "key": "SyncDisabled", "value": True},
-            {"name": "Disable IPFS", "key": "IPFSEnabled", "value": False},
+            {"name": "禁用 Brave Rewards", "key": "BraveRewardsDisabled", "value": True},
+            {"name": "禁用 Brave Wallet", "key": "BraveWalletDisabled", "value": True},
+            {"name": "禁用 Brave VPN", "key": "BraveVPNDisabled", "value": True},
+            {"name": "禁用 Brave AI Chat", "key": "BraveAIChatEnabled", "value": False},
+            {"name": "禁用 Brave Shields", "key": "BraveShieldsDisabledForUrls", "value": ["https://*", "http://*"]},
+            {"name": "禁用 Brave News", "key": "BraveNewsDisabled", "value": True},
+            {"name": "禁用 Brave Talk", "key": "BraveTalkDisabled", "value": True},
+            {"name": "禁用 Brave Playlist", "key": "BravePlaylistEnabled", "value": False},
+            {"name": "禁用 Web Discovery", "key": "BraveWebDiscoveryEnabled", "value": False},
+            {"name": "禁用 Speedreader", "key": "BraveSpeedreaderEnabled", "value": False},
+            {"name": "禁用 Tor", "key": "TorDisabled", "value": True},
+            {"name": "禁用同步（Sync）", "key": "SyncDisabled", "value": True},
+            {"name": "禁用 IPFS", "key": "IPFSEnabled", "value": False},
         ],
     },
     {
-        "name": "Performance & Bloat",
+        "name": "性能与精简",
         "features": [
-            {"name": "Disable Background Mode", "key": "BackgroundModeEnabled", "value": False},
-            {"name": "Disable Shopping List", "key": "ShoppingListEnabled", "value": False},
-            {"name": "Always Open PDF Externally", "key": "AlwaysOpenPdfExternally", "value": True},
-            {"name": "Disable Translate", "key": "TranslateEnabled", "value": False},
-            {"name": "Disable Spellcheck", "key": "SpellcheckEnabled", "value": False},
-            {"name": "Disable Search Suggestions", "key": "SearchSuggestEnabled", "value": False},
-            {"name": "Disable Printing", "key": "PrintingEnabled", "value": False},
-            {"name": "Disable Default Browser Prompt", "key": "DefaultBrowserSettingEnabled", "value": False},
-            {"name": "Disable Developer Tools", "key": "DeveloperToolsAvailability", "value": 2},
-            {"name": "Disable Wayback Machine", "key": "BraveWaybackMachineEnabled", "value": False},
+            {"name": "禁用后台模式", "key": "BackgroundModeEnabled", "value": False},
+            {"name": "禁用购物清单", "key": "ShoppingListEnabled", "value": False},
+            {"name": "总是外部打开 PDF", "key": "AlwaysOpenPdfExternally", "value": True},
+            {"name": "禁用翻译", "key": "TranslateEnabled", "value": False},
+            {"name": "禁用拼写检查", "key": "SpellcheckEnabled", "value": False},
+            {"name": "禁用搜索建议", "key": "SearchSuggestEnabled", "value": False},
+            {"name": "禁用打印", "key": "PrintingEnabled", "value": False},
+            {"name": "禁用默认浏览器提示", "key": "DefaultBrowserSettingEnabled", "value": False},
+            {"name": "禁用开发者工具", "key": "DeveloperToolsAvailability", "value": 2},
+            {"name": "禁用 Wayback Machine", "key": "BraveWaybackMachineEnabled", "value": False},
         ],
     },
 ]
@@ -260,16 +260,16 @@ def build_rows():
                 "checked": False,
             })
     # DNS mode selector at the end
-    rows.append({"type": ROW_HEADER, "text": "DNS Over HTTPS"})
+    rows.append({"type": ROW_HEADER, "text": "DNS over HTTPS（DoH）"})
     rows.append({
         "type": ROW_DNS,
-        "text": "DNS Mode",
+        "text": "DNS 模式",
         "options": DNS_MODES,
         "selected": 0,  # index into DNS_MODES
     })
     rows.append({
         "type": ROW_DNS_TEMPLATE,
-        "text": "DoH Template",
+        "text": "DoH 模板",
         "value": "",        # the URL string
         "cursor": 0,        # cursor position within the text
         "scroll": 0,        # horizontal scroll offset for long URLs
@@ -371,7 +371,7 @@ def apply_policy(rows):
     # template URL would set DnsOverHttpsMode=secure with no server,
     # breaking DNS resolution in Brave.
     if dns_mode == "custom" and not dns_template:
-        return False, "Custom DNS requires a DoH template URL."
+        return False, "自定义 DNS 需要提供 DoH 模板 URL。"
 
     if dns_mode:
         # "custom" maps to "secure" in the actual Chromium policy
@@ -389,9 +389,9 @@ def apply_policy(rows):
             _atomic_write(POLICY_FILE, plistlib.dumps(policy), binary=True)
         else:
             _atomic_write(POLICY_FILE, json.dumps(policy, indent=4))
-        return True, "Settings applied. Restart Brave to see changes."
+        return True, "设置已应用。请重启 Brave 以生效。"
     except PermissionError:
-        return False, "Permission denied. Run as root."
+        return False, "权限不足。请以 root 运行。"
     except OSError as e:
         return False, f"Failed to write policy: {e}"
 
@@ -410,7 +410,7 @@ def reset_policy(rows):
                 row["value"] = ""
                 row["cursor"] = 0
                 row["scroll"] = 0
-        return True, "All settings reset. Restart Brave to see changes."
+        return True, "已重置所有设置。请重启 Brave 以生效。"
     except OSError as e:
         return False, f"Failed to reset: {e}"
 
@@ -472,9 +472,9 @@ def export_settings(rows, path):
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
         _atomic_write(path, json.dumps(settings, indent=4))
-        return True, f"Exported to {path}"
+        return True, f"已导出到 {path}"
     except OSError as e:
-        return False, f"Export failed: {e}"
+        return False, f"导出失败：{e}"
 
 
 def _parse_imported_features(features_obj):
@@ -498,11 +498,11 @@ def import_settings(rows, path):
     try:
         config = read_json_file(path)
     except FileNotFoundError:
-        return False, f"File not found: {path}"
+        return False, f"文件不存在：{path}"
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        return False, f"Invalid JSON: {e}"
+        return False, f"JSON 无效：{e}"
     except OSError as e:
-        return False, f"Read error: {e}"
+        return False, f"读取失败：{e}"
 
     features_map, is_legacy = _parse_imported_features(config.get("Features"))
     dns_mode = config.get("DnsMode", "")
@@ -541,7 +541,7 @@ def import_settings(rows, path):
             row["cursor"] = len(dns_template)
             row["scroll"] = 0
 
-    return True, f"Imported from {path}"
+    return True, f"已从 {path} 导入"
 
 # ---------------------------------------------------------------------------
 # TUI
@@ -559,7 +559,7 @@ CP_STATUS_ERR = 8
 CP_TITLE = 9
 CP_DIM = 10
 
-BUTTONS = ["Import", "Export", "Apply", "Reset", "Quit"]
+BUTTONS = ["导入", "导出", "应用", "重置", "退出"]
 
 # Focus zones
 FOCUS_LIST = 0
@@ -599,9 +599,9 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
 
     # Title bar
     if install_method:
-        title = f" SlimBrave Neo - Brave Browser Debloater [{install_method}] "
+        title = f" SlimBrave Neo - Brave 精简加固工具 [{install_method}] "
     else:
-        title = " SlimBrave Neo - Brave Browser Debloater "
+        title = " SlimBrave Neo - Brave 精简加固工具 "
     pad = max(0, (usable_w - len(title)) // 2)
     try:
         stdscr.addnstr(0, 0, " " * usable_w, usable_w,
@@ -612,7 +612,7 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
         pass
 
     # Key hints below title
-    hint = " [Q/Esc] Quit  [Space/Enter] Toggle  [Tab] Buttons "
+    hint = " [Q/Esc] 退出  [Space/Enter] 切换  [Tab] 按钮 "
     try:
         stdscr.addnstr(1, 0, hint.center(usable_w), usable_w,
                         curses.color_pair(CP_NORMAL) | curses.A_DIM)
@@ -666,10 +666,10 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
                 field_w = max(10, usable_w - 22)
                 scroll = row.get("scroll", 0)
                 visible_text = val[scroll:scroll + field_w]
-                line = f"    Template: [{visible_text}]"
+                line = f"    DoH Template: [{visible_text}]"
                 attr = curses.color_pair(CP_NORMAL)
             else:
-                line = "    Template: (select custom/secure DNS)"
+                line = "    DoH Template:（选择 custom/secure DNS 后可编辑）"
                 attr = curses.color_pair(CP_DIM) | curses.A_DIM
 
         if is_cursor:
@@ -684,7 +684,7 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
         if (is_cursor and row["type"] == ROW_DNS_TEMPLATE
                 and current_dns_mode in ("custom", "secure")):
             tmpl_val = row["value"]
-            field_start = 15  # len("    Template: [")
+            field_start = len("    DoH Template: [")
             scroll = row.get("scroll", 0)
             cur_pos = row.get("cursor", 0)
             cur_screen_pos = field_start + cur_pos - scroll
@@ -975,19 +975,18 @@ def main(stdscr):
             if focus == FOCUS_BUTTONS:
                 btn_label = BUTTONS[btn_idx]
 
-                if btn_label == "Apply":
+                if btn_label == "应用":
                     # Validate: custom DNS requires a template URL
                     dns_mode = get_dns_mode(rows)
                     dns_tmpl = get_dns_template(rows)
                     if dns_mode == "custom" and not dns_tmpl:
-                        status_msg = "Custom DNS requires a DoH template URL."
+                        status_msg = "自定义 DNS 需要提供 DoH 模板 URL。"
                         status_ok = False
                     else:
                         status_ok, status_msg = apply_policy(rows)
 
-                elif btn_label == "Reset":
-                    status_msg = ("Reset all settings? "
-                                  "Press Enter to confirm, any key to cancel.")
+                elif btn_label == "重置":
+                    status_msg = "确认重置所有设置？按 Enter 确认，按任意键取消。"
                     status_ok = True
                     draw(stdscr, rows, cursor_idx, scroll_offset,
                          focus, btn_idx, status_msg, status_ok,
@@ -996,36 +995,36 @@ def main(stdscr):
                     if confirm in (curses.KEY_ENTER, 10, 13):
                         status_ok, status_msg = reset_policy(rows)
                     else:
-                        status_msg = "Reset cancelled."
+                        status_msg = "已取消重置。"
                         status_ok = True
 
-                elif btn_label == "Import":
+                elif btn_label == "导入":
                     ok, path = prompt_text_input(
                         stdscr, rows, cursor_idx, scroll_offset,
                         btn_idx, install_method,
-                        "Import path (Esc=cancel)",
+                        "导入路径（Esc 取消）",
                         default="./Presets/")
                     if ok and path:
                         status_ok, status_msg = import_settings(rows, path)
                         # Rebuild selectable indices (unchanged, but safe)
                         sel = selectable_indices(rows)
                     else:
-                        status_msg = "Import cancelled."
+                        status_msg = "已取消导入。"
                         status_ok = True
 
-                elif btn_label == "Export":
+                elif btn_label == "导出":
                     ok, path = prompt_text_input(
                         stdscr, rows, cursor_idx, scroll_offset,
                         btn_idx, install_method,
-                        "Export path (Esc=cancel)",
+                        "导出路径（Esc 取消）",
                         default="./SlimBraveNeoSettings.json")
                     if ok and path:
                         status_ok, status_msg = export_settings(rows, path)
                     else:
-                        status_msg = "Export cancelled."
+                        status_msg = "已取消导出。"
                         status_ok = True
 
-                elif btn_label == "Quit":
+                elif btn_label == "退出":
                     break
 
             elif focus == FOCUS_LIST:
@@ -1047,7 +1046,7 @@ def cli_import(path, doh_templates=""):
     rows = build_rows()
     ok, msg = import_settings(rows, path)
     if not ok:
-        print(f"Error: {msg}", file=sys.stderr)
+        print(f"错误：{msg}", file=sys.stderr)
         return 1
     print(msg)
 
@@ -1060,7 +1059,7 @@ def cli_import(path, doh_templates=""):
 
     ok, msg = apply_policy(rows)
     if not ok:
-        print(f"Error: {msg}", file=sys.stderr)
+        print(f"错误：{msg}", file=sys.stderr)
         return 1
     print(msg)
     return 0
@@ -1070,7 +1069,7 @@ def cli_export(path):
     """Non-interactive: export current policy to a config file."""
     policy = load_existing_policy()
     if not policy:
-        print("No existing policy found.", file=sys.stderr)
+        print("未找到现有策略。", file=sys.stderr)
         return 1
 
     rows = build_rows()
@@ -1089,12 +1088,12 @@ def cli_reset():
     try:
         if os.path.exists(POLICY_FILE):
             os.remove(POLICY_FILE)
-            print(f"Removed {POLICY_FILE}")
+            print(f"已删除 {POLICY_FILE}")
         else:
-            print(f"No policy file found at {POLICY_FILE}")
+            print(f"未在 {POLICY_FILE} 找到策略文件")
         return 0
     except OSError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        print(f"错误：{e}", file=sys.stderr)
         return 1
 
 
@@ -1102,28 +1101,28 @@ def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         prog="slimbrave",
-        description="SlimBrave Neo - Brave Browser debloater for Linux and macOS",
-        epilog="Run without arguments to launch the interactive TUI.",
+        description="SlimBrave Neo - Brave 精简加固工具（Linux/macOS）",
+        epilog="不带参数运行将启动交互式 TUI。",
     )
     parser.add_argument(
         "--import", dest="import_path", metavar="PATH",
-        help="import a SlimBrave Neo JSON config and apply policies",
+        help="导入 SlimBrave Neo JSON 配置并应用策略",
     )
     parser.add_argument(
         "--export", dest="export_path", metavar="PATH",
-        help="export current policy to a SlimBrave Neo JSON config",
+        help="将当前策略导出为 SlimBrave Neo JSON 配置",
     )
     parser.add_argument(
         "--reset", action="store_true",
-        help="remove the SlimBrave Neo managed policy file",
+        help="删除 SlimBrave Neo 托管策略文件",
     )
     parser.add_argument(
         "--policy-file", metavar="PATH",
-        help=f"override policy file path (default: {POLICY_FILE})",
+        help=f"覆盖策略文件路径（默认：{POLICY_FILE}）",
     )
     parser.add_argument(
         "--doh-templates", metavar="URL",
-        help="set DnsOverHttpsTemplates (used with custom DNS mode)",
+        help="设置 DnsOverHttpsTemplates（用于 custom DNS 模式）",
     )
     return parser.parse_args()
 
@@ -1139,7 +1138,7 @@ if __name__ == "__main__":
     if args.policy_file:
         if not _is_within_allowed_policy_dir(args.policy_file):
             print(
-                "--policy-file must resolve to a path inside one of: "
+                "--policy-file 必须解析到以下目录之一内："
                 + ", ".join(ALLOWED_POLICY_DIRS)
             )
             sys.exit(2)
@@ -1149,11 +1148,11 @@ if __name__ == "__main__":
     is_cli = args.import_path or args.export_path or args.reset
 
     if os.geteuid() != 0:
-        print("SlimBrave Neo must be run as root.")
+        print("SlimBrave Neo 必须以 root 身份运行。")
         if is_cli:
-            print("Usage: sudo python3 slimbrave.py --import preset.json")
+            print("用法：sudo python3 slimbrave.py --import preset.json")
         else:
-            print("Usage: sudo python3 slimbrave.py")
+            print("用法：sudo python3 slimbrave.py")
         sys.exit(1)
 
     if is_cli:
