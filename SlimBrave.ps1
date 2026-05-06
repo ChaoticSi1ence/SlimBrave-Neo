@@ -96,6 +96,64 @@ function Remove-ListPolicy {
     }
 }
 
+function Repair-BravePrefs {
+    <#
+    .SYNOPSIS
+    Scrubs SlimBrave-leaked Shields exceptions from the user's Brave profile.
+
+    .DESCRIPTION
+    Brave/Chromium writes managed *ForUrls content-setting policies through
+    to the user's profile Preferences file. Removing the policy from the
+    registry does NOT roll those entries back — the profile keeps the
+    per-URL exceptions, so unchecking "Disable Brave Shields" leaves
+    shields stuck off. This function removes the specific patterns
+    SlimBrave writes ("http://*,*" and "https://*,*") from the profile.
+
+    Returns a hashtable @{ Removed = N; Running = $true/$false }.
+    Safe to call when the file or keys do not exist.
+    #>
+    $pref = Join-Path $env:LOCALAPPDATA "BraveSoftware\Brave-Browser\User Data\Default\Preferences"
+    if (-not (Test-Path $pref)) { return @{ Removed = 0; Running = $false } }
+
+    $running = ($null -ne (Get-Process brave -ErrorAction SilentlyContinue))
+
+    try {
+        $j = Get-Content $pref -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        return @{ Removed = 0; Running = $running }
+    }
+
+    $bs = $null
+    if ($j.profile -and $j.profile.content_settings -and $j.profile.content_settings.exceptions) {
+        $bs = $j.profile.content_settings.exceptions.braveShields
+    }
+    if (-not $bs) { return @{ Removed = 0; Running = $running } }
+
+    $removed = 0
+    foreach ($pattern in @('http://*,*', 'https://*,*')) {
+        if ($bs.PSObject.Properties.Name -contains $pattern) {
+            $bs.PSObject.Properties.Remove($pattern)
+            $removed++
+        }
+    }
+
+    if ($removed -eq 0) { return @{ Removed = 0; Running = $running } }
+
+    # Brave reads Preferences as compact UTF-8 JSON without BOM. Out-File
+    # default would write UTF-16/BOM and break Brave on next launch.
+    $json = $j | ConvertTo-Json -Depth 100 -Compress
+    $tmp = "$pref.slimbrave-tmp"
+    try {
+        [System.IO.File]::WriteAllText($tmp, $json, (New-Object System.Text.UTF8Encoding $false))
+        Move-Item -Force $tmp $pref
+    } catch {
+        if (Test-Path $tmp) { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
+        return @{ Removed = 0; Running = $running }
+    }
+
+    return @{ Removed = $removed; Running = $running }
+}
+
 function Test-FeatureValueMatches {
     param($feature, $expected)
     # List-typed features use a fixed canonical value (the Shields URL
@@ -512,8 +570,21 @@ $saveButton.Add_Click({
         }
     }
 
+    # Scrub Chromium's per-URL pref leak (BraveShieldsDisabledForUrls writes
+    # exceptions into the user profile that survive policy removal).
+    $repair = Repair-BravePrefs
+
+    $msg = "Settings applied successfully! Restart Brave to see changes."
+    if ($repair.Removed -gt 0) {
+        $plural = if ($repair.Removed -ne 1) { "s" } else { "" }
+        $msg = "Settings applied. Cleaned $($repair.Removed) leaked profile pref$plural. Restart Brave to see changes."
+    }
+    if ($repair.Running) {
+        $msg += "`n`nBrave is running. Fully close it (taskkill /IM brave.exe /F or end all brave.exe in Task Manager) before reopening, or the changes may not stick."
+    }
+
     [System.Windows.Forms.MessageBox]::Show(
-        "Settings applied successfully! Restart Brave to see changes.",
+        $msg,
         "SlimBrave Neo",
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Information
@@ -540,8 +611,22 @@ function Reset-AllSettings {
             }
             New-Item -Path $registryPath -Force | Out-Null
 
+            # Scrub the per-URL exceptions Brave caches in the user profile.
+            # Without this, "Disable Brave Shields" leaves shields stuck off
+            # even after the registry policy is gone.
+            $repair = Repair-BravePrefs
+
+            $msg = "All Brave policy settings have been successfully reset to their default values."
+            if ($repair.Removed -gt 0) {
+                $plural = if ($repair.Removed -ne 1) { "s" } else { "" }
+                $msg += "`n`nAlso cleaned $($repair.Removed) leaked profile pref$plural that previous SlimBrave versions wrote to your Brave profile."
+            }
+            if ($repair.Running) {
+                $msg += "`n`nBrave is running. Fully close it (Task Manager: end all brave.exe) before reopening for the reset to take effect."
+            }
+
             [System.Windows.Forms.MessageBox]::Show(
-                "All Brave policy settings have been successfully reset to their default values.",
+                $msg,
                 "Reset Successful",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Information

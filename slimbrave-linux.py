@@ -307,6 +307,104 @@ def read_json_file(path):
     return json.loads(text)
 
 # ---------------------------------------------------------------------------
+# Profile-prefs repair
+#
+# Brave/Chromium writes managed `*ForUrls` content-setting policies through
+# to the user's profile Preferences file. Removing the policy from
+# /etc/brave/policies/managed/ does NOT roll those entries back — the
+# profile keeps the per-URL exceptions forever, so unchecking "Disable
+# Brave Shields" leaves shields stuck off. This function scrubs the
+# specific patterns SlimBrave writes (`http://*,*` and `https://*,*`)
+# from the profile prefs, repairing the leak.
+# ---------------------------------------------------------------------------
+
+
+def _find_brave_prefs():
+    """Return path to the Default profile Preferences file, or None."""
+    sudo_user = os.environ.get("SUDO_USER") or os.environ.get("USER")
+    if not sudo_user or sudo_user == "root":
+        return None
+    try:
+        home = os.path.expanduser(f"~{sudo_user}")
+    except KeyError:
+        return None
+    return os.path.join(
+        home, ".config", "BraveSoftware", "Brave-Browser", "Default", "Preferences"
+    )
+
+
+def _is_brave_running():
+    """True if any brave process is currently alive."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-x", "brave"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+def repair_brave_prefs():
+    """Remove SlimBrave-leaked Shields exceptions from user prefs.
+
+    Returns (removed_count, brave_was_running). Safe to call when the
+    file or keys don't exist — both return 0.
+    """
+    pref_path = _find_brave_prefs()
+    if not pref_path or not os.path.isfile(pref_path):
+        return (0, False)
+
+    running = _is_brave_running()
+
+    try:
+        with open(pref_path, "r", encoding="utf-8") as f:
+            prefs = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return (0, running)
+
+    bs = (
+        prefs.get("profile", {})
+             .get("content_settings", {})
+             .get("exceptions", {})
+             .get("braveShields")
+    )
+    if not isinstance(bs, dict) or not bs:
+        return (0, running)
+
+    removed = 0
+    # Brave stores the policy patterns with a secondary-pattern marker (",*")
+    # appended. Match SlimBrave's two canonical writes; leave any user-set
+    # per-site overrides alone.
+    for pattern in ("http://*,*", "https://*,*"):
+        if pattern in bs:
+            del bs[pattern]
+            removed += 1
+
+    if removed == 0:
+        return (0, running)
+
+    try:
+        # Brave reads the file as compact JSON; preserve that shape.
+        _atomic_write(pref_path, json.dumps(prefs, separators=(",", ":")))
+    except OSError:
+        return (0, running)
+
+    # We're root via sudo — return the file to its original owner so the
+    # user's Brave can rewrite it on the next session.
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user:
+        try:
+            import pwd
+            user_info = pwd.getpwnam(sudo_user)
+            os.chown(pref_path, user_info.pw_uid, user_info.pw_gid)
+        except (ImportError, KeyError, OSError):
+            pass
+
+    return (removed, running)
+
+
+# ---------------------------------------------------------------------------
 # Policy I/O
 # ---------------------------------------------------------------------------
 
@@ -352,11 +450,25 @@ def apply_policy(rows):
     try:
         os.makedirs(POLICY_DIR, exist_ok=True)
         _atomic_write(POLICY_FILE, json.dumps(policy, indent=4))
-        return True, "Settings applied. Restart Brave to see changes."
     except PermissionError:
         return False, "Permission denied. Run as root."
     except OSError as e:
         return False, f"Failed to write policy: {e}"
+
+    return True, _post_apply_message(*repair_brave_prefs())
+
+
+def _post_apply_message(repaired, brave_running):
+    """Build the status message after a successful Apply or Reset."""
+    base = "Settings applied. Restart Brave to see changes."
+    if repaired > 0:
+        base = (
+            f"Applied; cleaned {repaired} leaked profile "
+            f"pref{'s' if repaired != 1 else ''}. Restart Brave."
+        )
+    if brave_running:
+        base += " (Brave is running — fully close it before reopening.)"
+    return base
 
 
 def reset_policy(rows):
@@ -373,9 +485,19 @@ def reset_policy(rows):
                 row["value"] = ""
                 row["cursor"] = 0
                 row["scroll"] = 0
-        return True, "All settings reset. Restart Brave to see changes."
     except OSError as e:
         return False, f"Failed to reset: {e}"
+
+    repaired, running = repair_brave_prefs()
+    msg = "All settings reset. Restart Brave to see changes."
+    if repaired > 0:
+        msg = (
+            f"Reset; cleaned {repaired} leaked profile "
+            f"pref{'s' if repaired != 1 else ''}. Restart Brave."
+        )
+    if running:
+        msg += " (Brave is running — fully close it before reopening.)"
+    return True, msg
 
 
 def sync_rows_with_policy(rows, policy):
