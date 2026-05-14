@@ -305,7 +305,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned
 ## Contributors
 
 - **[@alsyundawy](https://github.com/alsyundawy)** - macOS version
-
+- **[@zhaoJianNet](https://github.com/zhaoJianNet)** - macOS refinements
 ---
 
 <div align="center">
