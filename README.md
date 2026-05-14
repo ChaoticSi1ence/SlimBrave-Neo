@@ -63,6 +63,8 @@ sudo python3 slimbrave-linux.py --export ~/SlimBraveNeoSettings.json
 sudo python3 slimbrave-linux.py --reset
 ```
 
+**Multiple Brave channels (Stable / Beta / Nightly):** Brave hardcodes the managed-policy directory to `/etc/brave/policies` for every channel, so a single policy file applies to all of them — no per-channel selector is needed. If multiple channels are installed, leaked Shields exceptions are scrubbed from each channel's user-data directory and "Brave is running" detection covers all installed channels.
+
 After applying, restart Brave and verify at `brave://policy`.
 
 ### macOS
@@ -75,12 +77,17 @@ sudo python3 slimbrave-mac.py
 
 Policies are written to `/Library/Managed Preferences/com.brave.Browser.plist`. Requires root.
 
+**Multiple Brave channels (Stable / Beta / Nightly):** each channel uses its own bundle ID and managed plist on macOS. When more than one channel is detected, the TUI shows a "Brave Channels" section at the top — channel rows are unchecked by default, and any channel that already has a SlimBrave-managed plist is pre-checked so a re-run shows you which channels are currently managed without writing to channels you didn't ask about. Pick the channels you want to apply to before clicking Apply.
+
 **CLI mode (non-interactive):**
 
 ```bash
 sudo python3 slimbrave-mac.py --import "./Presets/Maximum Privacy Preset.json"
 sudo python3 slimbrave-mac.py --export ~/SlimBraveNeoSettings.json
 sudo python3 slimbrave-mac.py --reset
+
+# Restrict CLI actions to specific channels (default: all detected)
+sudo python3 slimbrave-mac.py --import preset.json --channels stable,beta
 ```
 
 After applying, restart Brave and verify at `brave://policy`.
@@ -164,6 +171,7 @@ Requires Administrator privileges.
 | `--reset` | Remove the managed policy file |
 | `--policy-file PATH` | Override policy file path |
 | `--doh-templates URL` | Set custom DNS-over-HTTPS template URL |
+| `--channels LIST` | Comma-separated channels to target (`stable,beta,nightly`). Default `auto` = all detected. macOS writes one plist per channel; Linux always shares a single policy file. |
 | `-h`, `--help` | Show help |
 
 Import/export uses the same JSON format as the Windows PowerShell version. Configs are cross-platform compatible.
@@ -219,13 +227,13 @@ SlimBrave Neo writes Chromium [managed enterprise policies](https://chromeenterp
 
 | Platform | Policy Location |
 |----------|----------------|
-| Linux | `/etc/brave/policies/managed/slimbrave.json` |
-| macOS | `/Library/Managed Preferences/com.brave.Browser.plist` |
+| Linux | `/etc/brave/policies/managed/slimbrave.json` (shared across all channels) |
+| macOS | `/Library/Managed Preferences/com.brave.Browser{,.beta,.nightly,.dev}.plist` (one per detected channel) |
 | Windows | Registry keys via PowerShell |
 
 **Additional behavior:**
-- Auto-detects Brave installations: Arch (`brave-bin`), deb/rpm, Flatpak, Snap, macOS App, and PATH fallback
-- Reads existing policies on startup and pre-checks matching features
+- Auto-detects Brave installations: Arch (`brave-bin`), deb/rpm, Flatpak, Snap, macOS App (Stable / Beta / Nightly), and PATH fallback
+- Reads existing policies on startup and pre-checks matching features; on macOS pre-checks any channel with an existing managed plist
 - Full overwrite on Apply, so unchecked features are cleanly removed
 - Import/export compatible with Windows PowerShell version (handles UTF-16 BOM encoding)
 
@@ -272,6 +280,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned
 - [x] DNS-over-HTTPS with custom template URLs
 - [x] CLI mode for scripting and automation
 - [x] macOS support via managed plist policies
+- [x] Multi-channel support on macOS (Stable / Beta / Nightly)
 
 ---
 

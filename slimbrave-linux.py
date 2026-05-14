@@ -4,6 +4,13 @@
 Sets Chromium enterprise policies via JSON files at
 /etc/brave/policies/managed/slimbrave.json. Requires root.
 
+Multi-channel handling on Linux:
+  brave-core hardcodes the managed-policy directory to /etc/brave/policies
+  for every Brave channel (Stable / Beta / Nightly / Dev), so a single
+  policy file applies to all of them. Channel info is still used to scrub
+  leaked Shields exceptions from each channel's user-data directory and
+  to detect which Brave processes are currently running.
+
 Supports interactive curses TUI and non-interactive CLI usage:
   sudo python3 slimbrave.py                        # TUI
   sudo python3 slimbrave.py --import preset.json   # CLI import
@@ -32,6 +39,43 @@ ALLOWED_POLICY_DIRS = (
     "/etc/brave/policies/managed",
     "/etc/chromium/policies/managed",
 )
+
+# Brave channel definitions on Linux. Each channel has its own user-data
+# directory under ~/.config/BraveSoftware/<dir>/ and (for some channels) a
+# distinct binary name on PATH. Policy targets are shared across channels.
+LINUX_CHANNELS = [
+    {"id": "stable", "label": "Stable",
+     "user_data_dir": "Brave-Browser", "process_name": "brave"},
+    {"id": "beta", "label": "Beta",
+     "user_data_dir": "Brave-Browser-Beta", "process_name": "brave-browser-beta"},
+    {"id": "nightly", "label": "Nightly",
+     "user_data_dir": "Brave-Browser-Nightly", "process_name": "brave-browser-nightly"},
+    {"id": "dev", "label": "Dev",
+     "user_data_dir": "Brave-Browser-Dev", "process_name": "brave-browser-dev"},
+]
+
+CHANNEL_IDS = [c["id"] for c in LINUX_CHANNELS]
+
+
+def _user_home_for_brave():
+    """Return the home directory of the real user (the one running sudo)."""
+    sudo_user = os.environ.get("SUDO_USER") or os.environ.get("USER")
+    if not sudo_user or sudo_user == "root":
+        return None
+    try:
+        return os.path.expanduser(f"~{sudo_user}")
+    except KeyError:
+        return None
+
+
+def _channel_prefs_path(user_data_dir):
+    """Return the Default profile Preferences path for a channel."""
+    home = _user_home_for_brave()
+    if not home:
+        return None
+    return os.path.join(
+        home, ".config", "BraveSoftware", user_data_dir, "Default", "Preferences",
+    )
 
 
 def _is_within_allowed_policy_dir(path):
@@ -74,58 +118,115 @@ def _atomic_write(path, data, *, binary=False, mode=0o644):
 # ---------------------------------------------------------------------------
 
 
+def _make_installation(channel_def, *, app_path="", plist_path="", prefs_path=None):
+    """Build an installation record from a channel definition."""
+    return {
+        "channel": channel_def["id"],
+        "label": channel_def["label"],
+        "app_path": app_path,
+        "bundle_id": "",
+        "plist_path": plist_path,
+        "prefs_path": prefs_path,
+        "process_name": channel_def["process_name"],
+        "user_data_dir": channel_def["user_data_dir"],
+    }
+
+
 def detect_brave():
-    """Detect Brave browser installation and packaging method.
+    """Detect Brave browser installation(s) and packaging method.
 
-    Returns a dict with keys: found, method, path, warnings.
+    Returns a dict with keys:
+        found, method, path, warnings, installations.
+    On Linux every detected channel shares POLICY_FILE (no per-channel
+    plist), so installations is informational + drives prefs repair and
+    process-running checks.
     """
+    method = None
+    primary_path = ""
+    warnings = []
+    found_any = False
+
     # Arch (brave-bin AUR package)
-    arch_path = "/opt/brave-bin/brave"
-    if os.path.isfile(arch_path):
-        return {"found": True, "method": "arch", "path": arch_path, "warnings": []}
-
+    if os.path.isfile("/opt/brave-bin/brave"):
+        method, primary_path, found_any = "arch", "/opt/brave-bin/brave", True
     # Deb / RPM (official brave-browser package)
-    for p in ("/opt/brave.com/brave/brave-browser", "/opt/brave.com/brave/brave"):
-        if os.path.isfile(p):
-            return {"found": True, "method": "deb/rpm", "path": p, "warnings": []}
+    elif os.path.isfile("/opt/brave.com/brave/brave-browser"):
+        method, primary_path, found_any = "deb/rpm", "/opt/brave.com/brave/brave-browser", True
+    elif os.path.isfile("/opt/brave.com/brave/brave"):
+        method, primary_path, found_any = "deb/rpm", "/opt/brave.com/brave/brave", True
+    else:
+        try:
+            result = subprocess.run(
+                ["flatpak", "info", "com.brave.Browser"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            if result.returncode == 0:
+                method, primary_path, found_any = "flatpak", "com.brave.Browser", True
+        except FileNotFoundError:
+            pass  # flatpak not installed
 
-    # Flatpak (com.brave.Browser from Flathub)
-    try:
-        result = subprocess.run(
-            ["flatpak", "info", "com.brave.Browser"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        if result.returncode == 0:
-            return {
-                "found": True, "method": "flatpak",
-                "path": "com.brave.Browser",
-                "warnings": [],
-            }
-    except FileNotFoundError:
-        pass  # flatpak not installed
-
-    # Snap
-    snap_path = "/snap/brave/current/opt/brave.com/brave/brave"
-    if os.path.isfile(snap_path) or os.path.isdir("/snap/brave/current"):
-        return {
-            "found": True, "method": "snap", "path": snap_path,
-            "warnings": [
+    if not found_any:
+        snap_path = "/snap/brave/current/opt/brave.com/brave/brave"
+        if os.path.isfile(snap_path) or os.path.isdir("/snap/brave/current"):
+            method, primary_path, found_any = "snap", snap_path, True
+            warnings.append(
                 "Snap confinement may prevent policies from taking effect. "
                 "Native packages are recommended."
-            ],
-        }
+            )
 
-    # Fallback - check PATH
-    for name in ("brave-browser-stable", "brave-browser", "brave"):
-        found = shutil.which(name)
-        if found:
-            return {"found": True, "method": "unknown", "path": found, "warnings": []}
+    if not found_any:
+        for name in ("brave-browser-stable", "brave-browser", "brave"):
+            found = shutil.which(name)
+            if found:
+                method, primary_path, found_any = "unknown", found, True
+                break
+
+    if not found_any:
+        method = "not found"
+        warnings.append(
+            "Brave browser not found. Policies will be written but may have no effect."
+        )
+
+    # Detect installed Linux channels by user-data dir presence (best effort).
+    installations = []
+    home = _user_home_for_brave()
+    detected_labels = []
+    for ch in LINUX_CHANNELS:
+        ch_dir = (
+            os.path.join(home, ".config", "BraveSoftware", ch["user_data_dir"])
+            if home else None
+        )
+        installed = (
+            (ch_dir is not None and os.path.isdir(ch_dir))
+            or shutil.which(ch["process_name"]) is not None
+        )
+        if installed:
+            installations.append(_make_installation(
+                ch,
+                app_path=primary_path if ch["id"] == "stable" else "",
+                plist_path=POLICY_FILE,
+                prefs_path=_channel_prefs_path(ch["user_data_dir"]),
+            ))
+            detected_labels.append(ch["label"])
+
+    if not installations:
+        stable = LINUX_CHANNELS[0]
+        installations.append(_make_installation(
+            stable,
+            app_path=primary_path,
+            plist_path=POLICY_FILE,
+            prefs_path=_channel_prefs_path(stable["user_data_dir"]),
+        ))
+
+    if found_any and len(detected_labels) > 1:
+        method = f"{method}: " + ", ".join(detected_labels)
 
     return {
-        "found": False, "method": "not found", "path": "",
-        "warnings": [
-            "Brave browser not found. Policies will be written but may have no effect."
-        ],
+        "found": found_any,
+        "method": method,
+        "path": primary_path,
+        "warnings": warnings,
+        "installations": installations,
     }
 
 
@@ -215,10 +316,17 @@ ROW_HEADER = 0
 ROW_FEATURE = 1
 ROW_DNS = 2
 ROW_DNS_TEMPLATE = 3
+ROW_CHANNEL = 4
 
 
-def build_rows():
-    """Return a list of dicts describing each visual row."""
+def build_rows(installations=None):
+    """Return a list of dicts describing each visual row.
+
+    On Linux every channel shares POLICY_FILE so a per-channel selector
+    cannot meaningfully scope the policy write. The `installations`
+    argument is accepted for API parity with the macOS script but does
+    not produce ROW_CHANNEL rows here.
+    """
     rows = []
     for cat in CATEGORIES:
         rows.append({"type": ROW_HEADER, "text": cat["name"]})
@@ -310,58 +418,47 @@ def read_json_file(path):
 # Profile-prefs repair
 #
 # Brave/Chromium writes managed `*ForUrls` content-setting policies through
-# to the user's profile Preferences file. Removing the policy from
-# /etc/brave/policies/managed/ does NOT roll those entries back — the
-# profile keeps the per-URL exceptions forever, so unchecking "Disable
-# Brave Shields" leaves shields stuck off. This function scrubs the
-# specific patterns SlimBrave writes (`http://*,*` and `https://*,*`)
-# from the profile prefs, repairing the leak.
+# to the user's profile Preferences file. Removing the policy from the
+# managed location does NOT roll those entries back — the profile keeps
+# the per-URL exceptions forever, so unchecking "Disable Brave Shields"
+# leaves shields stuck off. This function scrubs the specific patterns
+# SlimBrave writes (`http://*,*` and `https://*,*`) from the profile
+# prefs, repairing the leak.
 # ---------------------------------------------------------------------------
 
 
-def _find_brave_prefs():
-    """Return path to the Default profile Preferences file, or None."""
-    sudo_user = os.environ.get("SUDO_USER") or os.environ.get("USER")
-    if not sudo_user or sudo_user == "root":
-        return None
-    try:
-        home = os.path.expanduser(f"~{sudo_user}")
-    except KeyError:
-        return None
-    return os.path.join(
-        home, ".config", "BraveSoftware", "Brave-Browser", "Default", "Preferences"
-    )
+def _is_brave_running(installations=None):
+    """True if any of the listed Brave installations have a live process."""
+    if installations is None:
+        names = ["brave"]
+    else:
+        names = [i["process_name"] for i in installations if i.get("process_name")]
+        if not names:
+            names = ["brave"]
+
+    for name in names:
+        try:
+            result = subprocess.run(
+                ["pgrep", "-x", name],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            if result.returncode == 0:
+                return True
+        except FileNotFoundError:
+            return False
+    return False
 
 
-def _is_brave_running():
-    """True if any brave process is currently alive."""
-    try:
-        result = subprocess.run(
-            ["pgrep", "-x", "brave"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        return result.returncode == 0
-    except FileNotFoundError:
-        return False
-
-
-def repair_brave_prefs():
-    """Remove SlimBrave-leaked Shields exceptions from user prefs.
-
-    Returns (removed_count, brave_was_running). Safe to call when the
-    file or keys don't exist — both return 0.
-    """
-    pref_path = _find_brave_prefs()
+def _repair_one_prefs(pref_path):
+    """Scrub SlimBrave's Shields-disabled exceptions from a single prefs file."""
     if not pref_path or not os.path.isfile(pref_path):
-        return (0, False)
-
-    running = _is_brave_running()
+        return 0
 
     try:
         with open(pref_path, "r", encoding="utf-8") as f:
             prefs = json.load(f)
     except (OSError, json.JSONDecodeError):
-        return (0, running)
+        return 0
 
     bs = (
         prefs.get("profile", {})
@@ -370,36 +467,27 @@ def repair_brave_prefs():
              .get("braveShields")
     )
     if not isinstance(bs, dict) or not bs:
-        return (0, running)
+        return 0
 
     removed = 0
-    # Brave stores the policy patterns with a secondary-pattern marker (",*")
-    # appended. Match SlimBrave's two canonical writes; leave any user-set
-    # per-site overrides alone.
     for pattern in ("http://*,*", "https://*,*"):
         if pattern in bs:
             del bs[pattern]
             removed += 1
 
     if removed == 0:
-        return (0, running)
+        return 0
 
     try:
-        # Preserve the original file mode — Brave creates Preferences as 0600
-        # and the default _atomic_write mode would widen it to 0644, exposing
-        # session state (cookies, sync info) to other local users.
         original_mode = os.stat(pref_path).st_mode & 0o777
-        # Brave reads the file as compact JSON; preserve that shape.
         _atomic_write(
             pref_path,
             json.dumps(prefs, separators=(",", ":")),
             mode=original_mode,
         )
     except OSError:
-        return (0, running)
+        return 0
 
-    # We're root via sudo — return the file to its original owner so the
-    # user's Brave can rewrite it on the next session.
     sudo_user = os.environ.get("SUDO_USER")
     if sudo_user:
         try:
@@ -409,7 +497,27 @@ def repair_brave_prefs():
         except (ImportError, KeyError, OSError):
             pass
 
-    return (removed, running)
+    return removed
+
+
+def repair_brave_prefs(installations=None):
+    """Remove SlimBrave-leaked Shields exceptions across all given channels.
+
+    Returns (removed_count, brave_was_running).
+    """
+    if installations is None:
+        installations = [{"prefs_path": _channel_prefs_path(LINUX_CHANNELS[0]["user_data_dir"])}]
+
+    running = _is_brave_running(installations)
+    total = 0
+    seen = set()
+    for inst in installations:
+        path = inst.get("prefs_path")
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        total += _repair_one_prefs(path)
+    return (total, running)
 
 
 # ---------------------------------------------------------------------------
@@ -417,17 +525,43 @@ def repair_brave_prefs():
 # ---------------------------------------------------------------------------
 
 
-def load_existing_policy():
-    """Read the current policy file and return its dict, or empty dict."""
+def _read_one_policy(plist_path):
+    """Read a single JSON policy file."""
     try:
-        with open(POLICY_FILE, "r") as f:
+        with open(plist_path, "r") as f:
             return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError, PermissionError):
+    except (FileNotFoundError, PermissionError):
+        return {}
+    except Exception:
         return {}
 
 
-def apply_policy(rows):
-    """Write checked features to the policy JSON file."""
+def load_existing_policy(installations=None):
+    """Read the current on-disk policy and return its dict.
+
+    On Linux every channel shares POLICY_FILE, so de-duped reads still hit
+    just one file. Falls back to POLICY_FILE when no installations are
+    supplied.
+    """
+    if installations is None:
+        return _read_one_policy(POLICY_FILE)
+    seen = set()
+    for inst in installations:
+        p = inst.get("plist_path") or POLICY_FILE
+        if p in seen:
+            continue
+        seen.add(p)
+        data = _read_one_policy(p)
+        if data:
+            return data
+    return {}
+
+
+def _build_policy(rows):
+    """Translate row state into a {key: value} policy dict.
+
+    Returns (policy, error_msg). On validation failure policy is None.
+    """
     policy = {}
     dns_mode = None
     dns_template = ""
@@ -439,14 +573,10 @@ def apply_policy(rows):
         elif row["type"] == ROW_DNS_TEMPLATE:
             dns_template = row["value"].strip()
 
-    # Refuse to write a broken DNS config: selecting "custom" without a
-    # template URL would set DnsOverHttpsMode=secure with no server,
-    # breaking DNS resolution in Brave.
     if dns_mode == "custom" and not dns_template:
-        return False, "Custom DNS requires a DoH template URL."
+        return None, "Custom DNS requires a DoH template URL."
 
     if dns_mode:
-        # "custom" maps to "secure" in the actual Chromium policy
         if dns_mode == "custom":
             policy["DnsOverHttpsMode"] = "secure"
             policy["DnsOverHttpsTemplates"] = dns_template
@@ -454,24 +584,80 @@ def apply_policy(rows):
             policy["DnsOverHttpsMode"] = dns_mode
             if dns_mode == "secure" and dns_template:
                 policy["DnsOverHttpsTemplates"] = dns_template
+    return policy, ""
 
+
+def _write_one_policy(plist_path, policy):
+    """Write a single JSON policy file and return (ok, error_msg)."""
     try:
-        os.makedirs(POLICY_DIR, exist_ok=True)
-        _atomic_write(POLICY_FILE, json.dumps(policy, indent=4))
+        os.makedirs(os.path.dirname(plist_path), exist_ok=True)
+        _atomic_write(plist_path, json.dumps(policy, indent=4))
     except PermissionError:
         return False, "Permission denied. Run as root."
     except OSError as e:
         return False, f"Failed to write policy: {e}"
+    return True, ""
 
-    return True, _post_apply_message(*repair_brave_prefs())
+
+def _selected_channel_targets(installations, rows):
+    """Linux UI does not expose channel rows, so every installation is targeted."""
+    return list(installations)
 
 
-def _post_apply_message(repaired, brave_running):
+def _dedupe_plist_targets(installations):
+    """Return distinct (plist_path, label) pairs.
+
+    On Linux every channel maps to the same POLICY_FILE; the labels are
+    joined into a single string so status messages still surface what was
+    written for whom. Insertion order is preserved by the dict
+    (Python 3.7+).
+    """
+    grouped = {}
+    for inst in installations:
+        path = inst.get("plist_path") or POLICY_FILE
+        grouped.setdefault(path, []).append(inst["label"])
+    return [(path, ", ".join(labels)) for path, labels in grouped.items()]
+
+
+def apply_policy(rows, installations=None):
+    """Write the policy to every selected channel's plist file."""
+    policy, err = _build_policy(rows)
+    if policy is None:
+        return False, err
+
+    if installations is None:
+        targets = [(POLICY_FILE, "")]
+    else:
+        targets = _dedupe_plist_targets(_selected_channel_targets(installations, rows))
+
+    if not targets:
+        return False, "No Brave channel selected."
+
+    written_labels = []
+    for plist_path, label in targets:
+        ok, err = _write_one_policy(plist_path, policy)
+        if not ok:
+            scope = f" ({label})" if label else ""
+            return False, f"{err}{scope}"
+        if label:
+            written_labels.append(label)
+
+    repair_targets = (
+        _selected_channel_targets(installations, rows)
+        if installations else None
+    )
+    return True, _post_apply_message(
+        *repair_brave_prefs(repair_targets), labels=written_labels,
+    )
+
+
+def _post_apply_message(repaired, brave_running, labels=None):
     """Build the status message after a successful Apply or Reset."""
-    base = "Settings applied. Restart Brave to see changes."
+    scope = f" to {', '.join(labels)}" if labels else ""
+    base = f"Settings applied{scope}. Restart Brave to see changes."
     if repaired > 0:
         base = (
-            f"Applied; cleaned {repaired} leaked profile "
+            f"Applied{scope}; cleaned {repaired} leaked profile "
             f"pref{'s' if repaired != 1 else ''}. Restart Brave."
         )
     if brave_running:
@@ -479,11 +665,23 @@ def _post_apply_message(repaired, brave_running):
     return base
 
 
-def reset_policy(rows):
-    """Delete the policy file and uncheck everything."""
+def reset_policy(rows, installations=None):
+    """Delete the policy file(s) and uncheck everything."""
+    if installations is None:
+        targets = [(POLICY_FILE, "")]
+    else:
+        targets = _dedupe_plist_targets(_selected_channel_targets(installations, rows))
+
+    if not targets:
+        return False, "No Brave channel selected."
+
+    cleared_labels = []
     try:
-        if os.path.exists(POLICY_FILE):
-            os.remove(POLICY_FILE)
+        for plist_path, label in targets:
+            if os.path.exists(plist_path):
+                os.remove(plist_path)
+            if label:
+                cleared_labels.append(label)
         for row in rows:
             if row["type"] == ROW_FEATURE:
                 row["checked"] = False
@@ -496,11 +694,16 @@ def reset_policy(rows):
     except OSError as e:
         return False, f"Failed to reset: {e}"
 
-    repaired, running = repair_brave_prefs()
-    msg = "All settings reset. Restart Brave to see changes."
+    repair_targets = (
+        _selected_channel_targets(installations, rows)
+        if installations else None
+    )
+    repaired, running = repair_brave_prefs(repair_targets)
+    scope = f" for {', '.join(cleared_labels)}" if cleared_labels else ""
+    msg = f"All settings reset{scope}. Restart Brave to see changes."
     if repaired > 0:
         msg = (
-            f"Reset; cleaned {repaired} leaked profile "
+            f"Reset{scope}; cleaned {repaired} leaked profile "
             f"pref{'s' if repaired != 1 else ''}. Restart Brave."
         )
     if running:
@@ -519,7 +722,6 @@ def sync_rows_with_policy(rows, policy):
         elif row["type"] == ROW_DNS:
             dns_val = policy.get("DnsOverHttpsMode")
             dns_tmpl = policy.get("DnsOverHttpsTemplates", "")
-            # If mode is "secure" and a template is set, show as "custom"
             if dns_val == "secure" and dns_tmpl:
                 if "custom" in row["options"]:
                     row["selected"] = row["options"].index("custom")
@@ -537,12 +739,7 @@ def sync_rows_with_policy(rows, policy):
 
 
 def export_settings(rows, path):
-    """Export current TUI selections to a SlimBrave Neo JSON config file.
-
-    Writes the new key-value map format so multi-value policies (e.g.
-    IncognitoModeAvailability, which can be 1 for Disable or 2 for Force)
-    round-trip cleanly instead of collapsing to just a key name.
-    """
+    """Export current TUI selections to a SlimBrave Neo JSON config file."""
     features = {}
     dns_mode = None
     dns_template = ""
@@ -571,14 +768,7 @@ def export_settings(rows, path):
 
 
 def _parse_imported_features(features_obj):
-    """Normalize the Features field from a config file.
-
-    Accepts two formats:
-      - New: {"KeyName": value, ...} — authoritative, round-trips multi-value policies.
-      - Legacy: ["KeyName", ...] — pre-2026 exports; value is implicit.
-    Returns (mapping, is_legacy). `mapping` is {key: value_or_None}; for the
-    legacy format values are None, signalling "first matching row wins".
-    """
+    """Normalize the Features field from a config file."""
     if isinstance(features_obj, dict):
         return dict(features_obj), False
     if isinstance(features_obj, list):
@@ -601,11 +791,6 @@ def import_settings(rows, path):
     dns_mode = config.get("DnsMode", "")
     dns_template = config.get("DnsTemplates", "") or ""
 
-    # Legacy array format can't distinguish value-1 vs value-2 for keys
-    # with multiple rows (IncognitoModeAvailability). To avoid silently
-    # picking the later entry — which historically force-incognitoed users
-    # who imported the Parental Controls preset — only the first matching
-    # row per key is checked in legacy mode.
     legacy_handled = set()
 
     for row in rows:
@@ -654,14 +839,12 @@ CP_DIM = 10
 
 BUTTONS = ["Import", "Export", "Apply", "Reset", "Quit"]
 
-# Focus zones
 FOCUS_LIST = 0
 FOCUS_BUTTONS = 1
-FOCUS_PROMPT = 2   # status-line text input mode
+FOCUS_PROMPT = 2
 
 
 def init_colors():
-    """Initialize curses color pairs."""
     curses.start_color()
     curses.use_default_colors()
     curses.init_pair(CP_NORMAL, curses.COLOR_WHITE, -1)
@@ -679,7 +862,7 @@ def init_colors():
 def selectable_indices(rows):
     """Return list of row indices that can receive cursor focus."""
     return [i for i, r in enumerate(rows)
-            if r["type"] in (ROW_FEATURE, ROW_DNS, ROW_DNS_TEMPLATE)]
+            if r["type"] in (ROW_FEATURE, ROW_DNS, ROW_DNS_TEMPLATE, ROW_CHANNEL)]
 
 
 def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
@@ -688,9 +871,8 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
     """Render the full TUI screen."""
     stdscr.erase()
     max_y, max_x = stdscr.getmaxyx()
-    usable_w = max_x - 1  # avoid writing to the last column
+    usable_w = max_x - 1
 
-    # Title bar
     if install_method:
         title = f" SlimBrave Neo - Brave Browser Debloater [{install_method}] "
     else:
@@ -704,7 +886,6 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
     except curses.error:
         pass
 
-    # Key hints below title
     hint = " [Q/Esc] Quit  [Space/Enter] Toggle  [Tab] Buttons "
     try:
         stdscr.addnstr(1, 0, hint.center(usable_w), usable_w,
@@ -712,17 +893,14 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
     except curses.error:
         pass
 
-    # How many rows fit between title (line 1) and bottom area (3 lines)
     list_start_y = 2
-    list_end_y = max_y - 4  # leave room for: blank, buttons, status
+    list_end_y = max_y - 4
     visible_count = list_end_y - list_start_y
     if visible_count < 1:
         visible_count = 1
 
-    # Current DNS mode (for dimming the template row)
     current_dns_mode = get_dns_mode(rows)
 
-    # Draw the scrollable feature list
     for vi in range(visible_count):
         ri = vi + scroll_offset
         if ri >= len(rows):
@@ -747,6 +925,13 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
                 attr = curses.color_pair(CP_CHECKED)
             else:
                 attr = curses.color_pair(CP_NORMAL)
+        elif row["type"] == ROW_CHANNEL:
+            mark = "x" if row["checked"] else " "
+            line = f"    [{mark}] {row['text']}"
+            attr = (
+                curses.color_pair(CP_CHECKED) if row["checked"]
+                else curses.color_pair(CP_NORMAL)
+            )
         elif row["type"] == ROW_DNS:
             current = row["options"][row["selected"]]
             line = f"    < {current} >"
@@ -755,7 +940,6 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
             tmpl_active = current_dns_mode in ("custom", "secure")
             val = row["value"] if row["value"] else ""
             if tmpl_active:
-                # Show editable field
                 field_w = max(10, usable_w - 22)
                 scroll = row.get("scroll", 0)
                 visible_text = val[scroll:scroll + field_w]
@@ -773,11 +957,10 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
         except curses.error:
             pass
 
-        # Draw text cursor for active template row
         if (is_cursor and row["type"] == ROW_DNS_TEMPLATE
                 and current_dns_mode in ("custom", "secure")):
             tmpl_val = row["value"]
-            field_start = 15  # len("    Template: [")
+            field_start = 15
             scroll = row.get("scroll", 0)
             cur_pos = row.get("cursor", 0)
             cur_screen_pos = field_start + cur_pos - scroll
@@ -789,7 +972,6 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
                 except curses.error:
                     pass
 
-    # Scroll indicators
     if scroll_offset > 0:
         try:
             stdscr.addnstr(list_start_y - 1, usable_w - 5, " ^^^ ", 5,
@@ -803,7 +985,6 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
         except curses.error:
             pass
 
-    # Bottom buttons
     btn_y = max_y - 2
     btn_x = 2
     for i, label in enumerate(BUTTONS):
@@ -818,15 +999,12 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
             pass
         btn_x += len(display) + 3
 
-    # Status / prompt line
     status_y = max_y - 1
     if focus == FOCUS_PROMPT:
-        # Show text input prompt
         prompt_text = f" {prompt_label}: {prompt_buf}"
         try:
             stdscr.addnstr(status_y, 0, prompt_text.ljust(usable_w),
                             usable_w, curses.color_pair(CP_TITLE))
-            # Show cursor in the prompt
             cur_x = len(prompt_label) + 3 + prompt_cur
             if cur_x < usable_w:
                 ch = prompt_buf[prompt_cur] if prompt_cur < len(prompt_buf) else " "
@@ -858,7 +1036,7 @@ def prompt_text_input(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
 
         key = stdscr.getch()
 
-        if key == 27:  # Escape - cancel
+        if key == 27:
             return False, ""
         elif key in (curses.KEY_ENTER, 10, 13):
             return True, "".join(buf).strip()
@@ -866,7 +1044,7 @@ def prompt_text_input(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
             if cur > 0:
                 buf.pop(cur - 1)
                 cur -= 1
-        elif key == curses.KEY_DC:  # Delete key
+        elif key == curses.KEY_DC:
             if cur < len(buf):
                 buf.pop(cur)
         elif key == curses.KEY_LEFT:
@@ -879,38 +1057,40 @@ def prompt_text_input(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
             cur = 0
         elif key == curses.KEY_END:
             cur = len(buf)
-        elif 32 <= key <= 126:  # printable ASCII
+        elif 32 <= key <= 126:
             buf.insert(cur, chr(key))
             cur += 1
 
 
-def main(stdscr):
+def main(stdscr, override_installations=None):
     """Main TUI event loop."""
     curses.curs_set(0)
     init_colors()
     stdscr.keypad(True)
     stdscr.timeout(-1)
 
-    rows = build_rows()
+    brave_info = detect_brave()
+    if override_installations is not None:
+        installations = override_installations
+        install_method = "policy-file override"
+    else:
+        installations = brave_info["installations"]
+        install_method = brave_info["method"]
+
+    rows = build_rows(installations)
     sel = selectable_indices(rows)
     if not sel:
         return
 
-    # Detect Brave installation
-    brave_info = detect_brave()
-    install_method = brave_info["method"]
-
-    # Load existing policy and pre-check matching features
-    policy = load_existing_policy()
+    policy = load_existing_policy(installations)
     sync_rows_with_policy(rows, policy)
 
-    cursor_pos = 0          # index into sel[]
-    cursor_idx = sel[0]     # index into rows[]
+    cursor_pos = 0
+    cursor_idx = sel[0]
     scroll_offset = 0
     focus = FOCUS_LIST
     btn_idx = 0
 
-    # Show detection warnings on startup, if any
     if brave_info["warnings"]:
         status_msg = brave_info["warnings"][0]
         status_ok = not brave_info["found"]
@@ -919,7 +1099,6 @@ def main(stdscr):
         status_ok = True
 
     while True:
-        # Compute scroll
         max_y, _ = stdscr.getmaxyx()
         list_start_y = 2
         list_end_y = max_y - 4
@@ -929,7 +1108,6 @@ def main(stdscr):
             scroll_offset = cursor_idx
         if cursor_idx >= scroll_offset + visible_count:
             scroll_offset = cursor_idx - visible_count + 1
-        # Keep headers visible: if the row above cursor is a header, include it
         if cursor_idx > 0 and rows[cursor_idx - 1]["type"] == ROW_HEADER:
             if cursor_idx - 1 < scroll_offset:
                 scroll_offset = cursor_idx - 1
@@ -940,17 +1118,14 @@ def main(stdscr):
         key = stdscr.getch()
         row = rows[cursor_idx]
 
-        # --- Editing mode for DNS template row ---
         if (focus == FOCUS_LIST
                 and row["type"] == ROW_DNS_TEMPLATE
                 and get_dns_mode(rows) in ("custom", "secure")):
-            # Typing into the template field
             if 32 <= key <= 126:
                 val = row["value"]
                 cur = row["cursor"]
                 row["value"] = val[:cur] + chr(key) + val[cur:]
                 row["cursor"] = cur + 1
-                # Update horizontal scroll
                 _, max_x = stdscr.getmaxyx()
                 field_w = max(10, max_x - 1 - 22)
                 if row["cursor"] - row["scroll"] >= field_w:
@@ -998,11 +1173,8 @@ def main(stdscr):
                 field_w = max(10, max_x - 1 - 22)
                 row["scroll"] = max(0, row["cursor"] - field_w + 1)
                 continue
-            # For other keys (arrows up/down, tab, etc.), fall through
-            # to normal handling below
 
-        # --- Global keys ---
-        if key == ord("q") or key == 27:  # q or Escape
+        if key == ord("q") or key == 27:
             break
 
         elif key == curses.KEY_UP:
@@ -1060,6 +1232,9 @@ def main(stdscr):
                 if row["type"] == ROW_FEATURE:
                     toggle_feature_row(rows, row)
                     status_msg = ""
+                elif row["type"] == ROW_CHANNEL:
+                    row["checked"] = not row["checked"]
+                    status_msg = ""
                 elif row["type"] == ROW_DNS:
                     row["selected"] = (row["selected"] + 1) % len(row["options"])
                     status_msg = ""
@@ -1069,14 +1244,13 @@ def main(stdscr):
                 btn_label = BUTTONS[btn_idx]
 
                 if btn_label == "Apply":
-                    # Validate: custom DNS requires a template URL
                     dns_mode = get_dns_mode(rows)
                     dns_tmpl = get_dns_template(rows)
                     if dns_mode == "custom" and not dns_tmpl:
                         status_msg = "Custom DNS requires a DoH template URL."
                         status_ok = False
                     else:
-                        status_ok, status_msg = apply_policy(rows)
+                        status_ok, status_msg = apply_policy(rows, installations)
 
                 elif btn_label == "Reset":
                     status_msg = ("Reset all settings? "
@@ -1087,7 +1261,7 @@ def main(stdscr):
                          install_method)
                     confirm = stdscr.getch()
                     if confirm in (curses.KEY_ENTER, 10, 13):
-                        status_ok, status_msg = reset_policy(rows)
+                        status_ok, status_msg = reset_policy(rows, installations)
                     else:
                         status_msg = "Reset cancelled."
                         status_ok = True
@@ -1100,7 +1274,6 @@ def main(stdscr):
                         default="./Presets/")
                     if ok and path:
                         status_ok, status_msg = import_settings(rows, path)
-                        # Rebuild selectable indices (unchanged, but safe)
                         sel = selectable_indices(rows)
                     else:
                         status_msg = "Import cancelled."
@@ -1122,9 +1295,11 @@ def main(stdscr):
                     break
 
             elif focus == FOCUS_LIST:
-                # Enter on a list item acts like spacebar
                 if row["type"] == ROW_FEATURE:
                     toggle_feature_row(rows, row)
+                    status_msg = ""
+                elif row["type"] == ROW_CHANNEL:
+                    row["checked"] = not row["checked"]
                     status_msg = ""
                 elif row["type"] == ROW_DNS:
                     row["selected"] = (row["selected"] + 1) % len(row["options"])
@@ -1135,23 +1310,22 @@ def main(stdscr):
 # ---------------------------------------------------------------------------
 
 
-def cli_import(path, doh_templates=""):
+def cli_import(path, installations, doh_templates=""):
     """Non-interactive: import config and apply policies."""
-    rows = build_rows()
+    rows = build_rows(installations)
     ok, msg = import_settings(rows, path)
     if not ok:
         print(f"Error: {msg}", file=sys.stderr)
         return 1
     print(msg)
 
-    # Override DoH templates if provided via CLI flag
     if doh_templates:
         for row in rows:
             if row["type"] == ROW_DNS_TEMPLATE:
                 row["value"] = doh_templates
                 break
 
-    ok, msg = apply_policy(rows)
+    ok, msg = apply_policy(rows, installations)
     if not ok:
         print(f"Error: {msg}", file=sys.stderr)
         return 1
@@ -1159,14 +1333,14 @@ def cli_import(path, doh_templates=""):
     return 0
 
 
-def cli_export(path):
+def cli_export(path, installations):
     """Non-interactive: export current policy to a config file."""
-    policy = load_existing_policy()
+    policy = load_existing_policy(installations)
     if not policy:
         print("No existing policy found.", file=sys.stderr)
         return 1
 
-    rows = build_rows()
+    rows = build_rows(installations)
     sync_rows_with_policy(rows, policy)
 
     ok, msg = export_settings(rows, path)
@@ -1177,19 +1351,30 @@ def cli_export(path):
     return 0
 
 
-def cli_reset():
-    """Non-interactive: delete the policy file and repair leaked prefs."""
+def cli_reset(installations):
+    """Non-interactive: delete the policy file(s) and repair leaked prefs."""
+    targets = _dedupe_plist_targets(installations)
+    if not targets:
+        print(f"No policy file found at {POLICY_FILE}")
+        return 0
     try:
-        if os.path.exists(POLICY_FILE):
-            os.remove(POLICY_FILE)
-            print(f"Removed {POLICY_FILE}")
-        else:
-            print(f"No policy file found at {POLICY_FILE}")
+        for plist_path, label in targets:
+            if os.path.exists(plist_path):
+                os.remove(plist_path)
+                print(
+                    f"Removed {plist_path}"
+                    + (f" ({label})" if label else "")
+                )
+            else:
+                print(
+                    f"No policy file found at {plist_path}"
+                    + (f" ({label})" if label else "")
+                )
     except OSError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    repaired, running = repair_brave_prefs()
+    repaired, running = repair_brave_prefs(installations)
     if repaired > 0:
         print(
             f"Cleaned {repaired} leaked profile "
@@ -1200,11 +1385,36 @@ def cli_reset():
     return 0
 
 
+def _filter_installations_by_channels(installations, channel_spec):
+    """Apply --channels flag semantics to detected installations.
+
+    On Linux every channel writes to the same POLICY_FILE, so filtering
+    only narrows which channels' user-data dirs get prefs repair and
+    which process names are checked when reporting "Brave is running".
+    """
+    if not channel_spec or channel_spec == "auto":
+        return installations, ""
+    requested = [c.strip().lower() for c in channel_spec.split(",") if c.strip()]
+    unknown = [c for c in requested if c not in CHANNEL_IDS]
+    if unknown:
+        return None, (
+            f"Unknown channel(s): {', '.join(unknown)}. "
+            f"Valid: {', '.join(CHANNEL_IDS)}"
+        )
+    filtered = [i for i in installations if i["channel"] in requested]
+    if not filtered:
+        return None, (
+            f"No installed Brave channel matches --channels {channel_spec}. "
+            f"Detected: {', '.join(i['channel'] for i in installations) or 'none'}"
+        )
+    return filtered, ""
+
+
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         prog="slimbrave",
-        description="SlimBrave Neo - Brave Browser debloater for Linux",
+        description="SlimBrave Neo - Brave Browser debloater",
         epilog="Run without arguments to launch the interactive TUI.",
     )
     parser.add_argument(
@@ -1227,6 +1437,14 @@ def parse_args():
         "--doh-templates", metavar="URL",
         help="set DnsOverHttpsTemplates (used with custom DNS mode)",
     )
+    parser.add_argument(
+        "--channels", metavar="LIST", default="auto",
+        help=(
+            "comma-separated channels for prefs-repair / process detection "
+            f"({', '.join(CHANNEL_IDS)}). Default 'auto' = all detected. "
+            "Linux always writes a single shared policy file."
+        ),
+    )
     return parser.parse_args()
 
 # ---------------------------------------------------------------------------
@@ -1237,7 +1455,7 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-    # Override policy file path if requested
+    override_installations = None
     if args.policy_file:
         if not _is_within_allowed_policy_dir(args.policy_file):
             print(
@@ -1247,6 +1465,14 @@ if __name__ == "__main__":
             sys.exit(2)
         POLICY_FILE = os.path.realpath(args.policy_file)
         POLICY_DIR = os.path.dirname(POLICY_FILE)
+        # Reuse the stable channel's user-data dir / process name for prefs
+        # repair and "is Brave running" detection on the override target.
+        default_channel = LINUX_CHANNELS[0]
+        override_installations = [_make_installation(
+            {**default_channel, "id": "override", "label": "Override"},
+            plist_path=POLICY_FILE,
+            prefs_path=_channel_prefs_path(default_channel["user_data_dir"]),
+        )]
 
     is_cli = args.import_path or args.export_path or args.reset
 
@@ -1259,19 +1485,30 @@ if __name__ == "__main__":
         sys.exit(1)
 
     if is_cli:
-        # Non-interactive CLI mode
+        if override_installations is not None:
+            installations = override_installations
+        else:
+            brave_info = detect_brave()
+            installations, err = _filter_installations_by_channels(
+                brave_info["installations"], args.channels,
+            )
+            if installations is None:
+                print(f"Error: {err}", file=sys.stderr)
+                sys.exit(2)
+            for w in brave_info["warnings"]:
+                print(f"Warning: {w}", file=sys.stderr)
+
         rc = 0
         if args.reset:
-            rc = cli_reset()
+            rc = cli_reset(installations)
         if args.import_path:
-            rc = cli_import(args.import_path,
+            rc = cli_import(args.import_path, installations,
                             doh_templates=args.doh_templates or "")
         if args.export_path:
-            rc = cli_export(args.export_path)
+            rc = cli_export(args.export_path, installations)
         sys.exit(rc)
 
-    # Interactive TUI mode
     try:
-        curses.wrapper(main)
+        curses.wrapper(lambda s: main(s, override_installations))
     except KeyboardInterrupt:
-        pass  # Clean exit on Ctrl+C
+        pass
