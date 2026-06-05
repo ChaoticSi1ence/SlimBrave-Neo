@@ -132,7 +132,6 @@ Requires Administrator privileges.
 - Disable Autofill (Addresses & Credit Cards)
 - Disable Password Manager
 - Disable Browser Sign-in
-- Enable Do Not Track
 - Enable Global Privacy Control
 - Enable De-AMP (strip Google AMP wrappers)
 - Enable Debouncing (skip known tracking redirect hops)
@@ -149,7 +148,7 @@ Requires Administrator privileges.
 - Disable Brave Wallet
 - Disable Brave VPN
 - Disable Brave AI Chat
-- Disable Brave Shields
+- Disable Brave Shields / Force Shields On for all sites (mutually exclusive)
 - Disable Brave News
 - Disable Brave Talk
 - Disable Brave Playlist
@@ -157,10 +156,18 @@ Requires Administrator privileges.
 - Disable Speedreader
 - Disable Tor
 - Disable Sync
-- Disable IPFS
+- Disable Email Aliases
+
+### Shields & Content Protection
+Pin Brave's own protection defaults as managed policy so they can't be weakened per-site or in settings (requires Brave 1.83+):
+- Enforce Ad Blocking
+- Enforce Fingerprinting Protection
+- Force HTTPS Upgrades (Strict — sites that can't serve HTTPS show an interstitial)
+- Cap Referrers (Strict Origin)
+- Forget First-Party Storage on Close
 
 ### Performance & Bloat
-- Disable Background Mode
+- Disable Background Mode (Windows/Linux only — the policy doesn't exist on macOS)
 - Disable Shopping List
 - Always Open PDF Externally
 - Disable Translate
@@ -200,15 +207,16 @@ Import/export uses the same JSON format as the Windows PowerShell version. Confi
 
 ### Maximum Privacy Preset
 - **Telemetry:** Blocks all reporting (metrics, safe browsing, URL collection, feedback).
-- **Privacy:** Disables autofill, password manager, sign-in, WebRTC leaks, QUIC, and forces Do Not Track.
-- **Brave Features:** Kills Rewards, Wallet, VPN, AI Chat, Tor, and Sync.
+- **Privacy:** Disables autofill, password manager, sign-in, WebRTC leaks, QUIC, and enforces Global Privacy Control.
+- **Brave Features:** Kills Rewards, Wallet, VPN, AI Chat, Tor, Sync, and Email Aliases.
+- **Shields:** Pins ad blocking, fingerprinting protection, strict HTTPS, capped referrers, and forget-on-close storage as managed policy.
 - **Performance:** Disables background processes, recommendations, and bloat.
 - **DNS:** Uses plain DNS (no HTTPS) to prevent potential logging by DoH providers.
 - **Best for:** Paranoid users, journalists, activists, or anyone who wants Brave as private as possible.
 
 ### Balanced Privacy Preset
 - **Telemetry:** Blocks all tracking but keeps basic safe browsing.
-- **Privacy:** Blocks third-party cookies, enables Do Not Track, but allows password manager and autofill for addresses.
+- **Privacy:** Blocks third-party cookies, enables Global Privacy Control, but allows password manager and autofill for addresses.
 - **Brave Features:** Disables Rewards, Wallet, VPN, and AI features.
 - **Performance:** Turns off background services and ads.
 - **DNS:** Uses automatic DoH (lets Brave choose the fastest secure DNS).

@@ -7,7 +7,6 @@
         "BraveStatsPingEnabled": false,
         "AutofillCreditCardEnabled": false,
         "BrowserSignin": 0,
-        "EnableDoNotTrack": true,
         "BraveGlobalPrivacyControlEnabled": true,
         "BraveDeAmpEnabled": true,
         "BraveDebouncingEnabled": true,
@@ -26,7 +25,6 @@
         "BraveWebDiscoveryEnabled": false,
         "TorDisabled": true,
         "SyncDisabled": true,
-        "IPFSEnabled": false,
         "BackgroundModeEnabled": false,
         "ShoppingListEnabled": false,
         "DefaultBrowserSettingEnabled": false

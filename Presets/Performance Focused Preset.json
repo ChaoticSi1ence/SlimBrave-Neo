@@ -11,7 +11,6 @@
         "BraveNewsDisabled": true,
         "BraveTalkDisabled": true,
         "BravePlaylistEnabled": false,
-        "IPFSEnabled": false,
         "BackgroundModeEnabled": false,
         "ShoppingListEnabled": false,
         "DefaultBrowserSettingEnabled": false,

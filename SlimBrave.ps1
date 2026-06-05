@@ -195,7 +195,7 @@ function Test-ListPolicyMatches {
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "SlimBrave Neo"
 $form.ForeColor = [System.Drawing.Color]::White
-$form.Size = New-Object System.Drawing.Size(755, 900)
+$form.Size = New-Object System.Drawing.Size(755, 955)
 $form.StartPosition = "CenterScreen"
 $form.BackColor = [System.Drawing.Color]::FromArgb(255, 25, 25, 25)
 $form.MaximizeBox = $false
@@ -209,7 +209,7 @@ $allFeatures = @()
 
 $leftPanel = New-Object System.Windows.Forms.Panel
 $leftPanel.Location = New-Object System.Drawing.Point(20, 20)
-$leftPanel.Size = New-Object System.Drawing.Size(340, 650)
+$leftPanel.Size = New-Object System.Drawing.Size(340, 760)
 $leftPanel.BackColor = [System.Drawing.Color]::FromArgb(255, 35, 35, 35)
 $leftPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
 $form.Controls.Add($leftPanel)
@@ -260,7 +260,6 @@ $privacyFeatures = @(
     @{ Name = "Disable Autofill (Credit Cards)"; Key = "AutofillCreditCardEnabled"; Value = 0; Type = "DWord" },
     @{ Name = "Disable Password Manager"; Key = "PasswordManagerEnabled"; Value = 0; Type = "DWord" },
     @{ Name = "Disable Browser Sign-in"; Key = "BrowserSignin"; Value = 0; Type = "DWord" },
-    @{ Name = "Enable Do Not Track"; Key = "EnableDoNotTrack"; Value = 1; Type = "DWord" },
     @{ Name = "Enable Global Privacy Control"; Key = "BraveGlobalPrivacyControlEnabled"; Value = 1; Type = "DWord" },
     @{ Name = "Enable De-AMP"; Key = "BraveDeAmpEnabled"; Value = 1; Type = "DWord" },
     @{ Name = "Enable Debouncing"; Key = "BraveDebouncingEnabled"; Value = 1; Type = "DWord" },
@@ -286,13 +285,47 @@ foreach ($feature in $privacyFeatures) {
     $y += 25
 }
 
+$y += 10
+
+$shieldsLabel = New-Object System.Windows.Forms.Label
+$shieldsLabel.Text = "Shields & Content Protection"
+$shieldsLabel.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 11, [System.Drawing.FontStyle]::Bold)
+$shieldsLabel.Location = New-Object System.Drawing.Point(28, $y)
+$shieldsLabel.Size = New-Object System.Drawing.Size(300, 20)
+$shieldsLabel.ForeColor = [System.Drawing.Color]::LightSalmon
+$leftPanel.Controls.Add($shieldsLabel)
+$y += 25
+
+# Brave 1.83+ content-protection enforcers. These pin Brave's own privacy
+# defaults as managed policy so neither the user nor a malicious
+# page/extension can quietly weaken them.
+$shieldsContentFeatures = @(
+    @{ Name = "Enforce Ad Blocking"; Key = "DefaultBraveAdblockSetting"; Value = 2; Type = "DWord" },
+    @{ Name = "Enforce Fingerprinting Protection"; Key = "DefaultBraveFingerprintingV2Setting"; Value = 3; Type = "DWord" },
+    @{ Name = "Force HTTPS Upgrades (Strict)"; Key = "DefaultBraveHttpsUpgradeSetting"; Value = 2; Type = "DWord" },
+    @{ Name = "Cap Referrers (Strict Origin)"; Key = "DefaultBraveReferrersSetting"; Value = 2; Type = "DWord" },
+    @{ Name = "Forget First-Party Storage on Close"; Key = "DefaultBraveRemember1PStorageSetting"; Value = 2; Type = "DWord" }
+)
+
+foreach ($feature in $shieldsContentFeatures) {
+    $checkbox = New-Object System.Windows.Forms.CheckBox
+    $checkbox.Text = $feature.Name
+    $checkbox.Tag = $feature
+    $checkbox.Location = New-Object System.Drawing.Point(30, $y)
+    $checkbox.Size = New-Object System.Drawing.Size(300, 20)
+    $checkbox.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $leftPanel.Controls.Add($checkbox)
+    $allFeatures += $checkbox
+    $y += 25
+}
+
 # ---------------------------------------------------------------------------
 # Right panel - Brave Features & Performance
 # ---------------------------------------------------------------------------
 
 $rightPanel = New-Object System.Windows.Forms.Panel
 $rightPanel.Location = New-Object System.Drawing.Point(380, 20)
-$rightPanel.Size = New-Object System.Drawing.Size(340, 650)
+$rightPanel.Size = New-Object System.Drawing.Size(340, 760)
 $rightPanel.BackColor = [System.Drawing.Color]::FromArgb(255, 35, 35, 35)
 $rightPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
 $form.Controls.Add($rightPanel)
@@ -313,7 +346,8 @@ $braveFeatures = @(
     @{ Name = "Disable Brave Wallet"; Key = "BraveWalletDisabled"; Value = 1; Type = "DWord" },
     @{ Name = "Disable Brave VPN"; Key = "BraveVPNDisabled"; Value = 1; Type = "DWord" },
     @{ Name = "Disable Brave AI Chat"; Key = "BraveAIChatEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Brave Shields"; Key = "BraveShieldsDisabledForUrls"; Value = @("https://*", "http://*"); Type = "List" },
+    @{ Name = "Disable Brave Shields"; Key = "BraveShieldsDisabledForUrls"; Value = @("https://*", "http://*"); Type = "List"; Group = "shields" },
+    @{ Name = "Force Shields On (All Sites)"; Key = "BraveShieldsEnabledForUrls"; Value = @("https://*", "http://*"); Type = "List"; Group = "shields" },
     @{ Name = "Disable Brave News"; Key = "BraveNewsDisabled"; Value = 1; Type = "DWord" },
     @{ Name = "Disable Brave Talk"; Key = "BraveTalkDisabled"; Value = 1; Type = "DWord" },
     @{ Name = "Disable Brave Playlist"; Key = "BravePlaylistEnabled"; Value = 0; Type = "DWord" },
@@ -321,7 +355,7 @@ $braveFeatures = @(
     @{ Name = "Disable Speedreader"; Key = "BraveSpeedreaderEnabled"; Value = 0; Type = "DWord" },
     @{ Name = "Disable Tor"; Key = "TorDisabled"; Value = 1; Type = "DWord" },
     @{ Name = "Disable Sync"; Key = "SyncDisabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable IPFS"; Key = "IPFSEnabled"; Value = 0; Type = "DWord" }
+    @{ Name = "Disable Email Aliases"; Key = "EmailAliasesEnabled"; Value = 0; Type = "DWord" }
 )
 
 foreach ($feature in $braveFeatures) {
@@ -411,12 +445,12 @@ foreach ($cb in $allFeatures) {
 
 $dnsLabel = New-Object System.Windows.Forms.Label
 $dnsLabel.Text = "DNS Over HTTPS Mode:"
-$dnsLabel.Location = New-Object System.Drawing.Point(35, 735)
+$dnsLabel.Location = New-Object System.Drawing.Point(35, 800)
 $dnsLabel.Size = New-Object System.Drawing.Size(140, 20)
 $form.Controls.Add($dnsLabel)
 
 $dnsDropdown = New-Object System.Windows.Forms.ComboBox
-$dnsDropdown.Location = New-Object System.Drawing.Point(180, 730)
+$dnsDropdown.Location = New-Object System.Drawing.Point(180, 795)
 $dnsDropdown.Size = New-Object System.Drawing.Size(150, 20)
 $dnsDropdown.Items.AddRange(@("off", "automatic", "secure", "custom"))
 $dnsDropdown.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -426,12 +460,12 @@ $form.Controls.Add($dnsDropdown)
 
 $dnsTemplateLabel = New-Object System.Windows.Forms.Label
 $dnsTemplateLabel.Text = "Custom DoH template URL:"
-$dnsTemplateLabel.Location = New-Object System.Drawing.Point(35, 765)
+$dnsTemplateLabel.Location = New-Object System.Drawing.Point(35, 830)
 $dnsTemplateLabel.Size = New-Object System.Drawing.Size(170, 20)
 $form.Controls.Add($dnsTemplateLabel)
 
 $dnsTemplateBox = New-Object System.Windows.Forms.TextBox
-$dnsTemplateBox.Location = New-Object System.Drawing.Point(210, 765)
+$dnsTemplateBox.Location = New-Object System.Drawing.Point(210, 830)
 $dnsTemplateBox.Size = New-Object System.Drawing.Size(510, 20)
 $dnsTemplateBox.BackColor = [System.Drawing.Color]::FromArgb(255, 25, 25, 25)
 $dnsTemplateBox.ForeColor = [System.Drawing.Color]::White
@@ -448,7 +482,7 @@ $dnsDropdown.Add_SelectedIndexChanged({
 
 $exportButton = New-Object System.Windows.Forms.Button
 $exportButton.Text = "Export Settings"
-$exportButton.Location = New-Object System.Drawing.Point(50, 810)
+$exportButton.Location = New-Object System.Drawing.Point(50, 870)
 $exportButton.Size = New-Object System.Drawing.Size(120, 30)
 $form.Controls.Add($exportButton)
 $exportButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -459,7 +493,7 @@ $exportButton.ForeColor = [System.Drawing.Color]::LightSalmon
 
 $importButton = New-Object System.Windows.Forms.Button
 $importButton.Text = "Import Settings"
-$importButton.Location = New-Object System.Drawing.Point(210, 810)
+$importButton.Location = New-Object System.Drawing.Point(210, 870)
 $importButton.Size = New-Object System.Drawing.Size(120, 30)
 $form.Controls.Add($importButton)
 $importButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -470,7 +504,7 @@ $importButton.ForeColor = [System.Drawing.Color]::LightSkyBlue
 
 $saveButton = New-Object System.Windows.Forms.Button
 $saveButton.Text = "Apply Settings"
-$saveButton.Location = New-Object System.Drawing.Point(410, 810)
+$saveButton.Location = New-Object System.Drawing.Point(410, 870)
 $saveButton.Size = New-Object System.Drawing.Size(120, 30)
 $form.Controls.Add($saveButton)
 $saveButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -481,7 +515,7 @@ $saveButton.ForeColor = [System.Drawing.Color]::LightGreen
 
 $resetButton = New-Object System.Windows.Forms.Button
 $resetButton.Text = "Reset All Settings"
-$resetButton.Location = New-Object System.Drawing.Point(570, 810)
+$resetButton.Location = New-Object System.Drawing.Point(570, 870)
 $resetButton.Size = New-Object System.Drawing.Size(120, 30)
 $form.Controls.Add($resetButton)
 $resetButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat

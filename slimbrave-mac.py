@@ -386,7 +386,6 @@ CATEGORIES = [
             {"name": "Disable Autofill (Credit Cards)", "key": "AutofillCreditCardEnabled", "value": False},
             {"name": "Disable Password Manager", "key": "PasswordManagerEnabled", "value": False},
             {"name": "Disable Browser Sign-in", "key": "BrowserSignin", "value": 0},
-            {"name": "Enable Do Not Track", "key": "EnableDoNotTrack", "value": True},
             {"name": "Enable Global Privacy Control", "key": "BraveGlobalPrivacyControlEnabled", "value": True},
             {"name": "Enable De-AMP", "key": "BraveDeAmpEnabled", "value": True},
             {"name": "Enable Debouncing", "key": "BraveDebouncingEnabled", "value": True},
@@ -407,7 +406,8 @@ CATEGORIES = [
             {"name": "Disable Brave Wallet", "key": "BraveWalletDisabled", "value": True},
             {"name": "Disable Brave VPN", "key": "BraveVPNDisabled", "value": True},
             {"name": "Disable Brave AI Chat", "key": "BraveAIChatEnabled", "value": False},
-            {"name": "Disable Brave Shields", "key": "BraveShieldsDisabledForUrls", "value": ["https://*", "http://*"]},
+            {"name": "Disable Brave Shields", "key": "BraveShieldsDisabledForUrls", "value": ["https://*", "http://*"], "group": "shields"},
+            {"name": "Force Shields On (All Sites)", "key": "BraveShieldsEnabledForUrls", "value": ["https://*", "http://*"], "group": "shields"},
             {"name": "Disable Brave News", "key": "BraveNewsDisabled", "value": True},
             {"name": "Disable Brave Talk", "key": "BraveTalkDisabled", "value": True},
             {"name": "Disable Brave Playlist", "key": "BravePlaylistEnabled", "value": False},
@@ -415,13 +415,29 @@ CATEGORIES = [
             {"name": "Disable Speedreader", "key": "BraveSpeedreaderEnabled", "value": False},
             {"name": "Disable Tor", "key": "TorDisabled", "value": True},
             {"name": "Disable Sync", "key": "SyncDisabled", "value": True},
-            {"name": "Disable IPFS", "key": "IPFSEnabled", "value": False},
+            {"name": "Disable Email Aliases", "key": "EmailAliasesEnabled", "value": False},
         ],
     },
     {
+        # Brave 1.83+ content-protection enforcers. These pin Brave's own
+        # privacy defaults as managed policy so neither the user nor a
+        # malicious page/extension can quietly weaken them.
+        "name": "Shields & Content Protection",
+        "features": [
+            {"name": "Enforce Ad Blocking", "key": "DefaultBraveAdblockSetting", "value": 2},
+            {"name": "Enforce Fingerprinting Protection", "key": "DefaultBraveFingerprintingV2Setting", "value": 3},
+            {"name": "Force HTTPS Upgrades (Strict)", "key": "DefaultBraveHttpsUpgradeSetting", "value": 2},
+            {"name": "Cap Referrers (Strict Origin)", "key": "DefaultBraveReferrersSetting", "value": 2},
+            {"name": "Forget First-Party Storage on Close", "key": "DefaultBraveRemember1PStorageSetting", "value": 2},
+        ],
+    },
+    {
+        # Note: BackgroundModeEnabled is intentionally absent here — the
+        # Chromium policy is only supported on Windows and Linux, so on
+        # macOS it would just surface as an unrecognized-policy error in
+        # brave://policy.
         "name": "Performance & Bloat",
         "features": [
-            {"name": "Disable Background Mode", "key": "BackgroundModeEnabled", "value": False},
             {"name": "Disable Shopping List", "key": "ShoppingListEnabled", "value": False},
             {"name": "Always Open PDF Externally", "key": "AlwaysOpenPdfExternally", "value": True},
             {"name": "Disable Translate", "key": "TranslateEnabled", "value": False},
