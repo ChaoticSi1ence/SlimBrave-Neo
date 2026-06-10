@@ -78,6 +78,31 @@ def _channel_prefs_path(user_data_dir):
     )
 
 
+def _profile_prefs_paths(default_prefs_path):
+    """Expand a channel's Default-profile Preferences path to all profiles.
+
+    Chromium keeps one directory per profile (Default, Profile 1, ...)
+    under the same user-data dir, and the Shields-exception leak lands in
+    every profile that was used while the policy was active — not just
+    Default.
+    """
+    if not default_prefs_path:
+        return []
+    user_data = os.path.dirname(os.path.dirname(default_prefs_path))
+    try:
+        entries = sorted(os.listdir(user_data))
+    except OSError:
+        return [default_prefs_path]
+    paths = []
+    for name in entries:
+        if name != "Default" and not name.startswith("Profile "):
+            continue
+        prefs = os.path.join(user_data, name, "Preferences")
+        if os.path.isfile(prefs):
+            paths.append(prefs)
+    return paths or [default_prefs_path]
+
+
 def _is_within_allowed_policy_dir(path):
     """Return True if `path`'s realpath lives under an allowed policy dir."""
     real_path = os.path.realpath(path)
@@ -319,7 +344,10 @@ CATEGORIES = [
     },
 ]
 
-DNS_MODES = ["automatic", "off", "secure", "custom"]
+# "unmanaged" (the default) writes no DNS policy at all, leaving Brave's
+# DNS settings user-controlled. The other four are managed-policy values —
+# including "off", which actively force-disables DoH as policy.
+DNS_MODES = ["unmanaged", "automatic", "off", "secure", "custom"]
 
 # ---------------------------------------------------------------------------
 # Build a flat list of rows for the TUI (headers + toggleable items + DNS)
@@ -375,7 +403,7 @@ def get_dns_mode(rows):
     for row in rows:
         if row["type"] == ROW_DNS:
             return row["options"][row["selected"]]
-    return "automatic"
+    return "unmanaged"
 
 
 def get_dns_template(rows):
@@ -525,11 +553,11 @@ def repair_brave_prefs(installations=None):
     total = 0
     seen = set()
     for inst in installations:
-        path = inst.get("prefs_path")
-        if not path or path in seen:
-            continue
-        seen.add(path)
-        total += _repair_one_prefs(path)
+        for path in _profile_prefs_paths(inst.get("prefs_path")):
+            if path in seen:
+                continue
+            seen.add(path)
+            total += _repair_one_prefs(path)
     return (total, running)
 
 
@@ -589,7 +617,9 @@ def _build_policy(rows):
     if dns_mode == "custom" and not dns_template:
         return None, "Custom DNS requires a DoH template URL."
 
-    if dns_mode:
+    # "unmanaged" writes no DNS keys at all; since Apply fully overwrites
+    # the policy file, any previously-managed DNS policy is removed.
+    if dns_mode and dns_mode != "unmanaged":
         if dns_mode == "custom":
             policy["DnsOverHttpsMode"] = "secure"
             policy["DnsOverHttpsTemplates"] = dns_template
@@ -764,11 +794,14 @@ def export_settings(rows, path):
         elif row["type"] == ROW_DNS_TEMPLATE:
             dns_template = row["value"].strip()
 
+    # DnsMode is omitted when DNS is unmanaged, so importing the file
+    # (on any platform) lands back on "unmanaged" instead of forcing a
+    # managed DNS policy. The template only matters for custom/secure.
     settings = {"Features": features}
-    if dns_mode:
+    if dns_mode and dns_mode != "unmanaged":
         settings["DnsMode"] = dns_mode
-    if dns_template:
-        settings["DnsTemplates"] = dns_template
+        if dns_template and dns_mode in ("custom", "secure"):
+            settings["DnsTemplates"] = dns_template
 
     try:
         out_dir = os.path.dirname(path)
@@ -803,6 +836,10 @@ def import_settings(rows, path):
     features_map, is_legacy = _parse_imported_features(config.get("Features"))
     dns_mode = config.get("DnsMode", "")
     dns_template = config.get("DnsTemplates", "") or ""
+    if not dns_mode:
+        # No DnsMode in the file means DNS is unmanaged (a bare
+        # DnsTemplates is treated as custom for legacy exports).
+        dns_mode = "custom" if dns_template else "unmanaged"
 
     legacy_handled = set()
 
@@ -822,11 +859,8 @@ def import_settings(rows, path):
             else:
                 row["checked"] = (expected == row["value"])
         elif row["type"] == ROW_DNS:
-            if dns_mode and dns_mode in row["options"]:
+            if dns_mode in row["options"]:
                 row["selected"] = row["options"].index(dns_mode)
-            elif dns_mode == "secure":
-                if "secure" in row["options"]:
-                    row["selected"] = row["options"].index("secure")
         elif row["type"] == ROW_DNS_TEMPLATE:
             row["value"] = dns_template
             row["cursor"] = len(dns_template)

@@ -19,7 +19,6 @@
         "QuicAllowed": false,
         "BlockThirdPartyCookies": true,
         "ForceGoogleSafeSearch": true,
-        "IncognitoModeAvailability": 2,
         "BraveRewardsDisabled": true,
         "BraveWalletDisabled": true,
         "BraveVPNDisabled": true,

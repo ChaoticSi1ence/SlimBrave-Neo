@@ -1,5 +1,9 @@
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Start-Process powershell -ArgumentList "-File `"$($MyInvocation.MyCommand.Path)`"" -Verb RunAs
+    # Carry -ExecutionPolicy Bypass into the elevated instance: the user
+    # often launches via "powershell -ExecutionPolicy Bypass -File ..." and
+    # the relaunch would otherwise revert to the machine default policy and
+    # silently fail to start.
+    Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Path)`"" -Verb RunAs
     exit
 }
 
@@ -96,38 +100,23 @@ function Remove-ListPolicy {
     }
 }
 
-function Repair-BravePrefs {
-    <#
-    .SYNOPSIS
-    Scrubs SlimBrave-leaked Shields exceptions from the user's Brave profile.
-
-    .DESCRIPTION
-    Brave/Chromium writes managed *ForUrls content-setting policies through
-    to the user's profile Preferences file. Removing the policy from the
-    registry does NOT roll those entries back — the profile keeps the
-    per-URL exceptions, so unchecking "Disable Brave Shields" leaves
-    shields stuck off. This function removes the specific patterns
-    SlimBrave writes ("http://*,*" and "https://*,*") from the profile.
-
-    Returns a hashtable @{ Removed = N; Running = $true/$false }.
-    Safe to call when the file or keys do not exist.
-    #>
-    $pref = Join-Path $env:LOCALAPPDATA "BraveSoftware\Brave-Browser\User Data\Default\Preferences"
-    if (-not (Test-Path $pref)) { return @{ Removed = 0; Running = $false } }
-
-    $running = ($null -ne (Get-Process brave -ErrorAction SilentlyContinue))
+function Repair-OneBravePrefs {
+    param ([string] $pref)
+    # Scrub one profile's Preferences file; returns the number of leaked
+    # Shields exceptions removed. Safe when the file or keys do not exist.
+    if (-not (Test-Path $pref)) { return 0 }
 
     try {
         $j = Get-Content $pref -Raw -Encoding UTF8 | ConvertFrom-Json
     } catch {
-        return @{ Removed = 0; Running = $running }
+        return 0
     }
 
     $bs = $null
     if ($j.profile -and $j.profile.content_settings -and $j.profile.content_settings.exceptions) {
         $bs = $j.profile.content_settings.exceptions.braveShields
     }
-    if (-not $bs) { return @{ Removed = 0; Running = $running } }
+    if (-not $bs) { return 0 }
 
     $removed = 0
     foreach ($pattern in @('http://*,*', 'https://*,*')) {
@@ -137,7 +126,7 @@ function Repair-BravePrefs {
         }
     }
 
-    if ($removed -eq 0) { return @{ Removed = 0; Running = $running } }
+    if ($removed -eq 0) { return 0 }
 
     # Brave reads Preferences as compact UTF-8 JSON without BOM. Out-File
     # default would write UTF-16/BOM and break Brave on next launch.
@@ -148,7 +137,38 @@ function Repair-BravePrefs {
         Move-Item -Force $tmp $pref
     } catch {
         if (Test-Path $tmp) { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
-        return @{ Removed = 0; Running = $running }
+        return 0
+    }
+
+    return $removed
+}
+
+function Repair-BravePrefs {
+    <#
+    .SYNOPSIS
+    Scrubs SlimBrave-leaked Shields exceptions from the user's Brave profiles.
+
+    .DESCRIPTION
+    Brave/Chromium writes managed *ForUrls content-setting policies through
+    to each profile's Preferences file. Removing the policy from the
+    registry does NOT roll those entries back — the profile keeps the
+    per-URL exceptions, so unchecking "Disable Brave Shields" leaves
+    shields stuck off. The exceptions land in every profile that was used
+    while the policy was active (Default, Profile 1, Profile 2, ...), so
+    every profile directory is scrubbed, not just Default.
+
+    Returns a hashtable @{ Removed = N; Running = $true/$false }.
+    Safe to call when files or keys do not exist.
+    #>
+    $running = ($null -ne (Get-Process brave -ErrorAction SilentlyContinue))
+    $userData = Join-Path $env:LOCALAPPDATA "BraveSoftware\Brave-Browser\User Data"
+    if (-not (Test-Path $userData)) { return @{ Removed = 0; Running = $running } }
+
+    $removed = 0
+    $profileDirs = Get-ChildItem -Path $userData -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' }
+    foreach ($dir in $profileDirs) {
+        $removed += Repair-OneBravePrefs (Join-Path $dir.FullName 'Preferences')
     }
 
     return @{ Removed = $removed; Running = $running }
@@ -452,7 +472,10 @@ $form.Controls.Add($dnsLabel)
 $dnsDropdown = New-Object System.Windows.Forms.ComboBox
 $dnsDropdown.Location = New-Object System.Drawing.Point(180, 795)
 $dnsDropdown.Size = New-Object System.Drawing.Size(150, 20)
-$dnsDropdown.Items.AddRange(@("off", "automatic", "secure", "custom"))
+# "unmanaged" (the default) writes no DNS policy at all, leaving Brave's
+# DNS settings user-controlled. The other four are managed-policy values —
+# including "off", which actively force-disables DoH as policy.
+$dnsDropdown.Items.AddRange(@("unmanaged", "off", "automatic", "secure", "custom"))
 $dnsDropdown.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $dnsDropdown.BackColor = [System.Drawing.Color]::FromArgb(255, 25, 25, 25)
 $dnsDropdown.ForeColor = [System.Drawing.Color]::White
@@ -596,8 +619,17 @@ $saveButton.Add_Click({
         }
     }
 
-    # DNS settings
-    if ($dnsDropdown.SelectedItem) {
+    # DNS settings. "unmanaged" removes the DNS policies from both scopes
+    # so Brave's own DNS settings stay user-controlled; every other mode is
+    # written as managed policy.
+    if ($dnsDropdown.SelectedItem -eq "unmanaged") {
+        foreach ($scope in @($registryPath, $userRegistryPath)) {
+            if (Test-Path -Path $scope) {
+                Remove-ItemProperty -Path $scope -Name "DnsOverHttpsMode" -ErrorAction SilentlyContinue
+                Remove-ItemProperty -Path $scope -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
+            }
+        }
+    } elseif ($dnsDropdown.SelectedItem) {
         $dnsUpdated = Set-DnsSettings -dnsMode $dnsDropdown.SelectedItem -dnsTemplates $dnsTemplateBox.Text
         if (-not $dnsUpdated) {
             return
@@ -689,7 +721,7 @@ $resetButton.Add_Click({
         foreach ($checkbox in $allFeatures) {
             $checkbox.Checked = $false
         }
-        $dnsDropdown.SelectedItem = "off"
+        $dnsDropdown.SelectedItem = "unmanaged"
         $dnsTemplateBox.Text = ""
         $dnsTemplateBox.Enabled = $false
     }
@@ -716,10 +748,19 @@ $exportButton.Add_Click({
             }
         }
 
+        # DnsMode is omitted when DNS is unmanaged, so importing the file
+        # (on any platform) lands back on "unmanaged" instead of forcing a
+        # managed DNS policy. The template only matters for custom/secure.
         $settingsToExport = [ordered]@{
-            Features     = $featureMap
-            DnsMode      = $dnsDropdown.SelectedItem
-            DnsTemplates = $dnsTemplateBox.Text
+            Features = $featureMap
+        }
+        $dnsMode = $dnsDropdown.SelectedItem
+        if ($dnsMode -and $dnsMode -ne "unmanaged") {
+            $settingsToExport["DnsMode"] = $dnsMode
+            if (($dnsMode -eq "custom" -or $dnsMode -eq "secure") -and
+                -not [string]::IsNullOrWhiteSpace($dnsTemplateBox.Text)) {
+                $settingsToExport["DnsTemplates"] = $dnsTemplateBox.Text
+            }
         }
 
         try {
@@ -790,17 +831,19 @@ $importButton.Add_Click({
                 }
             }
 
-            # DNS mode
+            # DNS: a file with no DnsMode means DNS is unmanaged (a bare
+            # DnsTemplates is treated as custom for legacy exports).
             if ($importedSettings.DnsMode) {
                 $dnsDropdown.SelectedItem = $importedSettings.DnsMode
+            } elseif ($importedSettings.DnsTemplates) {
+                $dnsDropdown.SelectedItem = "custom"
+            } else {
+                $dnsDropdown.SelectedItem = "unmanaged"
             }
-
-            # DNS template
-            if ($importedSettings.DnsTemplates) {
-                $dnsTemplateBox.Text = $importedSettings.DnsTemplates
-                if (-not $importedSettings.DnsMode) {
-                    $dnsDropdown.SelectedItem = "custom"
-                }
+            $dnsTemplateBox.Text = if ($importedSettings.DnsTemplates) {
+                $importedSettings.DnsTemplates
+            } else {
+                ""
             }
 
             [System.Windows.Forms.MessageBox]::Show(
@@ -877,10 +920,10 @@ function Initialize-CurrentSettings {
         } elseif (-not [string]::IsNullOrWhiteSpace($currentDnsMode)) {
             $dnsDropdown.SelectedItem = $currentDnsMode
         } else {
-            $dnsDropdown.SelectedItem = "off"
+            $dnsDropdown.SelectedItem = "unmanaged"
         }
     } else {
-        $dnsDropdown.SelectedItem = "off"
+        $dnsDropdown.SelectedItem = "unmanaged"
     }
 
     $dnsTemplateBox.Enabled = ($dnsDropdown.SelectedItem -eq "custom")

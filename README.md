@@ -179,7 +179,8 @@ Pin Brave's own protection defaults as managed policy so they can't be weakened 
 - Disable Wayback Machine
 
 ### DNS Over HTTPS
-- Four modes: `automatic`, `off`, `secure`, `custom`
+- `unmanaged` by default — no DNS policy is written, so Brave's own DNS settings stay user-controlled
+- Four managed modes: `automatic`, `off`, `secure`, `custom` (`off` force-disables DoH as policy)
 - Custom DoH template URL support (e.g. `https://cloudflare-dns.com/dns-query`)
 - Inline editable template field in the TUI
 
@@ -212,6 +213,7 @@ Import/export uses the same JSON format as the Windows PowerShell version. Confi
 - **Shields:** Pins ad blocking, fingerprinting protection, strict HTTPS, capped referrers, and forget-on-close storage as managed policy.
 - **Performance:** Disables background processes, recommendations, and bloat.
 - **DNS:** Uses plain DNS (no HTTPS) to prevent potential logging by DoH providers.
+- **Note:** No longer forces incognito-only browsing (earlier versions set `IncognitoModeAvailability: 2`, which silently disabled history, persistent logins, and most extensions). Forget-on-close storage covers the privacy goal; the Force Incognito toggle is still available manually.
 - **Best for:** Paranoid users, journalists, activists, or anyone who wants Brave as private as possible.
 
 ### Balanced Privacy Preset
