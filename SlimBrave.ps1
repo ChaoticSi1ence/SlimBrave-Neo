@@ -209,19 +209,219 @@ function Test-ListPolicyMatches {
 }
 
 # ---------------------------------------------------------------------------
+# Theme palette
+#
+# The app follows the Windows "apps" light/dark setting. All colors live in
+# this one table so the two modes stay in sync — controls read from $theme
+# instead of hard-coding colors. Checkbox glyphs are custom-painted in
+# Add-FeatureCheckboxes because the stock flat glyph is nearly invisible on
+# dark backgrounds and follows the system theme on light ones.
+# ---------------------------------------------------------------------------
+
+$appsUseLightTheme = $true   # Windows defaults to light when the value is missing
+try {
+    $personalize = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -ErrorAction Stop
+    $appsUseLightTheme = ([int]$personalize.AppsUseLightTheme -ne 0)
+} catch {}
+
+if ($appsUseLightTheme) {
+    $theme = @{
+        FormBack     = [System.Drawing.Color]::FromArgb(255, 243, 243, 243)
+        PanelBack    = [System.Drawing.Color]::FromArgb(255, 252, 252, 252)
+        Text         = [System.Drawing.Color]::FromArgb(255, 30, 30, 30)
+        Accent       = [System.Drawing.Color]::FromArgb(255, 186, 70, 30)
+        HintText     = [System.Drawing.Color]::FromArgb(255, 120, 120, 120)
+        InputBack    = [System.Drawing.Color]::White
+        InputText    = [System.Drawing.Color]::FromArgb(255, 30, 30, 30)
+        BoxFill      = [System.Drawing.Color]::White
+        BoxBorder    = [System.Drawing.Color]::FromArgb(255, 120, 120, 125)
+        CheckFill    = [System.Drawing.Color]::FromArgb(255, 196, 80, 35)
+        CheckMark    = [System.Drawing.Color]::White
+        ButtonBack   = [System.Drawing.Color]::FromArgb(255, 230, 230, 232)
+        ButtonHover  = [System.Drawing.Color]::FromArgb(255, 218, 218, 222)
+        ButtonBorder = [System.Drawing.Color]::FromArgb(255, 165, 165, 170)
+        TipBack      = [System.Drawing.Color]::FromArgb(255, 250, 250, 250)
+        TipBorder    = [System.Drawing.Color]::FromArgb(255, 150, 150, 155)
+        TipText      = [System.Drawing.Color]::FromArgb(255, 35, 35, 35)
+        ExportText   = [System.Drawing.Color]::FromArgb(255, 186, 70, 30)
+        ImportText   = [System.Drawing.Color]::FromArgb(255, 40, 100, 160)
+        ApplyText    = [System.Drawing.Color]::FromArgb(255, 35, 120, 60)
+        ResetText    = [System.Drawing.Color]::FromArgb(255, 178, 45, 45)
+    }
+} else {
+    $theme = @{
+        FormBack     = [System.Drawing.Color]::FromArgb(255, 25, 25, 25)
+        PanelBack    = [System.Drawing.Color]::FromArgb(255, 35, 35, 35)
+        Text         = [System.Drawing.Color]::FromArgb(255, 230, 230, 230)
+        Accent       = [System.Drawing.Color]::LightSalmon
+        HintText     = [System.Drawing.Color]::FromArgb(255, 140, 140, 140)
+        InputBack    = [System.Drawing.Color]::FromArgb(255, 25, 25, 25)
+        InputText    = [System.Drawing.Color]::FromArgb(255, 230, 230, 230)
+        BoxFill      = [System.Drawing.Color]::FromArgb(255, 45, 45, 48)
+        BoxBorder    = [System.Drawing.Color]::FromArgb(255, 130, 130, 135)
+        CheckFill    = [System.Drawing.Color]::FromArgb(255, 225, 95, 50)
+        CheckMark    = [System.Drawing.Color]::White
+        ButtonBack   = [System.Drawing.Color]::FromArgb(255, 45, 45, 48)
+        ButtonHover  = [System.Drawing.Color]::FromArgb(255, 62, 62, 66)
+        ButtonBorder = [System.Drawing.Color]::FromArgb(255, 90, 90, 95)
+        TipBack      = [System.Drawing.Color]::FromArgb(255, 45, 45, 48)
+        TipBorder    = [System.Drawing.Color]::FromArgb(255, 110, 110, 115)
+        TipText      = [System.Drawing.Color]::Gainsboro
+        ExportText   = [System.Drawing.Color]::LightSalmon
+        ImportText   = [System.Drawing.Color]::LightSkyBlue
+        ApplyText    = [System.Drawing.Color]::LightGreen
+        ResetText    = [System.Drawing.Color]::LightCoral
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Form setup
 # ---------------------------------------------------------------------------
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "SlimBrave Neo"
-$form.ForeColor = [System.Drawing.Color]::White
+# Segoe UI replaces the WinForms default (8.25pt Microsoft Sans Serif) and
+# is inherited by every control that doesn't set its own font.
+$form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$form.ForeColor = $theme.Text
 $form.Size = New-Object System.Drawing.Size(755, 980)
 $form.StartPosition = "CenterScreen"
-$form.BackColor = [System.Drawing.Color]::FromArgb(255, 25, 25, 25)
+$form.BackColor = $theme.FormBack
 $form.MaximizeBox = $false
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 
+# Ask DWM for a dark title bar to match the dark theme; without this the
+# window chrome stays system-light. Best-effort: silently skipped on
+# Windows builds that don't support the attribute.
+if (-not $appsUseLightTheme) {
+    try {
+        Add-Type -Namespace SlimBrave -Name Native -MemberDefinition @'
+[DllImport("dwmapi.dll")]
+public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+'@
+        $form.Add_HandleCreated({
+            $darkMode = 1
+            # 20 = DWMWA_USE_IMMERSIVE_DARK_MODE; pre-20H1 Windows 10 used 19
+            if ([SlimBrave.Native]::DwmSetWindowAttribute($this.Handle, 20, [ref]$darkMode, 4) -ne 0) {
+                [void] [SlimBrave.Native]::DwmSetWindowAttribute($this.Handle, 19, [ref]$darkMode, 4)
+            }
+        })
+    } catch {}
+}
+
 $allFeatures = @()
+
+# ---------------------------------------------------------------------------
+# Theme + hover tooltips
+#
+# One shared ToolTip serves every control. The stock WinForms tooltip is a
+# black-on-cream system balloon that clashes with the dark theme, so it is
+# owner-drawn: dark background, subtle border, word-wrapped Segoe UI text.
+# Popup measures the wrapped text so the bubble fits multi-line tips.
+# ---------------------------------------------------------------------------
+
+$sectionFont = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$tipFont     = New-Object System.Drawing.Font("Segoe UI", 9)
+$tipFlags    = [System.Windows.Forms.TextFormatFlags]::WordBreak
+
+$tooltip = New-Object System.Windows.Forms.ToolTip
+$tooltip.OwnerDraw    = $true
+$tooltip.InitialDelay = 350
+$tooltip.ReshowDelay  = 100
+$tooltip.AutoPopDelay = 30000   # the 5s default cuts off the longer descriptions
+
+$tooltip.Add_Popup({
+    param($s, $e)
+    $text = $s.GetToolTip($e.AssociatedControl)
+    $proposed = New-Object System.Drawing.Size(340, 0)
+    $size = [System.Windows.Forms.TextRenderer]::MeasureText($text, $tipFont, $proposed, $tipFlags)
+    $e.ToolTipSize = New-Object System.Drawing.Size(($size.Width + 14), ($size.Height + 12))
+})
+
+$tooltip.Add_Draw({
+    param($s, $e)
+    $backBrush = New-Object System.Drawing.SolidBrush $script:theme.TipBack
+    $borderPen = New-Object System.Drawing.Pen $script:theme.TipBorder
+    try {
+        $e.Graphics.FillRectangle($backBrush, $e.Bounds)
+        $e.Graphics.DrawRectangle($borderPen, $e.Bounds.X, $e.Bounds.Y, ($e.Bounds.Width - 1), ($e.Bounds.Height - 1))
+        $textRect = New-Object System.Drawing.Rectangle(($e.Bounds.X + 7), ($e.Bounds.Y + 6), ($e.Bounds.Width - 14), ($e.Bounds.Height - 12))
+        [System.Windows.Forms.TextRenderer]::DrawText($e.Graphics, $e.ToolTipText, $tipFont, $textRect, $script:theme.TipText, $tipFlags)
+    } finally {
+        $backBrush.Dispose()
+        $borderPen.Dispose()
+    }
+})
+
+function Add-SectionLabel {
+    param ($Panel, [string] $Text, [int] $Y)
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = $Text
+    $label.UseMnemonic = $false   # render the & in "Telemetry & Reporting" literally
+    $label.Font = $sectionFont
+    $label.Location = New-Object System.Drawing.Point(25, $Y)
+    $label.Size = New-Object System.Drawing.Size(300, 20)
+    $label.ForeColor = $theme.Accent
+    $Panel.Controls.Add($label)
+}
+
+function Add-FeatureCheckboxes {
+    # Lays out one checkbox per feature starting at $Y and returns the next
+    # free Y. Each feature's Tip becomes a hover tooltip, suffixed with the
+    # exact policy it writes so power users can cross-check brave://policy.
+    param ($Panel, [array] $Features, [int] $Y)
+    foreach ($feature in $Features) {
+        $checkbox = New-Object System.Windows.Forms.CheckBox
+        $checkbox.Text = $feature.Name
+        $checkbox.Tag = $feature
+        $checkbox.Location = New-Object System.Drawing.Point(28, $Y)
+        $checkbox.Size = New-Object System.Drawing.Size(305, 20)
+        $checkbox.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+        # The stock flat glyph is a thin system-colored check that is nearly
+        # invisible on the dark theme, so paint over it: checked = accent
+        # box with a white checkmark, unchecked = themed box and border.
+        $checkbox.Add_Paint({
+            param($s, $e)
+            $g = $e.Graphics
+            $boxY = [int](($s.ClientSize.Height - 12) / 2)
+            $clearBrush = New-Object System.Drawing.SolidBrush $s.BackColor
+            $g.FillRectangle($clearBrush, 0, 0, 16, $s.ClientSize.Height)
+            $clearBrush.Dispose()
+            if ($s.Checked) {
+                $fillBrush = New-Object System.Drawing.SolidBrush $script:theme.CheckFill
+                $g.FillRectangle($fillBrush, 1, $boxY, 12, 12)
+                $fillBrush.Dispose()
+                $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+                $checkPen = New-Object System.Drawing.Pen($script:theme.CheckMark, 2)
+                $checkPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+                $checkPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+                $points = [System.Drawing.PointF[]]@(
+                    [System.Drawing.PointF]::new(3.6, ($boxY + 6.2)),
+                    [System.Drawing.PointF]::new(6.0, ($boxY + 8.6)),
+                    [System.Drawing.PointF]::new(10.4, ($boxY + 3.4))
+                )
+                $g.DrawLines($checkPen, $points)
+                $checkPen.Dispose()
+                $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::Default
+            } else {
+                $fillBrush = New-Object System.Drawing.SolidBrush $script:theme.BoxFill
+                $g.FillRectangle($fillBrush, 1, $boxY, 12, 12)
+                $fillBrush.Dispose()
+                $borderPen = New-Object System.Drawing.Pen $script:theme.BoxBorder
+                $g.DrawRectangle($borderPen, 1, $boxY, 12, 12)
+                $borderPen.Dispose()
+            }
+        })
+        if ($feature.Tip) {
+            $valueText = if ($feature.Type -eq "List") { $feature.Value -join ", " } else { $feature.Value }
+            $tooltip.SetToolTip($checkbox, "$($feature.Tip)`n`nPolicy: $($feature.Key) = $valueText")
+        }
+        $Panel.Controls.Add($checkbox)
+        $script:allFeatures += $checkbox
+        $Y += 25
+    }
+    return $Y
+}
 
 # ---------------------------------------------------------------------------
 # Left panel - Telemetry & Privacy
@@ -230,115 +430,91 @@ $allFeatures = @()
 $leftPanel = New-Object System.Windows.Forms.Panel
 $leftPanel.Location = New-Object System.Drawing.Point(20, 20)
 $leftPanel.Size = New-Object System.Drawing.Size(340, 785)
-$leftPanel.BackColor = [System.Drawing.Color]::FromArgb(255, 35, 35, 35)
+$leftPanel.BackColor = $theme.PanelBack
 $leftPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
 $form.Controls.Add($leftPanel)
 
-$telemetryLabel = New-Object System.Windows.Forms.Label
-$telemetryLabel.Text = "Telemetry & Reporting"
-$telemetryLabel.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 10.5, [System.Drawing.FontStyle]::Bold)
-$telemetryLabel.Location = New-Object System.Drawing.Point(28, 10)
-$telemetryLabel.Size = New-Object System.Drawing.Size(300, 20)
-$telemetryLabel.ForeColor = [System.Drawing.Color]::LightSalmon
-$leftPanel.Controls.Add($telemetryLabel)
+Add-SectionLabel $leftPanel "Telemetry & Reporting" 10
 
 $telemetryFeatures = @(
-    @{ Name = "Disable Metrics Reporting"; Key = "MetricsReportingEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Safe Browsing Reporting"; Key = "SafeBrowsingExtendedReportingEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable URL Data Collection"; Key = "UrlKeyedAnonymizedDataCollectionEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable P3A Analytics"; Key = "BraveP3AEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Stats Ping"; Key = "BraveStatsPingEnabled"; Value = 0; Type = "DWord" }
+    @{ Name = "Disable Metrics Reporting"; Key = "MetricsReportingEnabled"; Value = 0; Type = "DWord"
+       Tip = "Stops Brave from sending anonymous usage statistics and crash reports to Brave's servers." },
+    @{ Name = "Disable Safe Browsing Reporting"; Key = "SafeBrowsingExtendedReportingEnabled"; Value = 0; Type = "DWord"
+       Tip = "Stops extended Safe Browsing reports (details about suspicious pages and downloads) from being sent to Google. Safe Browsing protection itself stays on." },
+    @{ Name = "Disable URL Data Collection"; Key = "UrlKeyedAnonymizedDataCollectionEnabled"; Value = 0; Type = "DWord"
+       Tip = "Stops URL-keyed anonymized data collection, which reports the URLs you visit to improve suggestion and safety features." },
+    @{ Name = "Disable P3A Analytics"; Key = "BraveP3AEnabled"; Value = 0; Type = "DWord"
+       Tip = "Disables P3A (Privacy-Preserving Product Analytics), Brave's anonymized product usage telemetry." },
+    @{ Name = "Disable Stats Ping"; Key = "BraveStatsPingEnabled"; Value = 0; Type = "DWord"
+       Tip = "Stops the daily usage ping that counts this install in Brave's active-user statistics." }
 )
 
-$y = 35
-foreach ($feature in $telemetryFeatures) {
-    $checkbox = New-Object System.Windows.Forms.CheckBox
-    $checkbox.Text = $feature.Name
-    $checkbox.Tag = $feature
-    $checkbox.Location = New-Object System.Drawing.Point(30, $y)
-    $checkbox.Size = New-Object System.Drawing.Size(300, 20)
-    $checkbox.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $leftPanel.Controls.Add($checkbox)
-    $allFeatures += $checkbox
-    $y += 25
-}
-
+$y = Add-FeatureCheckboxes $leftPanel $telemetryFeatures 35
 $y += 10
 
-$privacyLabel = New-Object System.Windows.Forms.Label
-$privacyLabel.Text = "Privacy & Security"
-$privacyLabel.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 11, [System.Drawing.FontStyle]::Bold)
-$privacyLabel.Location = New-Object System.Drawing.Point(28, $y)
-$privacyLabel.Size = New-Object System.Drawing.Size(300, 20)
-$privacyLabel.ForeColor = [System.Drawing.Color]::LightSalmon
-$leftPanel.Controls.Add($privacyLabel)
+Add-SectionLabel $leftPanel "Privacy & Security" $y
 $y += 25
 
 $privacyFeatures = @(
-    @{ Name = "Disable Safe Browsing"; Key = "SafeBrowsingProtectionLevel"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Autofill (Addresses)"; Key = "AutofillAddressEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Autofill (Credit Cards)"; Key = "AutofillCreditCardEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Password Manager"; Key = "PasswordManagerEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Browser Sign-in"; Key = "BrowserSignin"; Value = 0; Type = "DWord" },
-    @{ Name = "Enable Global Privacy Control"; Key = "BraveGlobalPrivacyControlEnabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Enable De-AMP"; Key = "BraveDeAmpEnabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Enable Debouncing"; Key = "BraveDebouncingEnabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Strip Tracking URL Parameters"; Key = "BraveTrackingQueryParametersFilteringEnabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Reduce Language Fingerprinting"; Key = "BraveReduceLanguageEnabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable WebRTC IP Leak"; Key = "WebRtcIPHandling"; Value = "disable_non_proxied_udp"; Type = "String" },
-    @{ Name = "Disable QUIC Protocol"; Key = "QuicAllowed"; Value = 0; Type = "DWord" },
-    @{ Name = "Block Third Party Cookies"; Key = "BlockThirdPartyCookies"; Value = 1; Type = "DWord" },
-    @{ Name = "Force Google SafeSearch"; Key = "ForceGoogleSafeSearch"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable Incognito Mode"; Key = "IncognitoModeAvailability"; Value = 1; Type = "DWord"; Group = "incognito" },
-    @{ Name = "Force Incognito Mode"; Key = "IncognitoModeAvailability"; Value = 2; Type = "DWord"; Group = "incognito" }
+    @{ Name = "Disable Safe Browsing"; Key = "SafeBrowsingProtectionLevel"; Value = 0; Type = "DWord"
+       Tip = "Turns Google Safe Browsing fully off: nothing is checked against Google, but you also lose the phishing/malware warning pages. Only for users who understand the trade-off." },
+    @{ Name = "Disable Autofill (Addresses)"; Key = "AutofillAddressEnabled"; Value = 0; Type = "DWord"
+       Tip = "Stops Brave from saving and auto-filling street addresses in web forms." },
+    @{ Name = "Disable Autofill (Credit Cards)"; Key = "AutofillCreditCardEnabled"; Value = 0; Type = "DWord"
+       Tip = "Stops Brave from saving and auto-filling credit card numbers in web forms." },
+    @{ Name = "Disable Password Manager"; Key = "PasswordManagerEnabled"; Value = 0; Type = "DWord"
+       Tip = "Disables the built-in password manager (no save prompts, no autofill). Recommended if you use a dedicated password manager." },
+    @{ Name = "Disable Browser Sign-in"; Key = "BrowserSignin"; Value = 0; Type = "DWord"
+       Tip = "Prevents signing in to the browser itself with an account." },
+    @{ Name = "Enable Global Privacy Control"; Key = "BraveGlobalPrivacyControlEnabled"; Value = 1; Type = "DWord"
+       Tip = "Sends the GPC signal with every request, telling sites not to sell or share your data. Legally binding in some regions (e.g. under CCPA)." },
+    @{ Name = "Enable De-AMP"; Key = "BraveDeAmpEnabled"; Value = 1; Type = "DWord"
+       Tip = "Skips Google AMP pages and loads the publisher's original page instead." },
+    @{ Name = "Enable Debouncing"; Key = "BraveDebouncingEnabled"; Value = 1; Type = "DWord"
+       Tip = "Skips known tracking redirects and navigates straight to the final destination URL." },
+    @{ Name = "Strip Tracking URL Parameters"; Key = "BraveTrackingQueryParametersFilteringEnabled"; Value = 1; Type = "DWord"
+       Tip = "Removes known tracking parameters (fbclid, gclid, mc_eid, ...) from URLs before they load." },
+    @{ Name = "Reduce Language Fingerprinting"; Key = "BraveReduceLanguageEnabled"; Value = 1; Type = "DWord"
+       Tip = "Reports a generic language configuration to sites, making your browser harder to fingerprint." },
+    @{ Name = "Disable WebRTC IP Leak"; Key = "WebRtcIPHandling"; Value = "disable_non_proxied_udp"; Type = "String"
+       Tip = "Restricts WebRTC to proxied connections so video/voice calls can't expose your real IP address behind a VPN or proxy." },
+    @{ Name = "Disable QUIC Protocol"; Key = "QuicAllowed"; Value = 0; Type = "DWord"
+       Tip = "Disables the QUIC (HTTP/3) transport so all traffic uses TCP. Useful when a firewall or filter can't inspect QUIC; may slightly slow some Google sites." },
+    @{ Name = "Block Third Party Cookies"; Key = "BlockThirdPartyCookies"; Value = 1; Type = "DWord"
+       Tip = "Blocks cookies set by domains other than the site you are visiting. Can break some embedded logins." },
+    @{ Name = "Force Google SafeSearch"; Key = "ForceGoogleSafeSearch"; Value = 1; Type = "DWord"
+       Tip = "Forces SafeSearch on for all Google searches. Mainly useful for parental controls." },
+    @{ Name = "Disable Incognito Mode"; Key = "IncognitoModeAvailability"; Value = 1; Type = "DWord"; Group = "incognito"
+       Tip = "Removes private browsing entirely - no incognito windows can be opened. Mutually exclusive with Force Incognito Mode." },
+    @{ Name = "Force Incognito Mode"; Key = "IncognitoModeAvailability"; Value = 2; Type = "DWord"; Group = "incognito"
+       Tip = "Every window opens in incognito: no history, and logins and most extensions stop persisting. Mutually exclusive with Disable Incognito Mode." }
 )
 
-foreach ($feature in $privacyFeatures) {
-    $checkbox = New-Object System.Windows.Forms.CheckBox
-    $checkbox.Text = $feature.Name
-    $checkbox.Tag = $feature
-    $checkbox.Location = New-Object System.Drawing.Point(30, $y)
-    $checkbox.Size = New-Object System.Drawing.Size(300, 20)
-    $checkbox.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $leftPanel.Controls.Add($checkbox)
-    $allFeatures += $checkbox
-    $y += 25
-}
-
+$y = Add-FeatureCheckboxes $leftPanel $privacyFeatures $y
 $y += 10
 
-$shieldsLabel = New-Object System.Windows.Forms.Label
-$shieldsLabel.Text = "Shields & Content Protection"
-$shieldsLabel.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 11, [System.Drawing.FontStyle]::Bold)
-$shieldsLabel.Location = New-Object System.Drawing.Point(28, $y)
-$shieldsLabel.Size = New-Object System.Drawing.Size(300, 20)
-$shieldsLabel.ForeColor = [System.Drawing.Color]::LightSalmon
-$leftPanel.Controls.Add($shieldsLabel)
+Add-SectionLabel $leftPanel "Shields & Content Protection" $y
 $y += 25
 
 # Brave 1.83+ content-protection enforcers. These pin Brave's own privacy
 # defaults as managed policy so neither the user nor a malicious
 # page/extension can quietly weaken them.
 $shieldsContentFeatures = @(
-    @{ Name = "Enforce Ad Blocking"; Key = "DefaultBraveAdblockSetting"; Value = 2; Type = "DWord" },
-    @{ Name = "Enforce Fingerprinting Protection"; Key = "DefaultBraveFingerprintingV2Setting"; Value = 3; Type = "DWord" },
-    @{ Name = "Force HTTPS Upgrades (Strict)"; Key = "DefaultBraveHttpsUpgradeSetting"; Value = 2; Type = "DWord" },
-    @{ Name = "Cap Referrers (Strict Origin)"; Key = "DefaultBraveReferrersSetting"; Value = 2; Type = "DWord"; Group = "referrers" },
-    @{ Name = "Allow Permissive Referrers (unsafe-url)"; Key = "DefaultBraveReferrersSetting"; Value = 1; Type = "DWord"; Group = "referrers" },
-    @{ Name = "Forget First-Party Storage on Close"; Key = "DefaultBraveRemember1PStorageSetting"; Value = 2; Type = "DWord" }
+    @{ Name = "Enforce Ad Blocking"; Key = "DefaultBraveAdblockSetting"; Value = 2; Type = "DWord"
+       Tip = "Pins Brave's ad and tracker blocking on as managed policy, so it can't be lowered in settings or per-site." },
+    @{ Name = "Enforce Fingerprinting Protection"; Key = "DefaultBraveFingerprintingV2Setting"; Value = 3; Type = "DWord"
+       Tip = "Pins Shields fingerprinting protection on as managed policy, so sites can't be exempted from it." },
+    @{ Name = "Force HTTPS Upgrades (Strict)"; Key = "DefaultBraveHttpsUpgradeSetting"; Value = 2; Type = "DWord"
+       Tip = "Always upgrades connections to HTTPS. Sites that can't serve HTTPS show a warning page instead of silently falling back to HTTP." },
+    @{ Name = "Cap Referrers (Strict Origin)"; Key = "DefaultBraveReferrersSetting"; Value = 2; Type = "DWord"; Group = "referrers"
+       Tip = "Caps the Referer header at the origin for cross-site requests, locked as managed policy. Mutually exclusive with Allow Permissive Referrers." },
+    @{ Name = "Allow Permissive Referrers (unsafe-url)"; Key = "DefaultBraveReferrersSetting"; Value = 1; Type = "DWord"; Group = "referrers"
+       Tip = "Sends your full referring URL cross-origin when a site requests it. Compatibility escape hatch only - this weakens privacy and is excluded from every preset. Mutually exclusive with Cap Referrers." },
+    @{ Name = "Forget First-Party Storage on Close"; Key = "DefaultBraveRemember1PStorageSetting"; Value = 2; Type = "DWord"
+       Tip = "Clears a site's cookies and storage when you close its last tab - sites forget you (and your logins) between visits." }
 )
 
-foreach ($feature in $shieldsContentFeatures) {
-    $checkbox = New-Object System.Windows.Forms.CheckBox
-    $checkbox.Text = $feature.Name
-    $checkbox.Tag = $feature
-    $checkbox.Location = New-Object System.Drawing.Point(30, $y)
-    $checkbox.Size = New-Object System.Drawing.Size(300, 20)
-    $checkbox.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $leftPanel.Controls.Add($checkbox)
-    $allFeatures += $checkbox
-    $y += 25
-}
+$y = Add-FeatureCheckboxes $leftPanel $shieldsContentFeatures $y
 
 # ---------------------------------------------------------------------------
 # Right panel - Brave Features & Performance
@@ -347,85 +523,73 @@ foreach ($feature in $shieldsContentFeatures) {
 $rightPanel = New-Object System.Windows.Forms.Panel
 $rightPanel.Location = New-Object System.Drawing.Point(380, 20)
 $rightPanel.Size = New-Object System.Drawing.Size(340, 785)
-$rightPanel.BackColor = [System.Drawing.Color]::FromArgb(255, 35, 35, 35)
+$rightPanel.BackColor = $theme.PanelBack
 $rightPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
 $form.Controls.Add($rightPanel)
 
-$y = 5
-
-$braveLabel = New-Object System.Windows.Forms.Label
-$braveLabel.Text = "Brave Features"
-$braveLabel.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 11, [System.Drawing.FontStyle]::Bold)
-$braveLabel.Location = New-Object System.Drawing.Point(28, $y)
-$braveLabel.Size = New-Object System.Drawing.Size(300, 20)
-$braveLabel.ForeColor = [System.Drawing.Color]::LightSalmon
-$rightPanel.Controls.Add($braveLabel)
-$y += 25
+Add-SectionLabel $rightPanel "Brave Features" 10
 
 $braveFeatures = @(
-    @{ Name = "Disable Brave Rewards"; Key = "BraveRewardsDisabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable Brave Wallet"; Key = "BraveWalletDisabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable Brave VPN"; Key = "BraveVPNDisabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable Brave AI Chat"; Key = "BraveAIChatEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Brave Shields"; Key = "BraveShieldsDisabledForUrls"; Value = @("https://*", "http://*"); Type = "List"; Group = "shields" },
-    @{ Name = "Force Shields On (All Sites)"; Key = "BraveShieldsEnabledForUrls"; Value = @("https://*", "http://*"); Type = "List"; Group = "shields" },
-    @{ Name = "Disable Brave News"; Key = "BraveNewsDisabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable Brave Talk"; Key = "BraveTalkDisabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable Brave Playlist"; Key = "BravePlaylistEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Web Discovery"; Key = "BraveWebDiscoveryEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Speedreader"; Key = "BraveSpeedreaderEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Tor"; Key = "TorDisabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable Sync"; Key = "SyncDisabled"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable Email Aliases"; Key = "EmailAliasesEnabled"; Value = 0; Type = "DWord" }
+    @{ Name = "Disable Brave Rewards"; Key = "BraveRewardsDisabled"; Value = 1; Type = "DWord"
+       Tip = "Removes Brave Rewards and BAT ads from the browser UI." },
+    @{ Name = "Disable Brave Wallet"; Key = "BraveWalletDisabled"; Value = 1; Type = "DWord"
+       Tip = "Disables the built-in cryptocurrency wallet and hides its UI." },
+    @{ Name = "Disable Brave VPN"; Key = "BraveVPNDisabled"; Value = 1; Type = "DWord"
+       Tip = "Removes the Brave VPN feature and its upsell prompts." },
+    @{ Name = "Disable Brave AI Chat"; Key = "BraveAIChatEnabled"; Value = 0; Type = "DWord"
+       Tip = "Disables Leo, Brave's built-in AI assistant, and removes it from the sidebar and address bar." },
+    @{ Name = "Disable Brave Shields"; Key = "BraveShieldsDisabledForUrls"; Value = @("https://*", "http://*"); Type = "List"; Group = "shields"
+       Tip = "Turns Shields OFF for every site: no ad blocking, no tracker blocking. Almost nobody wants this - it exists for kiosk/testing setups. Mutually exclusive with Force Shields On." },
+    @{ Name = "Force Shields On (All Sites)"; Key = "BraveShieldsEnabledForUrls"; Value = @("https://*", "http://*"); Type = "List"; Group = "shields"
+       Tip = "Locks Shields ON for every site; the per-site Shields toggle stops working. Mutually exclusive with Disable Brave Shields." },
+    @{ Name = "Disable Brave News"; Key = "BraveNewsDisabled"; Value = 1; Type = "DWord"
+       Tip = "Removes the Brave News feed from the new tab page." },
+    @{ Name = "Disable Brave Talk"; Key = "BraveTalkDisabled"; Value = 1; Type = "DWord"
+       Tip = "Disables Brave Talk video calls." },
+    @{ Name = "Disable Brave Playlist"; Key = "BravePlaylistEnabled"; Value = 0; Type = "DWord"
+       Tip = "Disables the Playlist feature for saving and playing media in the sidebar." },
+    @{ Name = "Disable Web Discovery"; Key = "BraveWebDiscoveryEnabled"; Value = 0; Type = "DWord"
+       Tip = "Stops Brave from anonymously contributing pages you visit to the Brave Search index (Web Discovery Project)." },
+    @{ Name = "Disable Speedreader"; Key = "BraveSpeedreaderEnabled"; Value = 0; Type = "DWord"
+       Tip = "Disables Speedreader, the distraction-free article reading mode." },
+    @{ Name = "Disable Tor"; Key = "TorDisabled"; Value = 1; Type = "DWord"
+       Tip = "Removes the 'New private window with Tor' option." },
+    @{ Name = "Disable Sync"; Key = "SyncDisabled"; Value = 1; Type = "DWord"
+       Tip = "Disables Brave Sync, which shares bookmarks, history, and settings across devices via a sync chain." },
+    @{ Name = "Disable Email Aliases"; Key = "EmailAliasesEnabled"; Value = 0; Type = "DWord"
+       Tip = "Disables the Email Aliases feature for generating throwaway email addresses." }
 )
 
-foreach ($feature in $braveFeatures) {
-    $checkbox = New-Object System.Windows.Forms.CheckBox
-    $checkbox.Text = $feature.Name
-    $checkbox.Tag = $feature
-    $checkbox.Location = New-Object System.Drawing.Point(30, $y)
-    $checkbox.Size = New-Object System.Drawing.Size(300, 20)
-    $checkbox.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $rightPanel.Controls.Add($checkbox)
-    $allFeatures += $checkbox
-    $y += 25
-}
-
+$y = Add-FeatureCheckboxes $rightPanel $braveFeatures 35
 $y += 10
 
-$perfLabel = New-Object System.Windows.Forms.Label
-$perfLabel.Text = "Performance & Bloat"
-$perfLabel.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 11, [System.Drawing.FontStyle]::Bold)
-$perfLabel.Location = New-Object System.Drawing.Point(28, $y)
-$perfLabel.Size = New-Object System.Drawing.Size(300, 20)
-$perfLabel.ForeColor = [System.Drawing.Color]::LightSalmon
-$rightPanel.Controls.Add($perfLabel)
+Add-SectionLabel $rightPanel "Performance & Bloat" $y
 $y += 25
 
 $perfFeatures = @(
-    @{ Name = "Disable Background Mode"; Key = "BackgroundModeEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Shopping List"; Key = "ShoppingListEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Always Open PDF Externally"; Key = "AlwaysOpenPdfExternally"; Value = 1; Type = "DWord" },
-    @{ Name = "Disable Translate"; Key = "TranslateEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Spellcheck"; Key = "SpellcheckEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Search Suggestions"; Key = "SearchSuggestEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Printing"; Key = "PrintingEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Default Browser Prompt"; Key = "DefaultBrowserSettingEnabled"; Value = 0; Type = "DWord" },
-    @{ Name = "Disable Developer Tools"; Key = "DeveloperToolsAvailability"; Value = 2; Type = "DWord" },
-    @{ Name = "Disable Wayback Machine"; Key = "BraveWaybackMachineEnabled"; Value = 0; Type = "DWord" }
+    @{ Name = "Disable Background Mode"; Key = "BackgroundModeEnabled"; Value = 0; Type = "DWord"
+       Tip = "Stops Brave from keeping background processes running after the last window is closed." },
+    @{ Name = "Disable Shopping List"; Key = "ShoppingListEnabled"; Value = 0; Type = "DWord"
+       Tip = "Disables the price-tracking shopping list feature." },
+    @{ Name = "Always Open PDF Externally"; Key = "AlwaysOpenPdfExternally"; Value = 1; Type = "DWord"
+       Tip = "Downloads PDF files and opens them in your system PDF viewer instead of the built-in viewer." },
+    @{ Name = "Disable Translate"; Key = "TranslateEnabled"; Value = 0; Type = "DWord"
+       Tip = "Disables the built-in page translation feature and its popup prompts." },
+    @{ Name = "Disable Spellcheck"; Key = "SpellcheckEnabled"; Value = 0; Type = "DWord"
+       Tip = "Turns off spell checking in text fields." },
+    @{ Name = "Disable Search Suggestions"; Key = "SearchSuggestEnabled"; Value = 0; Type = "DWord"
+       Tip = "Stops sending what you type in the address bar to your search engine for live suggestions." },
+    @{ Name = "Disable Printing"; Key = "PrintingEnabled"; Value = 0; Type = "DWord"
+       Tip = "Disables printing from the browser entirely (including Ctrl+P)." },
+    @{ Name = "Disable Default Browser Prompt"; Key = "DefaultBrowserSettingEnabled"; Value = 0; Type = "DWord"
+       Tip = "Stops Brave from asking to become your default browser." },
+    @{ Name = "Disable Developer Tools"; Key = "DeveloperToolsAvailability"; Value = 2; Type = "DWord"
+       Tip = "Blocks DevTools (F12) and extension debugging everywhere. Don't enable this if you do web development." },
+    @{ Name = "Disable Wayback Machine"; Key = "BraveWaybackMachineEnabled"; Value = 0; Type = "DWord"
+       Tip = "Stops Brave from offering an archive.org snapshot when a page returns 404." }
 )
 
-foreach ($feature in $perfFeatures) {
-    $checkbox = New-Object System.Windows.Forms.CheckBox
-    $checkbox.Text = $feature.Name
-    $checkbox.Tag = $feature
-    $checkbox.Location = New-Object System.Drawing.Point(30, $y)
-    $checkbox.Size = New-Object System.Drawing.Size(300, 20)
-    $checkbox.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $rightPanel.Controls.Add($checkbox)
-    $allFeatures += $checkbox
-    $y += 25
-}
+$y = Add-FeatureCheckboxes $rightPanel $perfFeatures $y
 
 # ---------------------------------------------------------------------------
 # Mutual-exclusion groups
@@ -466,8 +630,8 @@ foreach ($cb in $allFeatures) {
 
 $dnsLabel = New-Object System.Windows.Forms.Label
 $dnsLabel.Text = "DNS Over HTTPS Mode:"
-$dnsLabel.Location = New-Object System.Drawing.Point(35, 825)
-$dnsLabel.Size = New-Object System.Drawing.Size(140, 20)
+$dnsLabel.Location = New-Object System.Drawing.Point(20, 825)
+$dnsLabel.Size = New-Object System.Drawing.Size(150, 20)
 $form.Controls.Add($dnsLabel)
 
 $dnsDropdown = New-Object System.Windows.Forms.ComboBox
@@ -478,23 +642,34 @@ $dnsDropdown.Size = New-Object System.Drawing.Size(150, 20)
 # including "off", which actively force-disables DoH as policy.
 $dnsDropdown.Items.AddRange(@("unmanaged", "off", "automatic", "secure", "custom"))
 $dnsDropdown.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$dnsDropdown.BackColor = [System.Drawing.Color]::FromArgb(255, 25, 25, 25)
-$dnsDropdown.ForeColor = [System.Drawing.Color]::White
+$dnsDropdown.BackColor = $theme.InputBack
+$dnsDropdown.ForeColor = $theme.InputText
 $form.Controls.Add($dnsDropdown)
+$tooltip.SetToolTip($dnsDropdown, "unmanaged - write no DNS policy; Brave's own DNS settings stay user-controlled.`noff - force-disable DNS over HTTPS as policy.`nautomatic - use DoH when the current resolver supports it, plain DNS otherwise.`nsecure - always resolve over DoH.`ncustom - always resolve over DoH using the template URL below.")
+
+$hoverHint = New-Object System.Windows.Forms.Label
+$hoverHint.Text = "Hover over any option for details"
+$hoverHint.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Italic)
+$hoverHint.ForeColor = $theme.HintText
+$hoverHint.Location = New-Object System.Drawing.Point(380, 825)
+$hoverHint.Size = New-Object System.Drawing.Size(340, 20)
+$hoverHint.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
+$form.Controls.Add($hoverHint)
 
 $dnsTemplateLabel = New-Object System.Windows.Forms.Label
 $dnsTemplateLabel.Text = "Custom DoH template URL:"
-$dnsTemplateLabel.Location = New-Object System.Drawing.Point(35, 855)
+$dnsTemplateLabel.Location = New-Object System.Drawing.Point(20, 855)
 $dnsTemplateLabel.Size = New-Object System.Drawing.Size(170, 20)
 $form.Controls.Add($dnsTemplateLabel)
 
 $dnsTemplateBox = New-Object System.Windows.Forms.TextBox
 $dnsTemplateBox.Location = New-Object System.Drawing.Point(210, 855)
 $dnsTemplateBox.Size = New-Object System.Drawing.Size(510, 20)
-$dnsTemplateBox.BackColor = [System.Drawing.Color]::FromArgb(255, 25, 25, 25)
-$dnsTemplateBox.ForeColor = [System.Drawing.Color]::White
+$dnsTemplateBox.BackColor = $theme.InputBack
+$dnsTemplateBox.ForeColor = $theme.InputText
 $dnsTemplateBox.Enabled = $false
 $form.Controls.Add($dnsTemplateBox)
+$tooltip.SetToolTip($dnsTemplateBox, "DoH resolver template used with the 'custom' mode, e.g. https://cloudflare-dns.com/dns-query")
 
 $dnsDropdown.Add_SelectedIndexChanged({
     $dnsTemplateBox.Enabled = ($dnsDropdown.SelectedItem -eq "custom")
@@ -504,49 +679,38 @@ $dnsDropdown.Add_SelectedIndexChanged({
 # Buttons
 # ---------------------------------------------------------------------------
 
-$exportButton = New-Object System.Windows.Forms.Button
-$exportButton.Text = "Export Settings"
-$exportButton.Location = New-Object System.Drawing.Point(50, 895)
-$exportButton.Size = New-Object System.Drawing.Size(120, 30)
-$form.Controls.Add($exportButton)
-$exportButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$exportButton.FlatAppearance.BorderSize = 1
-$exportButton.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
-$exportButton.BackColor = [System.Drawing.Color]::FromArgb(150, 102, 102, 102)
-$exportButton.ForeColor = [System.Drawing.Color]::LightSalmon
+function New-ActionButton {
+    # Solid themed buttons replace the old semi-transparent ARGB(150,...)
+    # backgrounds, which WinForms blends unpredictably against the form.
+    param (
+        [string] $Text,
+        [int]    $X,
+        [System.Drawing.Color] $TextColor,
+        [string] $Tip
+    )
+    $button = New-Object System.Windows.Forms.Button
+    $button.Text = $Text
+    $button.Location = New-Object System.Drawing.Point($X, 895)
+    $button.Size = New-Object System.Drawing.Size(120, 32)
+    $button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $button.FlatAppearance.BorderSize = 1
+    $button.FlatAppearance.BorderColor = $theme.ButtonBorder
+    $button.FlatAppearance.MouseOverBackColor = $theme.ButtonHover
+    $button.BackColor = $theme.ButtonBack
+    $button.ForeColor = $TextColor
+    $tooltip.SetToolTip($button, $Tip)
+    $form.Controls.Add($button)
+    return $button
+}
 
-$importButton = New-Object System.Windows.Forms.Button
-$importButton.Text = "Import Settings"
-$importButton.Location = New-Object System.Drawing.Point(210, 895)
-$importButton.Size = New-Object System.Drawing.Size(120, 30)
-$form.Controls.Add($importButton)
-$importButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$importButton.FlatAppearance.BorderSize = 1
-$importButton.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
-$importButton.BackColor = [System.Drawing.Color]::FromArgb(150, 102, 102, 102)
-$importButton.ForeColor = [System.Drawing.Color]::LightSkyBlue
-
-$saveButton = New-Object System.Windows.Forms.Button
-$saveButton.Text = "Apply Settings"
-$saveButton.Location = New-Object System.Drawing.Point(410, 895)
-$saveButton.Size = New-Object System.Drawing.Size(120, 30)
-$form.Controls.Add($saveButton)
-$saveButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$saveButton.FlatAppearance.BorderSize = 1
-$saveButton.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
-$saveButton.BackColor = [System.Drawing.Color]::FromArgb(150, 102, 102, 102)
-$saveButton.ForeColor = [System.Drawing.Color]::LightGreen
-
-$resetButton = New-Object System.Windows.Forms.Button
-$resetButton.Text = "Reset All Settings"
-$resetButton.Location = New-Object System.Drawing.Point(570, 895)
-$resetButton.Size = New-Object System.Drawing.Size(120, 30)
-$form.Controls.Add($resetButton)
-$resetButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$resetButton.FlatAppearance.BorderSize = 1
-$resetButton.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
-$resetButton.BackColor = [System.Drawing.Color]::FromArgb(150, 102, 102, 102)
-$resetButton.ForeColor = [System.Drawing.Color]::LightCoral
+$exportButton = New-ActionButton "Export Settings" 20 $theme.ExportText `
+    "Save the current selections to a JSON file. The format is shared with the Linux and macOS versions."
+$importButton = New-ActionButton "Import Settings" 213 $theme.ImportText `
+    "Load selections from a JSON file or one of the bundled presets. Nothing is written until you click Apply Settings."
+$saveButton = New-ActionButton "Apply Settings" 407 $theme.ApplyText `
+    "Write every checked policy to the registry and remove unchecked ones. Restart Brave (close all brave.exe processes) for changes to take effect."
+$resetButton = New-ActionButton "Reset All Settings" 600 $theme.ResetText `
+    "Delete ALL Brave policies from machine and user scope - including any set by other tools - and scrub leaked Shields entries from your Brave profiles."
 
 # ---------------------------------------------------------------------------
 # Apply - sets checked keys AND removes unchecked keys (fixes #25, #27, #19)

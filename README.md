@@ -114,7 +114,7 @@ After applying, restart Brave and verify at `brave://policy`.
 iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/main/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; .\SlimBrave.ps1
 ```
 
-Requires Administrator privileges.
+Requires Administrator privileges. Hover over any option in the app for a plain-English description of what it does and the exact policy it writes. The app follows your Windows light/dark theme.
 
 ---
 
