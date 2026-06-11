@@ -391,9 +391,9 @@ def detect_brave():
 # ---------------------------------------------------------------------------
 
 # Features with a `group` key are mutually exclusive within that group:
-# checking one silently unchecks the others. Used today for
-# IncognitoModeAvailability, where Disable (=1) and Force (=2) are
-# conflicting values for the same policy.
+# checking one silently unchecks the others. Used for policies where two
+# rows set conflicting values for the same key (IncognitoModeAvailability,
+# DefaultBraveReferrersSetting) and for the Shields URL lists.
 CATEGORIES = [
     {
         "name": "Telemetry & Reporting",
@@ -454,7 +454,8 @@ CATEGORIES = [
             {"name": "Enforce Ad Blocking", "key": "DefaultBraveAdblockSetting", "value": 2},
             {"name": "Enforce Fingerprinting Protection", "key": "DefaultBraveFingerprintingV2Setting", "value": 3},
             {"name": "Force HTTPS Upgrades (Strict)", "key": "DefaultBraveHttpsUpgradeSetting", "value": 2},
-            {"name": "Cap Referrers (Strict Origin)", "key": "DefaultBraveReferrersSetting", "value": 2},
+            {"name": "Cap Referrers (Strict Origin)", "key": "DefaultBraveReferrersSetting", "value": 2, "group": "referrers"},
+            {"name": "Allow Permissive Referrers (unsafe-url)", "key": "DefaultBraveReferrersSetting", "value": 1, "group": "referrers"},
             {"name": "Forget First-Party Storage on Close", "key": "DefaultBraveRemember1PStorageSetting", "value": 2},
         ],
     },

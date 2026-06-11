@@ -163,8 +163,10 @@ Pin Brave's own protection defaults as managed policy so they can't be weakened 
 - Enforce Ad Blocking
 - Enforce Fingerprinting Protection
 - Force HTTPS Upgrades (Strict — sites that can't serve HTTPS show an interstitial)
-- Cap Referrers (Strict Origin)
+- Cap Referrers (Strict Origin) / Allow Permissive Referrers (mutually exclusive — both unchecked leaves referrer behavior unmanaged)
 - Forget First-Party Storage on Close
+
+> **Note on referrers:** with no referrer policy applied, Brave still caps cross-origin referrers by default, but you can loosen it per-site by lowering Shields on that site. "Allow Permissive Referrers" makes the loosening global as managed policy (`DefaultBraveReferrersSetting: 1`) — sites that request `unsafe-url` get your full referring URL cross-origin. It exists for compatibility with sites that break under capped referrers; it weakens privacy and is deliberately excluded from every preset.
 
 ### Performance & Bloat
 - Disable Background Mode (Windows/Linux only — the policy doesn't exist on macOS)

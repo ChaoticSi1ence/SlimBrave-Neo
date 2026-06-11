@@ -36,7 +36,7 @@ authoritative sources:
 | DefaultBraveAdblockSetting | ✅ active | cr142 | int enum | 1 = allow ads, 2 = block; **newly exposed** |
 | DefaultBraveFingerprintingV2Setting | ✅ active | cr141 | int enum | 1 = off, 3 = standard (no value 2); **newly exposed** |
 | DefaultBraveHttpsUpgradeSetting | ✅ active | cr142 | int enum | 1 = allow HTTP, 2 = strict, 3 = standard; **newly exposed** |
-| DefaultBraveReferrersSetting | ✅ active | cr142 | int enum | 1 = permissive, 2 = cap to strict origin; **newly exposed** |
+| DefaultBraveReferrersSetting | ✅ active | cr142 | int enum | 1 = permissive, 2 = cap to strict origin; both values exposed as mutually exclusive toggles (issue #9); never put value 1 in a preset |
 | DefaultBraveRemember1PStorageSetting | ✅ active | cr142 | int enum | 1 = remember, 2 = forget on close; **newly exposed** |
 | BraveSyncUrl | ✅ active | cr129 | string | **deliberately not exposed** — it's a custom-sync-server URL, not a debloat toggle; use a hand-written policy file if you self-host sync |
 | IPFSEnabled | ⛔ `deprecated: true` | — | bool | IPFS feature removed from Brave 1.69.153 (Aug 2024); not exposed by SlimBrave Neo. **Do not re-add** — this key has bounced in/out of this project before; the brave-core YAML is the tiebreaker |
