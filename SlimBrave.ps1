@@ -284,7 +284,8 @@ $form.Text = "SlimBrave Neo"
 # is inherited by every control that doesn't set its own font.
 $form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $form.ForeColor = $theme.Text
-$form.Size = New-Object System.Drawing.Size(755, 980)
+# Form size (ClientSize) is set by the responsive column builder below, once
+# the column count and the tallest column height are known.
 $form.StartPosition = "CenterScreen"
 $form.BackColor = $theme.FormBack
 $form.MaximizeBox = $false
@@ -369,7 +370,8 @@ function Add-FeatureCheckboxes {
     # Lays out one checkbox per feature starting at $Y and returns the next
     # free Y. Each feature's Tip becomes a hover tooltip, suffixed with the
     # exact policy it writes so power users can cross-check brave://policy.
-    param ($Panel, [array] $Features, [int] $Y)
+    # $Step is the per-row vertical advance (tightened in three-column mode).
+    param ($Panel, [array] $Features, [int] $Y, [int] $Step = 25)
     foreach ($feature in $Features) {
         $checkbox = New-Object System.Windows.Forms.CheckBox
         $checkbox.Text = $feature.Name
@@ -418,23 +420,18 @@ function Add-FeatureCheckboxes {
         }
         $Panel.Controls.Add($checkbox)
         $script:allFeatures += $checkbox
-        $Y += 25
+        $Y += $Step
     }
     return $Y
 }
 
 # ---------------------------------------------------------------------------
-# Left panel - Telemetry & Privacy
+# Feature definitions
+#
+# Each category is a section header plus its feature checkboxes. The
+# categories are arranged into columns further below; the column count adapts
+# to the screen height so the window never runs off the bottom of the display.
 # ---------------------------------------------------------------------------
-
-$leftPanel = New-Object System.Windows.Forms.Panel
-$leftPanel.Location = New-Object System.Drawing.Point(20, 20)
-$leftPanel.Size = New-Object System.Drawing.Size(340, 785)
-$leftPanel.BackColor = $theme.PanelBack
-$leftPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
-$form.Controls.Add($leftPanel)
-
-Add-SectionLabel $leftPanel "Telemetry & Reporting" 10
 
 $telemetryFeatures = @(
     @{ Name = "Disable Metrics Reporting"; Key = "MetricsReportingEnabled"; Value = 0; Type = "DWord"
@@ -448,12 +445,6 @@ $telemetryFeatures = @(
     @{ Name = "Disable Stats Ping"; Key = "BraveStatsPingEnabled"; Value = 0; Type = "DWord"
        Tip = "Stops the daily usage ping that counts this install in Brave's active-user statistics." }
 )
-
-$y = Add-FeatureCheckboxes $leftPanel $telemetryFeatures 35
-$y += 10
-
-Add-SectionLabel $leftPanel "Privacy & Security" $y
-$y += 25
 
 $privacyFeatures = @(
     @{ Name = "Disable Safe Browsing"; Key = "SafeBrowsingProtectionLevel"; Value = 0; Type = "DWord"
@@ -490,12 +481,6 @@ $privacyFeatures = @(
        Tip = "Every window opens in incognito: no history, and logins and most extensions stop persisting. Mutually exclusive with Disable Incognito Mode." }
 )
 
-$y = Add-FeatureCheckboxes $leftPanel $privacyFeatures $y
-$y += 10
-
-Add-SectionLabel $leftPanel "Shields & Content Protection" $y
-$y += 25
-
 # Brave 1.83+ content-protection enforcers. These pin Brave's own privacy
 # defaults as managed policy so neither the user nor a malicious
 # page/extension can quietly weaken them.
@@ -513,21 +498,6 @@ $shieldsContentFeatures = @(
     @{ Name = "Forget First-Party Storage on Close"; Key = "DefaultBraveRemember1PStorageSetting"; Value = 2; Type = "DWord"
        Tip = "Clears a site's cookies and storage when you close its last tab - sites forget you (and your logins) between visits." }
 )
-
-$y = Add-FeatureCheckboxes $leftPanel $shieldsContentFeatures $y
-
-# ---------------------------------------------------------------------------
-# Right panel - Brave Features & Performance
-# ---------------------------------------------------------------------------
-
-$rightPanel = New-Object System.Windows.Forms.Panel
-$rightPanel.Location = New-Object System.Drawing.Point(380, 20)
-$rightPanel.Size = New-Object System.Drawing.Size(340, 785)
-$rightPanel.BackColor = $theme.PanelBack
-$rightPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
-$form.Controls.Add($rightPanel)
-
-Add-SectionLabel $rightPanel "Brave Features" 10
 
 $braveFeatures = @(
     @{ Name = "Disable Brave Rewards"; Key = "BraveRewardsDisabled"; Value = 1; Type = "DWord"
@@ -560,12 +530,6 @@ $braveFeatures = @(
        Tip = "Disables the Email Aliases feature for generating throwaway email addresses." }
 )
 
-$y = Add-FeatureCheckboxes $rightPanel $braveFeatures 35
-$y += 10
-
-Add-SectionLabel $rightPanel "Performance & Bloat" $y
-$y += 25
-
 $perfFeatures = @(
     @{ Name = "Disable Background Mode"; Key = "BackgroundModeEnabled"; Value = 0; Type = "DWord"
        Tip = "Stops Brave from keeping background processes running after the last window is closed." },
@@ -589,7 +553,113 @@ $perfFeatures = @(
        Tip = "Stops Brave from offering an archive.org snapshot when a page returns 404." }
 )
 
-$y = Add-FeatureCheckboxes $rightPanel $perfFeatures $y
+# ---------------------------------------------------------------------------
+# Responsive column layout
+#
+# In a single column the feature set is ~750px tall, so it is split across
+# columns. On a display whose usable (working-area) height is less than the
+# natural two-column window, the categories reflow into THREE shorter columns
+# so the lower options and the Apply/Reset buttons stay on-screen — the
+# 720p / 768p cutoff fix. Taller displays keep the original two-column layout.
+#
+# Force a column count for testing on a normal monitor by setting
+# $env:SLIMBRAVE_COLUMNS to "2" or "3" before launching.
+# ---------------------------------------------------------------------------
+
+$categories = @(
+    @{ Name = "Telemetry & Reporting";        Features = $telemetryFeatures },
+    @{ Name = "Privacy & Security";           Features = $privacyFeatures },
+    @{ Name = "Shields & Content Protection"; Features = $shieldsContentFeatures },
+    @{ Name = "Brave Features";               Features = $braveFeatures },
+    @{ Name = "Performance & Bloat";          Features = $perfFeatures }
+)
+$categoryByName = @{}
+foreach ($cat in $categories) { $categoryByName[$cat.Name] = $cat }
+
+# Natural height of the two-column window. If the screen's usable height is
+# below this, switch to three columns. Set a little above the actual ~995px
+# form so a display that only just fits two columns is not left a few px short.
+$twoColumnWindowHeight = 1000
+
+$columnCount = 2
+if ($env:SLIMBRAVE_COLUMNS -eq "2" -or $env:SLIMBRAVE_COLUMNS -eq "3") {
+    $columnCount = [int]$env:SLIMBRAVE_COLUMNS
+} elseif ([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height -lt $twoColumnWindowHeight) {
+    $columnCount = 3
+}
+
+# Which categories go in each column. Three-column mode gives the tall Privacy
+# section its own column and pairs the rest so no column runs much past
+# ~525px of content (vs. ~750px in the two-column layout).
+if ($columnCount -eq 3) {
+    $columnLayout = @(
+        @("Privacy & Security"),
+        @("Telemetry & Reporting", "Brave Features"),
+        @("Shields & Content Protection", "Performance & Bloat")
+    )
+} else {
+    $columnLayout = @(
+        @("Telemetry & Reporting", "Privacy & Security", "Shields & Content Protection"),
+        @("Brave Features", "Performance & Bloat")
+    )
+}
+
+# Three columns use slightly tighter row spacing so the window fits on the
+# short displays that trigger it; two columns keep the original metrics.
+if ($columnCount -eq 3) {
+    $rowHeight = 22; $rowGap = 8;  $colStartY = 8
+} else {
+    $rowHeight = 25; $rowGap = 10; $colStartY = 10
+}
+
+# ---------------------------------------------------------------------------
+# Build the columns
+# ---------------------------------------------------------------------------
+
+$layoutMargin   = 20
+$layoutPanelW   = 340
+$layoutPanelGap = 20
+$layoutPanelTop = 20
+
+$panels = @()
+$maxColumnBottom = 0
+for ($col = 0; $col -lt $columnLayout.Count; $col++) {
+    $panelX = $layoutMargin + $col * ($layoutPanelW + $layoutPanelGap)
+
+    $panel = New-Object System.Windows.Forms.Panel
+    $panel.Location = New-Object System.Drawing.Point($panelX, $layoutPanelTop)
+    $panel.BackColor = $theme.PanelBack
+    $panel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    $form.Controls.Add($panel)
+    $panels += $panel
+
+    $y = $colStartY
+    foreach ($catName in $columnLayout[$col]) {
+        $category = $categoryByName[$catName]
+        Add-SectionLabel $panel $category.Name $y
+        $y += $rowHeight
+        $y = Add-FeatureCheckboxes $panel $category.Features $y $rowHeight
+        $y += $rowGap
+    }
+    if ($y -gt $maxColumnBottom) { $maxColumnBottom = $y }
+}
+
+# Give every column the same height so the boxes line up, then expose the
+# geometry the DNS row, the buttons, and the form size are positioned from.
+$panelHeight = $maxColumnBottom + 5
+foreach ($panel in $panels) {
+    $panel.Size = New-Object System.Drawing.Size($layoutPanelW, $panelHeight)
+}
+
+$layoutContentWidth = (2 * $layoutMargin) + ($columnLayout.Count * $layoutPanelW) + (($columnLayout.Count - 1) * $layoutPanelGap)
+$layoutPanelBottom  = $layoutPanelTop + $panelHeight
+# Two-column content is 740px wide; shift the DNS row and buttons right so they
+# sit under the centre of the wider three-column form (0px when two-column).
+$layoutContentOffsetX = [int](($layoutContentWidth - 740) / 2)
+$dnsRowTop            = $layoutPanelBottom + 15
+$buttonRowTop         = $dnsRowTop + 75
+
+$form.ClientSize = New-Object System.Drawing.Size($layoutContentWidth, ($buttonRowTop + 32 + 18))
 
 # ---------------------------------------------------------------------------
 # Mutual-exclusion groups
@@ -630,12 +700,12 @@ foreach ($cb in $allFeatures) {
 
 $dnsLabel = New-Object System.Windows.Forms.Label
 $dnsLabel.Text = "DNS Over HTTPS Mode:"
-$dnsLabel.Location = New-Object System.Drawing.Point(20, 825)
+$dnsLabel.Location = New-Object System.Drawing.Point(($layoutContentOffsetX + 20), ($dnsRowTop + 5))
 $dnsLabel.Size = New-Object System.Drawing.Size(150, 20)
 $form.Controls.Add($dnsLabel)
 
 $dnsDropdown = New-Object System.Windows.Forms.ComboBox
-$dnsDropdown.Location = New-Object System.Drawing.Point(180, 820)
+$dnsDropdown.Location = New-Object System.Drawing.Point(($layoutContentOffsetX + 180), $dnsRowTop)
 $dnsDropdown.Size = New-Object System.Drawing.Size(150, 20)
 # "unmanaged" (the default) writes no DNS policy at all, leaving Brave's
 # DNS settings user-controlled. The other four are managed-policy values —
@@ -651,19 +721,19 @@ $hoverHint = New-Object System.Windows.Forms.Label
 $hoverHint.Text = "Hover over any option for details"
 $hoverHint.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Italic)
 $hoverHint.ForeColor = $theme.HintText
-$hoverHint.Location = New-Object System.Drawing.Point(380, 825)
+$hoverHint.Location = New-Object System.Drawing.Point(($layoutContentWidth - 360), ($dnsRowTop + 5))
 $hoverHint.Size = New-Object System.Drawing.Size(340, 20)
 $hoverHint.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
 $form.Controls.Add($hoverHint)
 
 $dnsTemplateLabel = New-Object System.Windows.Forms.Label
 $dnsTemplateLabel.Text = "Custom DoH template URL:"
-$dnsTemplateLabel.Location = New-Object System.Drawing.Point(20, 855)
+$dnsTemplateLabel.Location = New-Object System.Drawing.Point(($layoutContentOffsetX + 20), ($dnsRowTop + 35))
 $dnsTemplateLabel.Size = New-Object System.Drawing.Size(170, 20)
 $form.Controls.Add($dnsTemplateLabel)
 
 $dnsTemplateBox = New-Object System.Windows.Forms.TextBox
-$dnsTemplateBox.Location = New-Object System.Drawing.Point(210, 855)
+$dnsTemplateBox.Location = New-Object System.Drawing.Point(($layoutContentOffsetX + 210), ($dnsRowTop + 35))
 $dnsTemplateBox.Size = New-Object System.Drawing.Size(510, 20)
 $dnsTemplateBox.BackColor = $theme.InputBack
 $dnsTemplateBox.ForeColor = $theme.InputText
@@ -690,7 +760,7 @@ function New-ActionButton {
     )
     $button = New-Object System.Windows.Forms.Button
     $button.Text = $Text
-    $button.Location = New-Object System.Drawing.Point($X, 895)
+    $button.Location = New-Object System.Drawing.Point(($script:layoutContentOffsetX + $X), $script:buttonRowTop)
     $button.Size = New-Object System.Drawing.Size(120, 32)
     $button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $button.FlatAppearance.BorderSize = 1
@@ -1095,5 +1165,16 @@ function Initialize-CurrentSettings {
 }
 
 Initialize-CurrentSettings
+
+# Safety net: on a display so short that even the three-column layout is a
+# little taller than the working area, cap the height and enable scrolling so
+# the buttons stay reachable. A no-op whenever the form already fits (the
+# common case), so normal displays never get a scrollbar.
+$form.AutoScroll = $true
+$workingAreaHeight = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height
+if ($form.Height -gt $workingAreaHeight) {
+    $form.Height = $workingAreaHeight
+    $form.Width  = $form.Width + [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth
+}
 
 [void] $form.ShowDialog()
