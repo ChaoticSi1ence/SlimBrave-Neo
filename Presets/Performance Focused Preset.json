@@ -1,6 +1,8 @@
 {
     "Features": {
         "MetricsReportingEnabled": false,
+        "BraveP3AEnabled": false,
+        "BraveStatsPingEnabled": false,
         "BraveDeAmpEnabled": true,
         "BraveDebouncingEnabled": true,
         "BraveTrackingQueryParametersFilteringEnabled": true,

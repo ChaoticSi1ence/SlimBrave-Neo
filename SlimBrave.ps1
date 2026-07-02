@@ -14,10 +14,6 @@ $machineRegistryPath = "HKLM:\SOFTWARE\Policies\BraveSoftware\Brave"
 $userRegistryPath   = "HKCU:\SOFTWARE\Policies\BraveSoftware\Brave"
 $registryPath       = $machineRegistryPath
 
-if (-not (Test-Path -Path $registryPath)) {
-    New-Item -Path $registryPath -Force | Out-Null
-}
-
 Clear-Host
 
 # ---------------------------------------------------------------------------
@@ -44,8 +40,13 @@ function Set-DnsSettings {
         }
         $resolvedMode = "secure"
         Set-ItemProperty -Path $regKey -Name "DnsOverHttpsTemplates" -Value $dnsTemplates -Type String -Force
+    } elseif ($dnsMode -eq "secure" -and -not [string]::IsNullOrWhiteSpace($dnsTemplates)) {
+        # "secure" keeps an explicit template when one is provided — parity
+        # with the Linux/macOS scripts, so cross-platform configs with
+        # DnsMode=secure + DnsTemplates don't lose their resolver here.
+        Set-ItemProperty -Path $regKey -Name "DnsOverHttpsTemplates" -Value $dnsTemplates -Type String -Force
     } else {
-        # Remove the templates key if not using custom
+        # Remove the templates key when no template applies
         if (Get-ItemProperty -Path $regKey -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue) {
             Remove-ItemProperty -Path $regKey -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
         }
@@ -154,21 +155,26 @@ function Repair-BravePrefs {
     registry does NOT roll those entries back — the profile keeps the
     per-URL exceptions, so unchecking "Disable Brave Shields" leaves
     shields stuck off. The exceptions land in every profile that was used
-    while the policy was active (Default, Profile 1, Profile 2, ...), so
-    every profile directory is scrubbed, not just Default.
+    while the policy was active (Default, Profile 1, Profile 2, ...) and
+    in every installed channel (Stable, Beta, Nightly, Dev — the registry
+    policy applies to all of them), so every profile directory of every
+    channel is scrubbed, not just Stable's Default.
 
     Returns a hashtable @{ Removed = N; Running = $true/$false }.
     Safe to call when files or keys do not exist.
     #>
+    # Every Brave channel runs as brave.exe on Windows.
     $running = ($null -ne (Get-Process brave -ErrorAction SilentlyContinue))
-    $userData = Join-Path $env:LOCALAPPDATA "BraveSoftware\Brave-Browser\User Data"
-    if (-not (Test-Path $userData)) { return @{ Removed = 0; Running = $running } }
 
     $removed = 0
-    $profileDirs = Get-ChildItem -Path $userData -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' }
-    foreach ($dir in $profileDirs) {
-        $removed += Repair-OneBravePrefs (Join-Path $dir.FullName 'Preferences')
+    foreach ($channelDir in @('Brave-Browser', 'Brave-Browser-Beta', 'Brave-Browser-Nightly', 'Brave-Browser-Dev')) {
+        $userData = Join-Path $env:LOCALAPPDATA "BraveSoftware\$channelDir\User Data"
+        if (-not (Test-Path $userData)) { continue }
+        $profileDirs = Get-ChildItem -Path $userData -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' }
+        foreach ($dir in $profileDirs) {
+            $removed += Repair-OneBravePrefs (Join-Path $dir.FullName 'Preferences')
+        }
     }
 
     return @{ Removed = $removed; Running = $running }
@@ -710,7 +716,7 @@ $dnsDropdown.Size = New-Object System.Drawing.Size(150, 20)
 # "unmanaged" (the default) writes no DNS policy at all, leaving Brave's
 # DNS settings user-controlled. The other four are managed-policy values —
 # including "off", which actively force-disables DoH as policy.
-$dnsDropdown.Items.AddRange(@("unmanaged", "off", "automatic", "secure", "custom"))
+$dnsDropdown.Items.AddRange(@("unmanaged", "automatic", "off", "secure", "custom"))
 $dnsDropdown.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $dnsDropdown.BackColor = $theme.InputBack
 $dnsDropdown.ForeColor = $theme.InputText
@@ -739,10 +745,10 @@ $dnsTemplateBox.BackColor = $theme.InputBack
 $dnsTemplateBox.ForeColor = $theme.InputText
 $dnsTemplateBox.Enabled = $false
 $form.Controls.Add($dnsTemplateBox)
-$tooltip.SetToolTip($dnsTemplateBox, "DoH resolver template used with the 'custom' mode, e.g. https://cloudflare-dns.com/dns-query")
+$tooltip.SetToolTip($dnsTemplateBox, "DoH resolver template, e.g. https://cloudflare-dns.com/dns-query. Required for 'custom' mode, optional for 'secure'.")
 
 $dnsDropdown.Add_SelectedIndexChanged({
-    $dnsTemplateBox.Enabled = ($dnsDropdown.SelectedItem -eq "custom")
+    $dnsTemplateBox.Enabled = ($dnsDropdown.SelectedItem -in @("custom", "secure"))
 })
 
 # ---------------------------------------------------------------------------
@@ -800,6 +806,12 @@ $saveButton.Add_Click({
             [System.Windows.Forms.MessageBoxIcon]::Warning
         )
         return
+    }
+
+    # Created lazily here rather than at launch, so merely opening the app
+    # never writes to the registry.
+    if (-not (Test-Path -Path $registryPath)) {
+        New-Item -Path $registryPath -Force | Out-Null
     }
 
     # Build a hashtable of selected features keyed by policy key name.
@@ -906,7 +918,9 @@ function Reset-AllSettings {
 
     if ($confirm -eq "Yes") {
         try {
-            Remove-Item -Path $registryPath -Recurse -Force
+            if (Test-Path -Path $registryPath) {
+                Remove-Item -Path $registryPath -Recurse -Force
+            }
             if (Test-Path -Path $userRegistryPath) {
                 Remove-Item -Path $userRegistryPath -Recurse -Force
             }
@@ -1161,7 +1175,7 @@ function Initialize-CurrentSettings {
         $dnsDropdown.SelectedItem = "unmanaged"
     }
 
-    $dnsTemplateBox.Enabled = ($dnsDropdown.SelectedItem -eq "custom")
+    $dnsTemplateBox.Enabled = ($dnsDropdown.SelectedItem -in @("custom", "secure"))
 }
 
 Initialize-CurrentSettings

@@ -1,0 +1,4 @@
+# Dev/CI-only lint config — the scripts themselves have no dependencies.
+# Ruff's default rule set (pyflakes + a pycodestyle core) is used as-is;
+# line length is not enforced (the feature tables read better wide).
+target-version = "py38"

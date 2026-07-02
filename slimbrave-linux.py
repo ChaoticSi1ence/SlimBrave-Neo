@@ -62,10 +62,24 @@ def _user_home_for_brave():
     sudo_user = os.environ.get("SUDO_USER") or os.environ.get("USER")
     if not sudo_user or sudo_user == "root":
         return None
-    try:
-        return os.path.expanduser(f"~{sudo_user}")
-    except KeyError:
+    home = os.path.expanduser(f"~{sudo_user}")
+    # expanduser returns the input unchanged when the user is unknown
+    if home.startswith("~"):
         return None
+    return home
+
+
+def _chown_to_sudo_user(path):
+    """Return a root-created file to the invoking user (no-op without sudo)."""
+    sudo_user = os.environ.get("SUDO_USER")
+    if not sudo_user:
+        return
+    try:
+        import pwd
+        user_info = pwd.getpwnam(sudo_user)
+        os.chown(path, user_info.pw_uid, user_info.pw_gid)
+    except (ImportError, KeyError, OSError):
+        pass
 
 
 def _channel_prefs_path(user_data_dir):
@@ -75,6 +89,24 @@ def _channel_prefs_path(user_data_dir):
         return None
     return os.path.join(
         home, ".config", "BraveSoftware", user_data_dir, "Default", "Preferences",
+    )
+
+
+def _flatpak_prefs_path():
+    """Return the Flatpak Brave's Default profile Preferences path.
+
+    Flatpak keeps the profile under ~/.var/app/com.brave.Browser/config
+    instead of ~/.config, so the native channel paths never see it. The
+    Flathub manifest grants --filesystem=host-etc specifically to load
+    policies from /etc/brave/policies, so the shared POLICY_FILE works;
+    only prefs repair needs this extra location.
+    """
+    home = _user_home_for_brave()
+    if not home:
+        return None
+    return os.path.join(
+        home, ".var", "app", "com.brave.Browser", "config",
+        "BraveSoftware", "Brave-Browser", "Default", "Preferences",
     )
 
 
@@ -234,6 +266,22 @@ def detect_brave():
             ))
             detected_labels.append(ch["label"])
 
+    # Flatpak keeps its profile under ~/.var/app, so the loop above cannot
+    # see it. Add a synthetic stable-channel record pointing at the Flatpak
+    # prefs so leak repair covers that profile too. Channel id stays
+    # "stable" so --channels filtering keeps working.
+    flatpak_prefs = _flatpak_prefs_path()
+    if flatpak_prefs and os.path.isdir(
+            os.path.dirname(os.path.dirname(flatpak_prefs))):
+        installations.append(_make_installation(
+            {"id": "stable", "label": "Stable (Flatpak)",
+             "user_data_dir": "Brave-Browser", "process_name": "brave"},
+            app_path="com.brave.Browser" if method == "flatpak" else "",
+            plist_path=POLICY_FILE,
+            prefs_path=flatpak_prefs,
+        ))
+        detected_labels.append("Flatpak")
+
     if not installations:
         stable = LINUX_CHANNELS[0]
         installations.append(_make_installation(
@@ -358,7 +406,6 @@ ROW_HEADER = 0
 ROW_FEATURE = 1
 ROW_DNS = 2
 ROW_DNS_TEMPLATE = 3
-ROW_CHANNEL = 4
 
 
 def build_rows(installations=None):
@@ -367,7 +414,7 @@ def build_rows(installations=None):
     On Linux every channel shares POLICY_FILE so a per-channel selector
     cannot meaningfully scope the policy write. The `installations`
     argument is accepted for API parity with the macOS script but does
-    not produce ROW_CHANNEL rows here.
+    not affect the layout.
     """
     rows = []
     for cat in CATEGORIES:
@@ -530,14 +577,9 @@ def _repair_one_prefs(pref_path):
     except OSError:
         return 0
 
-    sudo_user = os.environ.get("SUDO_USER")
-    if sudo_user:
-        try:
-            import pwd
-            user_info = pwd.getpwnam(sudo_user)
-            os.chown(pref_path, user_info.pw_uid, user_info.pw_gid)
-        except (ImportError, KeyError, OSError):
-            pass
+    # We're root via sudo — return the file to its original owner so the
+    # user's Brave can rewrite it on the next session.
+    _chown_to_sudo_user(pref_path)
 
     return removed
 
@@ -643,8 +685,8 @@ def _write_one_policy(plist_path, policy):
     return True, ""
 
 
-def _selected_channel_targets(installations, rows):
-    """Linux UI does not expose channel rows, so every installation is targeted."""
+def _selected_channel_targets(installations):
+    """Linux has no per-channel scoping, so every installation is targeted."""
     return list(installations)
 
 
@@ -672,7 +714,7 @@ def apply_policy(rows, installations=None):
     if installations is None:
         targets = [(POLICY_FILE, "")]
     else:
-        targets = _dedupe_plist_targets(_selected_channel_targets(installations, rows))
+        targets = _dedupe_plist_targets(_selected_channel_targets(installations))
 
     if not targets:
         return False, "No Brave channel selected."
@@ -687,7 +729,7 @@ def apply_policy(rows, installations=None):
             written_labels.append(label)
 
     repair_targets = (
-        _selected_channel_targets(installations, rows)
+        _selected_channel_targets(installations)
         if installations else None
     )
     return True, _post_apply_message(
@@ -714,7 +756,7 @@ def reset_policy(rows, installations=None):
     if installations is None:
         targets = [(POLICY_FILE, "")]
     else:
-        targets = _dedupe_plist_targets(_selected_channel_targets(installations, rows))
+        targets = _dedupe_plist_targets(_selected_channel_targets(installations))
 
     if not targets:
         return False, "No Brave channel selected."
@@ -739,7 +781,7 @@ def reset_policy(rows, installations=None):
         return False, f"Failed to reset: {e}"
 
     repair_targets = (
-        _selected_channel_targets(installations, rows)
+        _selected_channel_targets(installations)
         if installations else None
     )
     repaired, running = repair_brave_prefs(repair_targets)
@@ -809,6 +851,9 @@ def export_settings(rows, path):
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
         _atomic_write(path, json.dumps(settings, indent=4))
+        # Running as root: hand the export back to the invoking user so it
+        # isn't a root-owned file stranded in their home directory.
+        _chown_to_sudo_user(path)
         return True, f"Exported to {path}"
     except OSError as e:
         return False, f"Export failed: {e}"
@@ -910,7 +955,7 @@ def init_colors():
 def selectable_indices(rows):
     """Return list of row indices that can receive cursor focus."""
     return [i for i, r in enumerate(rows)
-            if r["type"] in (ROW_FEATURE, ROW_DNS, ROW_DNS_TEMPLATE, ROW_CHANNEL)]
+            if r["type"] in (ROW_FEATURE, ROW_DNS, ROW_DNS_TEMPLATE)]
 
 
 def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
@@ -973,13 +1018,6 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
                 attr = curses.color_pair(CP_CHECKED)
             else:
                 attr = curses.color_pair(CP_NORMAL)
-        elif row["type"] == ROW_CHANNEL:
-            mark = "x" if row["checked"] else " "
-            line = f"    [{mark}] {row['text']}"
-            attr = (
-                curses.color_pair(CP_CHECKED) if row["checked"]
-                else curses.color_pair(CP_NORMAL)
-            )
         elif row["type"] == ROW_DNS:
             current = row["options"][row["selected"]]
             line = f"    < {current} >"
@@ -1280,9 +1318,6 @@ def main(stdscr, override_installations=None):
                 if row["type"] == ROW_FEATURE:
                     toggle_feature_row(rows, row)
                     status_msg = ""
-                elif row["type"] == ROW_CHANNEL:
-                    row["checked"] = not row["checked"]
-                    status_msg = ""
                 elif row["type"] == ROW_DNS:
                     row["selected"] = (row["selected"] + 1) % len(row["options"])
                     status_msg = ""
@@ -1345,9 +1380,6 @@ def main(stdscr, override_installations=None):
             elif focus == FOCUS_LIST:
                 if row["type"] == ROW_FEATURE:
                     toggle_feature_row(rows, row)
-                    status_msg = ""
-                elif row["type"] == ROW_CHANNEL:
-                    row["checked"] = not row["checked"]
                     status_msg = ""
                 elif row["type"] == ROW_DNS:
                     row["selected"] = (row["selected"] + 1) % len(row["options"])
@@ -1546,14 +1578,16 @@ if __name__ == "__main__":
             for w in brave_info["warnings"]:
                 print(f"Warning: {w}", file=sys.stderr)
 
+        # Accumulate so a later success cannot mask an earlier failure
+        # (e.g. --reset failing followed by a clean --import).
         rc = 0
         if args.reset:
-            rc = cli_reset(installations)
+            rc = max(rc, cli_reset(installations))
         if args.import_path:
-            rc = cli_import(args.import_path, installations,
-                            doh_templates=args.doh_templates or "")
+            rc = max(rc, cli_import(args.import_path, installations,
+                                    doh_templates=args.doh_templates or ""))
         if args.export_path:
-            rc = cli_export(args.export_path, installations)
+            rc = max(rc, cli_export(args.export_path, installations))
         sys.exit(rc)
 
     try:

@@ -122,10 +122,24 @@ def _user_home_for_brave():
     sudo_user = os.environ.get("SUDO_USER") or os.environ.get("USER")
     if not sudo_user or sudo_user == "root":
         return None
-    try:
-        return os.path.expanduser(f"~{sudo_user}")
-    except KeyError:
+    home = os.path.expanduser(f"~{sudo_user}")
+    # expanduser returns the input unchanged when the user is unknown
+    if home.startswith("~"):
         return None
+    return home
+
+
+def _chown_to_sudo_user(path):
+    """Return a root-created file to the invoking user (no-op without sudo)."""
+    sudo_user = os.environ.get("SUDO_USER")
+    if not sudo_user:
+        return
+    try:
+        import pwd
+        user_info = pwd.getpwnam(sudo_user)
+        os.chown(path, user_info.pw_uid, user_info.pw_gid)
+    except (ImportError, KeyError, OSError):
+        pass
 
 
 def _mac_app_search_paths(app_name):
@@ -151,6 +165,24 @@ def _channel_prefs_path(user_data_dir):
         )
     return os.path.join(
         home, ".config", "BraveSoftware", user_data_dir, "Default", "Preferences",
+    )
+
+
+def _flatpak_prefs_path():
+    """Return the Flatpak Brave's Default profile Preferences path (Linux).
+
+    Flatpak keeps the profile under ~/.var/app/com.brave.Browser/config
+    instead of ~/.config, so the native channel paths never see it. The
+    Flathub manifest grants --filesystem=host-etc specifically to load
+    policies from /etc/brave/policies, so the shared POLICY_FILE works;
+    only prefs repair needs this extra location.
+    """
+    home = _user_home_for_brave()
+    if not home:
+        return None
+    return os.path.join(
+        home, ".var", "app", "com.brave.Browser", "config",
+        "BraveSoftware", "Brave-Browser", "Default", "Preferences",
     )
 
 
@@ -362,6 +394,22 @@ def detect_brave():
                 prefs_path=_channel_prefs_path(ch["user_data_dir"]),
             ))
             detected_labels.append(ch["label"])
+
+    # Flatpak keeps its profile under ~/.var/app, so the loop above cannot
+    # see it. Add a synthetic stable-channel record pointing at the Flatpak
+    # prefs so leak repair covers that profile too. Channel id stays
+    # "stable" so --channels filtering keeps working.
+    flatpak_prefs = _flatpak_prefs_path()
+    if flatpak_prefs and os.path.isdir(
+            os.path.dirname(os.path.dirname(flatpak_prefs))):
+        installations.append(_make_installation(
+            {"id": "stable", "label": "Stable (Flatpak)",
+             "user_data_dir": "Brave-Browser", "process_name": "brave"},
+            app_path="com.brave.Browser" if method == "flatpak" else "",
+            plist_path=POLICY_FILE,
+            prefs_path=flatpak_prefs,
+        ))
+        detected_labels.append("Flatpak")
 
     if not installations:
         # Nothing detected per-channel — fall back to a single stable record so
@@ -684,14 +732,7 @@ def _repair_one_prefs(pref_path):
 
     # We're root via sudo — return the file to its original owner so the
     # user's Brave can rewrite it on the next session.
-    sudo_user = os.environ.get("SUDO_USER")
-    if sudo_user:
-        try:
-            import pwd
-            user_info = pwd.getpwnam(sudo_user)
-            os.chown(pref_path, user_info.pw_uid, user_info.pw_gid)
-        except (ImportError, KeyError, OSError):
-            pass
+    _chown_to_sudo_user(pref_path)
 
     return removed
 
@@ -910,16 +951,22 @@ def _flush_cfprefsd():
 
 
 def _clear_persistence_artifacts():
-    """Remove any installed Configuration Profile.
+    """Remove any installed Configuration Profile and its mobileconfig.
 
     Called by reset and by apply when switching modes (so an `off` Apply
     after a previous `on` Apply cleanly tears the profile down). Plist
     file deletion is the caller's responsibility — apply/reset already
-    iterate over plist_path targets.
+    iterate over plist_path targets. The staged mobileconfig in /tmp is
+    removed too so a reset leaves nothing behind; a persist=on Apply
+    rewrites it immediately afterwards.
     """
     if not IS_MAC:
         return
     _remove_profile()
+    try:
+        os.remove(PERSIST_PROFILE_FILE)
+    except OSError:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -1102,7 +1149,7 @@ def apply_policy(rows, installations=None, persist_mode=PERSIST_DEFAULT,
         for plist_path, label in targets:
             try:
                 os.remove(plist_path)
-            except (FileNotFoundError, OSError):
+            except OSError:
                 pass
             bundle = _bundle_id_for_plist(plist_path)
             if bundle:
@@ -1306,6 +1353,9 @@ def export_settings(rows, path):
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
         _atomic_write(path, json.dumps(settings, indent=4))
+        # Running as root: hand the export back to the invoking user so it
+        # isn't a root-owned file stranded in their home directory.
+        _chown_to_sudo_user(path)
         return True, f"Exported to {path}"
     except OSError as e:
         return False, f"Export failed: {e}"
@@ -2296,15 +2346,17 @@ if __name__ == "__main__":
         if persist_mode is None:
             persist_mode = detect_persist_mode() if IS_MAC else PERSIST_DEFAULT
 
+        # Accumulate so a later success cannot mask an earlier failure
+        # (e.g. --reset failing followed by a clean --import).
         rc = 0
         if args.reset:
-            rc = cli_reset(installations)
+            rc = max(rc, cli_reset(installations))
         if args.import_path:
-            rc = cli_import(args.import_path, installations,
-                            doh_templates=args.doh_templates or "",
-                            persist_mode=persist_mode)
+            rc = max(rc, cli_import(args.import_path, installations,
+                                    doh_templates=args.doh_templates or "",
+                                    persist_mode=persist_mode))
         if args.export_path:
-            rc = cli_export(args.export_path, installations)
+            rc = max(rc, cli_export(args.export_path, installations))
         sys.exit(rc)
 
     # Interactive TUI mode
