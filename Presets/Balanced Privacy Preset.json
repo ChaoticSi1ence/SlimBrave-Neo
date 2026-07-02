@@ -15,7 +15,6 @@
         "WebRtcIPHandling": "disable_non_proxied_udp",
         "QuicAllowed": false,
         "BlockThirdPartyCookies": true,
-        "ForceGoogleSafeSearch": true,
         "BraveRewardsDisabled": true,
         "BraveWalletDisabled": true,
         "BraveVPNDisabled": true,

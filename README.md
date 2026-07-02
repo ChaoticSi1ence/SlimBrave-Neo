@@ -197,7 +197,7 @@ Pin Brave's own protection defaults as managed policy so they can't be weakened 
 | `--reset` | Remove the managed policy file |
 | `--policy-file PATH` | Override policy file path |
 | `--doh-templates URL` | Set custom DNS-over-HTTPS template URL |
-| `--channels LIST` | Comma-separated channels to target (`stable,beta,nightly`). Default `auto` = all detected. macOS writes one plist per channel; Linux always shares a single policy file. |
+| `--channels LIST` | Comma-separated channels to target (`stable,beta,nightly`; Linux also accepts `dev`). Default `auto` = all detected. macOS writes one plist per channel; Linux always shares a single policy file. |
 | `--persist MODE` | macOS persistence: `off` (plist only; may reset after reboot on macOS 13+) or `on` (install an Apple Configuration Profile via System Settings; durable, Apple-recommended). Omitted = reuse whatever mode is currently installed; falls back to `off` if nothing is. Linux ignores this flag — its `/etc/brave/policies` file is already durable. |
 | `-h`, `--help` | Show help |
 
@@ -214,7 +214,7 @@ Import/export uses the same JSON format as the Windows PowerShell version. Confi
 - **Brave Features:** Kills Rewards, Wallet, VPN, AI Chat, Tor, Sync, and Email Aliases.
 - **Shields:** Pins ad blocking, fingerprinting protection, strict HTTPS, capped referrers, and forget-on-close storage as managed policy.
 - **Performance:** Disables background processes, recommendations, and bloat.
-- **DNS:** Uses plain DNS (no HTTPS) to prevent potential logging by DoH providers.
+- **DNS:** Left unmanaged. Forcing DoH off would hand every DNS query to your ISP in cleartext, while forcing DoH on concentrates that visibility at the DoH provider — which trade-off is right depends on who you distrust more, so the preset leaves the choice to you (set it manually in the DNS section if you have a preference).
 - **Note:** No longer forces incognito-only browsing (earlier versions set `IncognitoModeAvailability: 2`, which silently disabled history, persistent logins, and most extensions). Forget-on-close storage covers the privacy goal; the Force Incognito toggle is still available manually.
 - **Best for:** Paranoid users, journalists, activists, or anyone who wants Brave as private as possible.
 
@@ -227,7 +227,7 @@ Import/export uses the same JSON format as the Windows PowerShell version. Confi
 - **Best for:** Most users who want privacy but still need convenience features.
 
 ### Performance Focused Preset
-- **Telemetry:** Only blocks metrics and feedback surveys (keeps some safe browsing).
+- **Telemetry:** Blocks metrics reporting, P3A analytics, and the daily stats ping (Safe Browsing stays untouched).
 - **Brave Features:** Disables Rewards, Wallet, VPN, and AI to declutter the browser.
 - **Performance:** Kills background processes, shopping features, and promotions.
 - **DNS:** Automatic DoH for a balance of speed and security.
