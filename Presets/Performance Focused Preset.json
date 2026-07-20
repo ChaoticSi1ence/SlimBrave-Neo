@@ -13,7 +13,13 @@
         "BraveNewsDisabled": true,
         "BraveTalkDisabled": true,
         "BravePlaylistEnabled": false,
+        "BraveWebDiscoveryEnabled": false,
+        "BraveSpeedreaderEnabled": false,
         "BackgroundModeEnabled": false,
+        "HighEfficiencyModeEnabled": true,
+        "HardwareAccelerationModeEnabled": true,
+        "EnableMediaRouter": false,
+        "MediaRecommendationsEnabled": false,
         "ShoppingListEnabled": false,
         "DefaultBrowserSettingEnabled": false,
         "BraveWaybackMachineEnabled": false
