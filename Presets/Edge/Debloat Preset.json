@@ -1,0 +1,19 @@
+{
+    "Browser": "edge",
+    "Features": {
+        "DiagnosticData": 0,
+        "PersonalizationReportingEnabled": false,
+        "UserFeedbackAllowed": false,
+        "HubsSidebarEnabled": false,
+        "EdgeCollectionsEnabled": false,
+        "EdgeShoppingAssistantEnabled": false,
+        "ShowMicrosoftRewards": false,
+        "EdgeWalletCheckoutEnabled": false,
+        "NewTabPageContentEnabled": false,
+        "EdgeAssetDeliveryServiceEnabled": false,
+        "SpotlightExperiencesAndRecommendationsEnabled": false,
+        "StartupBoostEnabled": false,
+        "BackgroundModeEnabled": false,
+        "DefaultBrowserSettingEnabled": false
+    }
+}

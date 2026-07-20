@@ -1,0 +1,44 @@
+{
+    "Browser": "firefox",
+    "Features": {
+        "DisableTelemetry": true,
+        "DisableFirefoxStudies": true,
+        "DisableFeedbackCommands": true,
+        "CaptivePortal": false,
+        "EnableTrackingProtection": {
+            "Value": true,
+            "Locked": true,
+            "Cryptomining": true,
+            "Fingerprinting": true,
+            "EmailTracking": true
+        },
+        "AutofillCreditCardEnabled": false,
+        "NetworkPrediction": false,
+        "DisablePocket": true,
+        "FirefoxHome": {
+            "Search": true,
+            "TopSites": true,
+            "SponsoredTopSites": false,
+            "Highlights": false,
+            "Pocket": false,
+            "SponsoredPocket": false,
+            "Stories": false,
+            "SponsoredStories": false,
+            "Weather": false,
+            "Snippets": false,
+            "Locked": true
+        },
+        "UserMessaging": {
+            "WhatsNew": false,
+            "ExtensionRecommendations": false,
+            "FeatureRecommendations": false,
+            "UrlbarInterventions": false,
+            "SkipOnboarding": true,
+            "MoreFromMozilla": false,
+            "FirefoxLabs": false,
+            "Locked": true
+        },
+        "DontCheckDefaultBrowser": true
+    },
+    "DnsMode": "automatic"
+}

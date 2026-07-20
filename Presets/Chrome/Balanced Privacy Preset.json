@@ -1,0 +1,23 @@
+{
+    "Browser": "chrome",
+    "Features": {
+        "MetricsReportingEnabled": false,
+        "SafeBrowsingExtendedReportingEnabled": false,
+        "UrlKeyedAnonymizedDataCollectionEnabled": false,
+        "AutofillCreditCardEnabled": false,
+        "WebRtcIPHandling": "disable_non_proxied_udp",
+        "QuicAllowed": false,
+        "NetworkPredictionOptions": 2,
+        "BlockThirdPartyCookies": true,
+        "PaymentMethodQueryEnabled": false,
+        "AlternateErrorPagesEnabled": false,
+        "UserFeedbackAllowed": false,
+        "BrowserLabsEnabled": false,
+        "ChromeVariations": 1,
+        "BackgroundModeEnabled": false,
+        "MediaRecommendationsEnabled": false,
+        "ShoppingListEnabled": false,
+        "DefaultBrowserSettingEnabled": false
+    },
+    "DnsMode": "automatic"
+}

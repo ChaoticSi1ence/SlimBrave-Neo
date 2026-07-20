@@ -1,17 +1,13 @@
 {
+    "Browser": "chrome",
     "Features": {
         "MetricsReportingEnabled": false,
         "SafeBrowsingExtendedReportingEnabled": false,
         "UrlKeyedAnonymizedDataCollectionEnabled": false,
-        "BraveP3AEnabled": false,
-        "BraveStatsPingEnabled": false,
-        "BraveRewardsDisabled": true,
-        "BraveWalletDisabled": true,
-        "BraveVPNDisabled": true,
-        "BraveAIChatEnabled": false,
-        "BraveNewsDisabled": true,
-        "BraveTalkDisabled": true,
+        "UserFeedbackAllowed": false,
+        "AlternateErrorPagesEnabled": false,
         "BackgroundModeEnabled": false,
+        "MediaRecommendationsEnabled": false,
         "ShoppingListEnabled": false,
         "DefaultBrowserSettingEnabled": false
     },

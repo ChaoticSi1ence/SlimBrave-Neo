@@ -71,6 +71,79 @@ authoritative sources:
 | DeveloperToolsAvailability | ✅ active | int enum | 2 (= disallowed) | |
 | DnsOverHttpsMode | ✅ active | string enum | off/automatic/secure | |
 | DnsOverHttpsTemplates | ✅ active | string | URL template | only effective with mode secure/automatic |
+| PasswordLeakDetectionEnabled | ✅ active (cr79+) | bool | false | **added July 2026**; stops the online breach-list credential check |
+| NetworkPredictionOptions | ✅ active (cr38+) | int enum | 2 (= never predict) | **added July 2026**; 0 = always, 2 = never (value 1 deprecated in-source) |
+| PaymentMethodQueryEnabled | ✅ active (cr80+) | bool | false | **added July 2026**; sites' canMakePayment always answers "none saved" |
+| AlternateErrorPagesEnabled | ✅ active (cr8+) | bool | false | **added July 2026**; belt-and-braces — Brave ships the web-service error page off by default |
+| DefaultNotificationsSetting | ✅ active (cr10+) | int enum | 2 (= block all) | **added July 2026**; 1 = allow, 2 = block, 3 = ask |
+| DefaultGeolocationSetting | ✅ active (cr10+) | int enum | 2 (= block all) | **added July 2026**; 1 = allow, 2 = block, 3 = ask |
+| DefaultSensorsSetting | ✅ active (cr88+) | int enum | 2 (= block all) | **added July 2026**; motion/orientation sensors — fingerprinting vector |
+| ExtensionInstallBlocklist | ✅ active (cr86+) | list | `["*"]` | **added July 2026**; `*` blocks all installs and disables already-installed extensions |
+| SafeSitesFilterBehavior | ✅ active (cr69+) | int enum | 1 (= filter) | **added July 2026**; built-in adult-content URL filter |
+| BrowserGuestModeEnabled | ✅ active (cr38+) | bool | false | **added July 2026**; guest windows bypass profile restrictions — parental hole |
+| HighEfficiencyModeEnabled | ✅ active (cr108+) | bool | true | **added July 2026**; forces Memory Saver tab discarding on |
+| HardwareAccelerationModeEnabled | ✅ active (cr46+) | bool | true | **added July 2026**; `dynamic_refresh: false` — needs browser restart |
+| EnableMediaRouter | ✅ active (cr52+) | bool | false | **added July 2026**; disables Cast + its LAN device discovery; `dynamic_refresh: false` — needs browser restart |
+| MediaRecommendationsEnabled | ✅ active (cr87+) | bool | false | **added July 2026** |
+| PromotionalTabsEnabled | ⛔ `deprecated: true` | — | — | considered July 2026, rejected — Chromium YAML marks it deprecated. **Do not add** |
+
+## Chrome-specific keys (July 2026 — multi-browser support)
+
+Source: same Chromium policy_definitions YAML as above. These appear only in the "Chrome Features" category.
+
+| Key | Status | Type | Project value | Notes |
+|---|---|---|---|---|
+| UserFeedbackAllowed | ✅ active (cr77+) | bool | false | also valid on Edge (documented separately by Microsoft) |
+| BrowserLabsEnabled | ✅ active (cr89+) | bool | false | |
+| GoogleSearchSidePanelEnabled | ✅ active (cr115+) | bool | false | |
+| GeminiSettings | ✅ active (cr137+) | int enum | 1 (= disable) | `supported_on: chrome.win, chrome.mac` only — **absent from the Linux catalog** |
+| ChromeVariations | ✅ active (cr83+) | int enum | 1 (= critical fixes only) | 2 (= disable all) deliberately not used: it also drops security-critical variation killswitches |
+| PrivacySandboxPromptEnabled / AdTopics / SiteEnabledAds / AdMeasurement | ⛔ all `deprecated: true` | — | — | considered and rejected — Google sunset Privacy Sandbox; **do not add** |
+| LensOverlaySettings | ⛔ `deprecated: true` | — | — | considered and rejected |
+
+## Edge keys (July 2026 — multi-browser support)
+
+Source: Microsoft's per-policy Edge documentation (`learn.microsoft.com/deployedge/microsoft-edge-policies/<key>`). Chromium YAML does not cover Edge — Microsoft maintains a separate policy set that renames several Chromium keys. **Edge is Windows + macOS only:** the docs list no Linux support per policy, so no Linux Edge catalog exists to audit.
+
+Renamed equivalents (the Chromium originals are excluded from the Edge catalog):
+
+| Chromium key (excluded) | Edge key (used) | Project value |
+|---|---|---|
+| MetricsReportingEnabled (obsolete in Edge 89) | DiagnosticData | 0 (= off) |
+| IncognitoModeAvailability | InPrivateModeAvailability | 1 / 2 (grouped) |
+| WebRtcIPHandling | WebRtcLocalhostIpHandling | disable_non_proxied_udp |
+| PasswordLeakDetectionEnabled | PasswordMonitorAllowed | false |
+| SafeBrowsingProtectionLevel / SafeBrowsingExtendedReportingEnabled | SmartScreenEnabled | false (opt-in toggle, like Disable Safe Browsing) |
+| HighEfficiencyModeEnabled | EfficiencyModeEnabled (≥106) | true |
+| ShoppingListEnabled | EdgeShoppingAssistantEnabled | false |
+
+Also excluded from Edge (no equivalent): UrlKeyedAnonymizedDataCollectionEnabled, SafeSitesFilterBehavior, MediaRecommendationsEnabled (all 404 in Microsoft's policy reference).
+
+Edge-only keys, all ✅ active: PersonalizationReportingEnabled (false), UserFeedbackAllowed (false), HubsSidebarEnabled (false; the *recommended* variant is obsolete, the mandatory policy is not), EdgeCollectionsEnabled (false), ShowMicrosoftRewards (false), EdgeWalletCheckoutEnabled (false), NewTabPageContentEnabled (false), EdgeAssetDeliveryServiceEnabled (false), SleepingTabsEnabled (true), ForceBingSafeSearch (2 = strict), StartupBoostEnabled (false, **Windows only**), SpotlightExperiencesAndRecommendationsEnabled (false, **Windows only**).
+
+Rejected as obsolete/deprecated by Microsoft: PromotionalTabsEnabled (Edge's own copy — "will become obsolete"), EdgeFollowEnabled (obsolete after 126), EdgeWalletEtreeEnabled (deprecated). **Do not add.**
+
+## Firefox keys (July 2026 — multi-browser support)
+
+Source: [mozilla/enterprise-admin-reference `schema/policies-schema.json`](https://github.com/mozilla/enterprise-admin-reference/blob/main/schema/policies-schema.json) — the machine-readable schema behind firefox-admin-docs.mozilla.org (131 policies; the old mozilla/policy-templates README now redirects there). Firefox shares **zero** keys with the Chromium catalog; every row below was checked against the schema for existence, type, and nested-property names.
+
+Booleans: DisableTelemetry, DisableFirefoxStudies, DisableFeedbackCommands, DisableDefaultBrowserAgent (**Windows-only feature** — only the PS1 exposes it), CaptivePortal (false), PasswordManagerEnabled (false), OfferToSaveLogins (false), DisableFormHistory, AutofillAddressEnabled (false), AutofillCreditCardEnabled (false), DisableFirefoxAccounts, NetworkPrediction (false), SearchSuggestEnabled (false), DisablePrivateBrowsing, BlockAboutConfig, DisablePocket, HardwareAcceleration (true), DontCheckDefaultBrowser.
+
+String enum: HttpsOnlyMode = `force_enabled` (allowed / disallowed / enabled / force_enabled).
+
+Nested objects (property names verified against the schema):
+
+| Key | Project value |
+|---|---|
+| EnableTrackingProtection | `{Value, Locked, Cryptomining, Fingerprinting, EmailTracking: true}` |
+| Permissions | `{Location: {BlockNewRequests, Locked}, Notifications: {BlockNewRequests, Locked}}` |
+| ExtensionSettings | `{"*": {installation_mode: "blocked"}}` |
+| FirefoxHome | Search/TopSites true; SponsoredTopSites, Highlights, Pocket, SponsoredPocket, Stories, SponsoredStories, Weather, Snippets false; Locked true (schema carries both the old Pocket and new Stories field names — both are set) |
+| UserMessaging | WhatsNew, ExtensionRecommendations, FeatureRecommendations, UrlbarInterventions, MoreFromMozilla, FirefoxLabs false; SkipOnboarding, Locked true |
+| AIControls | `{Default: {Value: "blocked", Locked: true}}` |
+| DNSOverHTTPS | off → `{Enabled: false, Locked}`; automatic → `{Enabled: true, Locked}`; secure/custom → `{Enabled: true, Fallback: false, Locked}` + ProviderURL |
+
+Write locations: Linux `/etc/firefox/policies/policies.json` (content wrapped in `{"policies": {...}}`); macOS the per-channel preference domain (org.mozilla.firefox / .firefoxdeveloperedition / .nightly) with **`EnterprisePoliciesEnabled: true` injected — Firefox's macOS policy engine is inert without it**; Windows `<install dir>\distribution\policies.json` (chosen over `HKLM\Software\Policies\Mozilla\Firefox` because nested policies use a separate ADMX registry dialect — one JSON writer serves all platforms). Deliberately not exposed: DisableAppUpdate and friends (never ship an update-disabling toggle), Preferences (arbitrary about:config passthrough — out of scope).
 
 ## Cross-cutting checks
 
@@ -80,6 +153,6 @@ authoritative sources:
 
 ## Re-audit procedure
 
-1. Diff the key list in each script against the two YAML directories above.
-2. For any key, fetch `<dir>/<Key>.yaml` and check `deprecated:` and `supported_on:`.
-3. Treat brave-core/Chromium source as the tiebreaker over support articles and third-party guides — the docs lag the source.
+1. Diff the key list in each script against the two YAML directories above (Brave/Chromium keys) and Microsoft's per-policy pages (Edge keys).
+2. For any Chromium key, fetch `<dir>/<Key>.yaml` and check `deprecated:` and `supported_on:`. For any Edge key, fetch `learn.microsoft.com/deployedge/microsoft-edge-policies/<key>` and check the obsolete banner and "Supported versions".
+3. Treat brave-core/Chromium source (and, for Edge, Microsoft's policy reference) as the tiebreaker over support articles and third-party guides — the docs lag the source.

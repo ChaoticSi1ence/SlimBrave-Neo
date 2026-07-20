@@ -333,27 +333,55 @@ def test_repair_one_prefs_ignores_missing_or_invalid(mod, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _feature_pairs(mod):
+def _feature_pairs(mod, browser):
+    """Key → accepted values for one browser, straight from CATEGORIES.
+
+    Reads the definitions instead of build_rows() so validating an Edge
+    preset needs no select_browser() call (Edge build_rows is refused on
+    Linux, where the mac script falls back to Linux paths in CI).
+    """
     pairs = {}
     for cat in mod.CATEGORIES:
+        cat_browsers = cat.get("browsers", mod.CHROMIUM_BROWSERS)
+        if browser not in cat_browsers:
+            continue
         for feat in cat["features"]:
+            if browser not in feat.get("browsers", cat_browsers):
+                continue
             pairs.setdefault(feat["key"], []).append(feat["value"])
     return pairs
 
 
 # Keys presets may contain that are deliberately absent on some platforms;
-# the import silently skips them there. BackgroundModeEnabled has no macOS
-# support in Chromium (see AUDIT.md), so the mac script doesn't expose it.
-PLATFORM_OMITTED_KEYS = {"BackgroundModeEnabled"}
+# the import silently skips them there (see AUDIT.md):
+# - BackgroundModeEnabled: no macOS support in Chromium
+# - GeminiSettings: chrome.win / chrome.mac only, absent on Linux
+# - StartupBoostEnabled, SpotlightExperiencesAndRecommendationsEnabled:
+#   Edge on Windows only, absent from the macOS Edge catalog
+# - DisableDefaultBrowserAgent: the agent is a Windows-only scheduled
+#   task, so only the PowerShell script exposes the policy
+PLATFORM_OMITTED_KEYS = {
+    "BackgroundModeEnabled",
+    "GeminiSettings",
+    "StartupBoostEnabled",
+    "SpotlightExperiencesAndRecommendationsEnabled",
+    "DisableDefaultBrowserAgent",
+}
 
 
 @pytest.mark.parametrize(
-    "preset", sorted((ROOT / "Presets").glob("*.json")),
-    ids=lambda p: p.stem,
+    "preset", sorted((ROOT / "Presets").glob("*/*.json")),
+    ids=lambda p: f"{p.parent.name}-{p.stem}",
 )
 def test_presets_match_feature_definitions(mod, preset):
     config = json.loads(preset.read_text())
-    known = _feature_pairs(mod)
+    browser = preset.parent.name.lower()
+    assert config.get("Browser") == browser, (
+        f"{preset}: Browser field must match its folder ({browser})"
+    )
+    if browser not in mod.BROWSERS:
+        pytest.skip(f"{browser} not supported by this platform script")
+    known = _feature_pairs(mod, browser)
     for key, value in config["Features"].items():
         if key in PLATFORM_OMITTED_KEYS and key not in known:
             continue
@@ -367,3 +395,126 @@ def test_presets_match_feature_definitions(mod, preset):
         assert dns_mode in mod.DNS_MODES
     if "DnsTemplates" in config:
         assert dns_mode in ("custom", "secure")
+
+
+# ---------------------------------------------------------------------------
+# Multi-browser catalog behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_chrome_rows_contain_no_brave_keys(mod):
+    pairs = _feature_pairs(mod, "chrome")
+    brave_keys = [k for k in pairs if k.startswith(("Brave", "DefaultBrave", "Tor"))]
+    assert brave_keys == []
+    assert "BlockThirdPartyCookies" in pairs   # common keys still present
+
+
+def test_edge_catalog_excludes_renamed_chromium_keys():
+    mac = MODULES[1]
+    if "edge" not in mac.BROWSERS:
+        pytest.skip("edge catalog lives in the mac script")
+    pairs = _feature_pairs(mac, "edge")
+    # Edge replaces these Chromium keys with its own equivalents
+    for gone, replacement in [
+        ("MetricsReportingEnabled", "DiagnosticData"),
+        ("IncognitoModeAvailability", "InPrivateModeAvailability"),
+        ("WebRtcIPHandling", "WebRtcLocalhostIpHandling"),
+        ("PasswordLeakDetectionEnabled", "PasswordMonitorAllowed"),
+        ("SafeBrowsingProtectionLevel", "SmartScreenEnabled"),
+        ("HighEfficiencyModeEnabled", "EfficiencyModeEnabled"),
+    ]:
+        assert gone not in pairs, f"{gone} leaked into the Edge catalog"
+        assert replacement in pairs, f"{replacement} missing from the Edge catalog"
+
+
+def test_import_rejects_cross_browser_config(mod, tmp_path):
+    cfg = tmp_path / "chrome.json"
+    cfg.write_text(json.dumps(
+        {"Browser": "chrome", "Features": {"BlockThirdPartyCookies": True}}
+    ))
+    rows = mod.build_rows()   # default browser: brave
+    ok, msg = mod.import_settings(rows, str(cfg))
+    assert not ok
+    assert "chrome" in msg
+
+
+def test_export_stamps_selected_browser(mod, tmp_path):
+    rows = mod.build_rows()
+    _check_feature(mod, rows, "Disable Brave Rewards")
+    out = tmp_path / "export.json"
+    ok, _ = mod.export_settings(rows, str(out))
+    assert ok
+    assert json.loads(out.read_text())["Browser"] == "brave"
+
+
+def test_firefox_dns_maps_to_mozilla_dialect(mod):
+    try:
+        mod.select_browser("firefox")
+        rows = mod.build_rows()
+        _set_dns(mod, rows, "custom", "https://dns.example/dns-query")
+        policy, err = mod._build_policy(rows)
+        assert err == ""
+        assert "DnsOverHttpsMode" not in policy
+        doh = policy["DNSOverHTTPS"]
+        assert doh["Enabled"] is True and doh["Fallback"] is False
+        assert doh["ProviderURL"] == "https://dns.example/dns-query"
+        # Reverse mapping shows back as custom
+        fresh = mod.build_rows()
+        mod.sync_rows_with_policy(fresh, policy)
+        assert mod.get_dns_mode(fresh) == "custom"
+        assert mod.get_dns_template(fresh) == "https://dns.example/dns-query"
+    finally:
+        mod.select_browser("brave")
+
+
+def test_firefox_rows_have_no_chromium_keys(mod):
+    pairs = _feature_pairs(mod, "firefox")
+    assert "BlockThirdPartyCookies" not in pairs
+    assert "MetricsReportingEnabled" not in pairs
+    assert pairs["EnableTrackingProtection"][0]["Value"] is True
+    assert pairs["ExtensionSettings"] == [{"*": {"installation_mode": "blocked"}}]
+
+
+def test_firefox_export_import_round_trips_nested_values(mod, tmp_path):
+    try:
+        mod.select_browser("firefox")
+        rows = mod.build_rows()
+        _check_feature(mod, rows, "Enforce Tracking Protection (Strict)")
+        _check_feature(mod, rows, "Disable Telemetry")
+        expected = _checked_policy_pairs(mod, rows)
+        out = tmp_path / "ff.json"
+        ok, _ = mod.export_settings(rows, str(out))
+        assert ok
+        assert json.loads(out.read_text())["Browser"] == "firefox"
+        fresh = mod.build_rows()
+        ok, _ = mod.import_settings(fresh, str(out))
+        assert ok
+        assert _checked_policy_pairs(mod, fresh) == expected
+    finally:
+        mod.select_browser("brave")
+
+
+def test_firefox_linux_policy_file_wraps_policies(mod, tmp_path, monkeypatch):
+    if getattr(mod, "IS_MAC", False):
+        pytest.skip("wrapper applies to the JSON writer only")
+    try:
+        mod.select_browser("firefox")
+        target = tmp_path / "policies.json"
+        ok, err = mod._write_one_policy(str(target), {"DisableTelemetry": True})
+        assert ok, err
+        on_disk = json.loads(target.read_text())
+        assert on_disk == {"policies": {"DisableTelemetry": True}}
+        assert mod._read_one_policy(str(target)) == {"DisableTelemetry": True}
+    finally:
+        mod.select_browser("brave")
+
+
+def test_select_browser_switches_paths_and_rows(mod):
+    try:
+        mod.select_browser("chrome")
+        assert "chrome" in mod.POLICY_FILE.lower() or "Chrome" in mod.POLICY_FILE
+        names = [r["text"] for r in mod.build_rows() if r["type"] == mod.ROW_FEATURE]
+        assert "Disable Brave Rewards" not in names
+        assert "Disable Chrome Labs" in names
+    finally:
+        mod.select_browser("brave")

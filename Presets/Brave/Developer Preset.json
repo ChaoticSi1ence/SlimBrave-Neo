@@ -1,22 +1,22 @@
 {
+    "Browser": "brave",
     "Features": {
         "MetricsReportingEnabled": false,
+        "SafeBrowsingExtendedReportingEnabled": false,
+        "UrlKeyedAnonymizedDataCollectionEnabled": false,
         "BraveP3AEnabled": false,
         "BraveStatsPingEnabled": false,
-        "BraveDeAmpEnabled": true,
-        "BraveDebouncingEnabled": true,
-        "BraveTrackingQueryParametersFilteringEnabled": true,
+        "AlternateErrorPagesEnabled": false,
         "BraveRewardsDisabled": true,
         "BraveWalletDisabled": true,
         "BraveVPNDisabled": true,
         "BraveAIChatEnabled": false,
         "BraveNewsDisabled": true,
         "BraveTalkDisabled": true,
-        "BravePlaylistEnabled": false,
         "BackgroundModeEnabled": false,
+        "MediaRecommendationsEnabled": false,
         "ShoppingListEnabled": false,
-        "DefaultBrowserSettingEnabled": false,
-        "BraveWaybackMachineEnabled": false
+        "DefaultBrowserSettingEnabled": false
     },
     "DnsMode": "automatic"
 }
