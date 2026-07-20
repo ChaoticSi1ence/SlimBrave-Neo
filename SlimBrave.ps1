@@ -461,6 +461,8 @@ $privacyFeatures = @(
        Tip = "Stops Brave from saving and auto-filling credit card numbers in web forms." },
     @{ Name = "Disable Password Manager"; Key = "PasswordManagerEnabled"; Value = 0; Type = "DWord"
        Tip = "Disables the built-in password manager (no save prompts, no autofill). Recommended if you use a dedicated password manager." },
+    @{ Name = "Disable Password Leak Detection"; Key = "PasswordLeakDetectionEnabled"; Value = 0; Type = "DWord"
+       Tip = "Stops the online check that compares your saved credentials against known breach lists. Defense in depth if you audit passwords with your own manager instead." },
     @{ Name = "Disable Browser Sign-in"; Key = "BrowserSignin"; Value = 0; Type = "DWord"
        Tip = "Prevents signing in to the browser itself with an account." },
     @{ Name = "Enable Global Privacy Control"; Key = "BraveGlobalPrivacyControlEnabled"; Value = 1; Type = "DWord"
@@ -477,10 +479,34 @@ $privacyFeatures = @(
        Tip = "Restricts WebRTC to proxied connections so video/voice calls can't expose your real IP address behind a VPN or proxy." },
     @{ Name = "Disable QUIC Protocol"; Key = "QuicAllowed"; Value = 0; Type = "DWord"
        Tip = "Disables the QUIC (HTTP/3) transport so all traffic uses TCP. Useful when a firewall or filter can't inspect QUIC; may slightly slow some Google sites." },
+    @{ Name = "Disable Network Prediction (Prefetch)"; Key = "NetworkPredictionOptions"; Value = 2; Type = "DWord"
+       Tip = "Stops Brave from pre-resolving DNS and pre-connecting to links it guesses you might click, so no network requests are made for pages you never visit." },
     @{ Name = "Block Third Party Cookies"; Key = "BlockThirdPartyCookies"; Value = 1; Type = "DWord"
        Tip = "Blocks cookies set by domains other than the site you are visiting. Can break some embedded logins." },
+    @{ Name = "Block Payment Method Probing"; Key = "PaymentMethodQueryEnabled"; Value = 0; Type = "DWord"
+       Tip = "Stops sites from querying whether you have payment methods saved (canMakePayment) - they are always told none are available." },
+    @{ Name = "Disable Alternate Error Pages"; Key = "AlternateErrorPagesEnabled"; Value = 0; Type = "DWord"
+       Tip = "Uses plain local error pages for navigation errors instead of a web-service-assisted suggestion page. Belt-and-braces: Brave already ships this off." }
+)
+
+# Site permissions and access lockdowns: content-setting defaults plus the
+# escape hatches (guest, incognito, extensions) that would otherwise bypass
+# the rest of the policy set.
+$accessFeatures = @(
+    @{ Name = "Block Web Notifications"; Key = "DefaultNotificationsSetting"; Value = 2; Type = "DWord"
+       Tip = "Blocks all sites from showing desktop notifications and removes the permission prompt entirely." },
+    @{ Name = "Block Location Access"; Key = "DefaultGeolocationSetting"; Value = 2; Type = "DWord"
+       Tip = "Blocks all sites from reading your physical location and removes the permission prompt. Maps and delivery sites will need the location typed manually." },
+    @{ Name = "Block Motion Sensors"; Key = "DefaultSensorsSetting"; Value = 2; Type = "DWord"
+       Tip = "Blocks all sites from reading motion and orientation sensors, a known fingerprinting vector. Rarely breaks anything on desktop." },
     @{ Name = "Force Google SafeSearch"; Key = "ForceGoogleSafeSearch"; Value = 1; Type = "DWord"
        Tip = "Forces SafeSearch on for all Google searches. Mainly useful for parental controls." },
+    @{ Name = "Filter Adult Content (SafeSites)"; Key = "SafeSitesFilterBehavior"; Value = 1; Type = "DWord"
+       Tip = "Enables the built-in SafeSites URL filter, which blocks sites classified as adult content. Mainly useful for parental controls." },
+    @{ Name = "Disable Guest Mode"; Key = "BrowserGuestModeEnabled"; Value = 0; Type = "DWord"
+       Tip = "Removes guest browsing sessions. Closes the loophole where a guest window bypasses profile-level restrictions and history." },
+    @{ Name = "Block All Extensions"; Key = "ExtensionInstallBlocklist"; Value = @("*"); Type = "List"
+       Tip = "Blocks installation of every extension and disables ones already installed. For lockdown/parental setups - a proxy or VPN extension would bypass DNS filtering." },
     @{ Name = "Disable Incognito Mode"; Key = "IncognitoModeAvailability"; Value = 1; Type = "DWord"; Group = "incognito"
        Tip = "Removes private browsing entirely - no incognito windows can be opened. Mutually exclusive with Force Incognito Mode." },
     @{ Name = "Force Incognito Mode"; Key = "IncognitoModeAvailability"; Value = 2; Type = "DWord"; Group = "incognito"
@@ -539,6 +565,14 @@ $braveFeatures = @(
 $perfFeatures = @(
     @{ Name = "Disable Background Mode"; Key = "BackgroundModeEnabled"; Value = 0; Type = "DWord"
        Tip = "Stops Brave from keeping background processes running after the last window is closed." },
+    @{ Name = "Enable Memory Saver"; Key = "HighEfficiencyModeEnabled"; Value = 1; Type = "DWord"
+       Tip = "Forces Memory Saver on: inactive tabs are discarded to free RAM and reload when you return to them." },
+    @{ Name = "Force Hardware Acceleration"; Key = "HardwareAccelerationModeEnabled"; Value = 1; Type = "DWord"
+       Tip = "Pins GPU hardware acceleration on so rendering and video decode stay off the CPU. Takes effect after a browser restart." },
+    @{ Name = "Disable Media Router (Cast)"; Key = "EnableMediaRouter"; Value = 0; Type = "DWord"
+       Tip = "Disables the Google Cast media router and its background device discovery on the local network. Takes effect after a browser restart." },
+    @{ Name = "Disable Media Recommendations"; Key = "MediaRecommendationsEnabled"; Value = 0; Type = "DWord"
+       Tip = "Disables the media history and recommendation surfaces built from what you watch." },
     @{ Name = "Disable Shopping List"; Key = "ShoppingListEnabled"; Value = 0; Type = "DWord"
        Tip = "Disables the price-tracking shopping list feature." },
     @{ Name = "Always Open PDF Externally"; Key = "AlwaysOpenPdfExternally"; Value = 1; Type = "DWord"
@@ -562,11 +596,11 @@ $perfFeatures = @(
 # ---------------------------------------------------------------------------
 # Responsive column layout
 #
-# In a single column the feature set is ~750px tall, so it is split across
+# In a single column the feature set is ~1750px tall, so it is split across
 # columns. On a display whose usable (working-area) height is less than the
 # natural two-column window, the categories reflow into THREE shorter columns
 # so the lower options and the Apply/Reset buttons stay on-screen — the
-# 720p / 768p cutoff fix. Taller displays keep the original two-column layout.
+# 720p / 768p / 1080p cutoff fix. Taller displays keep the two-column layout.
 #
 # Force a column count for testing on a normal monitor by setting
 # $env:SLIMBRAVE_COLUMNS to "2" or "3" before launching.
@@ -575,6 +609,7 @@ $perfFeatures = @(
 $categories = @(
     @{ Name = "Telemetry & Reporting";        Features = $telemetryFeatures },
     @{ Name = "Privacy & Security";           Features = $privacyFeatures },
+    @{ Name = "Permissions & Access";         Features = $accessFeatures },
     @{ Name = "Shields & Content Protection"; Features = $shieldsContentFeatures },
     @{ Name = "Brave Features";               Features = $braveFeatures },
     @{ Name = "Performance & Bloat";          Features = $perfFeatures }
@@ -583,9 +618,9 @@ $categoryByName = @{}
 foreach ($cat in $categories) { $categoryByName[$cat.Name] = $cat }
 
 # Natural height of the two-column window. If the screen's usable height is
-# below this, switch to three columns. Set a little above the actual ~995px
+# below this, switch to three columns. Set a little above the actual ~1130px
 # form so a display that only just fits two columns is not left a few px short.
-$twoColumnWindowHeight = 1000
+$twoColumnWindowHeight = 1140
 
 $columnCount = 2
 if ($env:SLIMBRAVE_COLUMNS -eq "2" -or $env:SLIMBRAVE_COLUMNS -eq "3") {
@@ -594,26 +629,27 @@ if ($env:SLIMBRAVE_COLUMNS -eq "2" -or $env:SLIMBRAVE_COLUMNS -eq "3") {
     $columnCount = 3
 }
 
-# Which categories go in each column. Three-column mode gives the tall Privacy
-# section its own column and pairs the rest so no column runs much past
-# ~525px of content (vs. ~750px in the two-column layout).
+# Which categories go in each column. Three-column mode pairs the six
+# categories so no column runs much past ~545px of content (vs. ~970px in
+# the two-column layout).
 if ($columnCount -eq 3) {
     $columnLayout = @(
-        @("Privacy & Security"),
-        @("Telemetry & Reporting", "Brave Features"),
+        @("Privacy & Security", "Telemetry & Reporting"),
+        @("Permissions & Access", "Brave Features"),
         @("Shields & Content Protection", "Performance & Bloat")
     )
 } else {
     $columnLayout = @(
-        @("Telemetry & Reporting", "Privacy & Security", "Shields & Content Protection"),
-        @("Brave Features", "Performance & Bloat")
+        @("Privacy & Security", "Permissions & Access", "Shields & Content Protection"),
+        @("Telemetry & Reporting", "Brave Features", "Performance & Bloat")
     )
 }
 
-# Three columns use slightly tighter row spacing so the window fits on the
-# short displays that trigger it; two columns keep the original metrics.
+# Three columns use tighter row spacing so the window fits on the short
+# displays that trigger it; 21px is the floor (the checkbox controls are
+# 20px tall). Two columns keep the original metrics.
 if ($columnCount -eq 3) {
-    $rowHeight = 22; $rowGap = 8;  $colStartY = 8
+    $rowHeight = 21; $rowGap = 6;  $colStartY = 6
 } else {
     $rowHeight = 25; $rowGap = 10; $colStartY = 10
 }

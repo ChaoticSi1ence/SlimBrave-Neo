@@ -329,6 +329,7 @@ CATEGORIES = [
             {"name": "Disable Autofill (Addresses)", "key": "AutofillAddressEnabled", "value": False},
             {"name": "Disable Autofill (Credit Cards)", "key": "AutofillCreditCardEnabled", "value": False},
             {"name": "Disable Password Manager", "key": "PasswordManagerEnabled", "value": False},
+            {"name": "Disable Password Leak Detection", "key": "PasswordLeakDetectionEnabled", "value": False},
             {"name": "Disable Browser Sign-in", "key": "BrowserSignin", "value": 0},
             {"name": "Enable Global Privacy Control", "key": "BraveGlobalPrivacyControlEnabled", "value": True},
             {"name": "Enable De-AMP", "key": "BraveDeAmpEnabled", "value": True},
@@ -337,8 +338,25 @@ CATEGORIES = [
             {"name": "Reduce Language Fingerprinting", "key": "BraveReduceLanguageEnabled", "value": True},
             {"name": "Disable WebRTC IP Leak", "key": "WebRtcIPHandling", "value": "disable_non_proxied_udp"},
             {"name": "Disable QUIC Protocol", "key": "QuicAllowed", "value": False},
+            {"name": "Disable Network Prediction (Prefetch)", "key": "NetworkPredictionOptions", "value": 2},
             {"name": "Block Third Party Cookies", "key": "BlockThirdPartyCookies", "value": True},
+            {"name": "Block Payment Method Probing", "key": "PaymentMethodQueryEnabled", "value": False},
+            {"name": "Disable Alternate Error Pages", "key": "AlternateErrorPagesEnabled", "value": False},
+        ],
+    },
+    {
+        # Site permissions and access lockdowns: content-setting defaults
+        # plus the escape hatches (guest, incognito, extensions) that would
+        # otherwise bypass the rest of the policy set.
+        "name": "Permissions & Access",
+        "features": [
+            {"name": "Block Web Notifications", "key": "DefaultNotificationsSetting", "value": 2},
+            {"name": "Block Location Access", "key": "DefaultGeolocationSetting", "value": 2},
+            {"name": "Block Motion Sensors", "key": "DefaultSensorsSetting", "value": 2},
             {"name": "Force Google SafeSearch", "key": "ForceGoogleSafeSearch", "value": True},
+            {"name": "Filter Adult Content (SafeSites)", "key": "SafeSitesFilterBehavior", "value": 1},
+            {"name": "Disable Guest Mode", "key": "BrowserGuestModeEnabled", "value": False},
+            {"name": "Block All Extensions", "key": "ExtensionInstallBlocklist", "value": ["*"]},
             {"name": "Disable Incognito Mode", "key": "IncognitoModeAvailability", "value": 1, "group": "incognito"},
             {"name": "Force Incognito Mode", "key": "IncognitoModeAvailability", "value": 2, "group": "incognito"},
         ],
@@ -380,6 +398,10 @@ CATEGORIES = [
         "name": "Performance & Bloat",
         "features": [
             {"name": "Disable Background Mode", "key": "BackgroundModeEnabled", "value": False},
+            {"name": "Enable Memory Saver", "key": "HighEfficiencyModeEnabled", "value": True},
+            {"name": "Force Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": True},
+            {"name": "Disable Media Router (Cast)", "key": "EnableMediaRouter", "value": False},
+            {"name": "Disable Media Recommendations", "key": "MediaRecommendationsEnabled", "value": False},
             {"name": "Disable Shopping List", "key": "ShoppingListEnabled", "value": False},
             {"name": "Always Open PDF Externally", "key": "AlwaysOpenPdfExternally", "value": True},
             {"name": "Disable Translate", "key": "TranslateEnabled", "value": False},

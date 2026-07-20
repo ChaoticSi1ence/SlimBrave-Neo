@@ -37,7 +37,7 @@ SlimBrave Neo uses Chromium enterprise managed policies to disable telemetry, bl
 
 <img src="assets/tui-screenshot.png" width="620" alt="SlimBrave Neo Linux TUI">
 
-*Interactive curses TUI. Zero dependencies, runs in any terminal.*
+*Interactive curses TUI with the Maximum Privacy preset imported. Zero dependencies, runs in any terminal.*
 
 </div>
 
@@ -131,6 +131,7 @@ Requires Administrator privileges. Hover over any option in the app for a plain-
 - Disable Safe Browsing
 - Disable Autofill (Addresses & Credit Cards)
 - Disable Password Manager
+- Disable Password Leak Detection (the online breach-list credential check)
 - Disable Browser Sign-in
 - Enable Global Privacy Control
 - Enable De-AMP (strip Google AMP wrappers)
@@ -139,8 +140,20 @@ Requires Administrator privileges. Hover over any option in the app for a plain-
 - Reduce Language Fingerprinting
 - Disable WebRTC IP Leak
 - Disable QUIC Protocol
+- Disable Network Prediction (no DNS prefetch / preconnect for links you never click)
 - Block Third Party Cookies
+- Block Payment Method Probing (sites' `canMakePayment` always answers "none saved")
+- Disable Alternate Error Pages
+
+### Permissions & Access
+Site-permission defaults plus the escape hatches (guest, incognito, extensions) that would otherwise bypass the rest of the policy set:
+- Block Web Notifications
+- Block Location Access
+- Block Motion Sensors (a fingerprinting vector)
 - Force Google SafeSearch
+- Filter Adult Content (SafeSites URL filter)
+- Disable Guest Mode (guest windows bypass profile restrictions)
+- Block All Extensions (blocks new installs and disables existing ones — lockdown/parental setups)
 - Disable / Force Incognito Mode (mutually exclusive)
 
 ### Brave Features
@@ -170,6 +183,10 @@ Pin Brave's own protection defaults as managed policy so they can't be weakened 
 
 ### Performance & Bloat
 - Disable Background Mode (Windows/Linux only — the policy doesn't exist on macOS)
+- Enable Memory Saver (discard inactive tabs to free RAM)
+- Force Hardware Acceleration (keeps rendering and video decode on the GPU; needs a restart)
+- Disable Media Router (Cast, including its background LAN device discovery; needs a restart)
+- Disable Media Recommendations
 - Disable Shopping List
 - Always Open PDF Externally
 - Disable Translate
@@ -210,38 +227,40 @@ Import/export uses the same JSON format as the Windows PowerShell version. Confi
 
 ### Maximum Privacy Preset
 - **Telemetry:** Blocks all reporting (metrics, safe browsing, URL collection, feedback).
-- **Privacy:** Disables autofill, password manager, sign-in, WebRTC leaks, QUIC, and enforces Global Privacy Control.
+- **Privacy:** Disables autofill, password manager, leak detection, sign-in, WebRTC leaks, QUIC, and network prediction; blocks payment-method probing, web notifications, location access, and motion sensors; enforces Global Privacy Control. (Location is fully blocked, not "ask" — maps and delivery sites need addresses typed manually; uncheck "Block Location Access" if that is too strict.)
 - **Brave Features:** Kills Rewards, Wallet, VPN, AI Chat, Tor, Sync, and Email Aliases.
 - **Shields:** Pins ad blocking, fingerprinting protection, strict HTTPS, capped referrers, and forget-on-close storage as managed policy.
-- **Performance:** Disables background processes, recommendations, and bloat.
+- **Performance:** Disables background processes, Cast device discovery, media recommendations, and bloat.
 - **DNS:** Left unmanaged. Forcing DoH off would hand every DNS query to your ISP in cleartext, while forcing DoH on concentrates that visibility at the DoH provider — which trade-off is right depends on who you distrust more, so the preset leaves the choice to you (set it manually in the DNS section if you have a preference).
 - **Note:** No longer forces incognito-only browsing (earlier versions set `IncognitoModeAvailability: 2`, which silently disabled history, persistent logins, and most extensions). Forget-on-close storage covers the privacy goal; the Force Incognito toggle is still available manually.
 - **Best for:** Paranoid users, journalists, activists, or anyone who wants Brave as private as possible.
 
 ### Balanced Privacy Preset
 - **Telemetry:** Blocks all tracking but keeps basic safe browsing.
-- **Privacy:** Blocks third-party cookies, enables Global Privacy Control, but allows password manager and autofill for addresses.
+- **Privacy:** Blocks third-party cookies, payment-method probing, and network prediction; enables Global Privacy Control — but allows password manager and autofill for addresses.
 - **Brave Features:** Disables Rewards, Wallet, VPN, and AI features.
-- **Performance:** Turns off background services and ads.
+- **Performance:** Turns off background services, media recommendations, and ads.
 - **DNS:** Uses automatic DoH (lets Brave choose the fastest secure DNS).
 - **Best for:** Most users who want privacy but still need convenience features.
 
 ### Performance Focused Preset
 - **Telemetry:** Blocks metrics reporting, P3A analytics, and the daily stats ping (Safe Browsing stays untouched).
-- **Brave Features:** Disables Rewards, Wallet, VPN, and AI to declutter the browser.
-- **Performance:** Kills background processes, shopping features, and promotions.
+- **Brave Features:** Disables Rewards, Wallet, VPN, AI, Speedreader, and Web Discovery to declutter the browser.
+- **Performance:** Forces Memory Saver and hardware acceleration on; kills background processes, Cast device discovery, media recommendations, shopping features, and promotions. Network prediction is deliberately left on — prefetch makes browsing faster at a small privacy cost, which is the right trade for this preset.
 - **DNS:** Automatic DoH for a balance of speed and security.
 - **Best for:** Users who want a faster, cleaner Brave without extreme privacy tweaks.
 
 ### Developer Preset
 - **Telemetry:** Blocks all reporting.
-- **Brave Features:** Disables Rewards, Wallet, and VPN but keeps developer tools.
-- **Performance:** Turns off background services and ads.
+- **Privacy:** Disables alternate error pages so you always see the real network error, never a suggestion page.
+- **Brave Features:** Disables Rewards, Wallet, and VPN but keeps developer tools, printing, spellcheck, and the built-in PDF viewer.
+- **Performance:** Turns off background services, media recommendations, and ads.
 - **DNS:** Automatic DoH (default secure DNS).
 - **Best for:** Developers who need dev tools but still want telemetry and ads disabled.
 
 ### Strict Parental Controls Preset
-- **Privacy:** Blocks incognito mode, forces Google SafeSearch, and disables sign-in.
+- **Privacy:** Blocks incognito mode **and guest mode** (a guest window would bypass every other restriction), forces Google SafeSearch plus the built-in SafeSites adult-content filter, and disables sign-in.
+- **Extensions:** Blocks all extension installs and disables existing ones — a proxy or VPN extension would bypass the DNS filter.
 - **Brave Features:** Disables Rewards, Wallet, VPN, Tor, and dev tools.
 - **DNS:** Uses custom DoH (can be set to a family-friendly DNS like Cloudflare for Families).
 - **Best for:** Parents, schools, or workplaces that need restricted browsing.

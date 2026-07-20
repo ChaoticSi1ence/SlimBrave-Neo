@@ -71,6 +71,21 @@ authoritative sources:
 | DeveloperToolsAvailability | ✅ active | int enum | 2 (= disallowed) | |
 | DnsOverHttpsMode | ✅ active | string enum | off/automatic/secure | |
 | DnsOverHttpsTemplates | ✅ active | string | URL template | only effective with mode secure/automatic |
+| PasswordLeakDetectionEnabled | ✅ active (cr79+) | bool | false | **added July 2026**; stops the online breach-list credential check |
+| NetworkPredictionOptions | ✅ active (cr38+) | int enum | 2 (= never predict) | **added July 2026**; 0 = always, 2 = never (value 1 deprecated in-source) |
+| PaymentMethodQueryEnabled | ✅ active (cr80+) | bool | false | **added July 2026**; sites' canMakePayment always answers "none saved" |
+| AlternateErrorPagesEnabled | ✅ active (cr8+) | bool | false | **added July 2026**; belt-and-braces — Brave ships the web-service error page off by default |
+| DefaultNotificationsSetting | ✅ active (cr10+) | int enum | 2 (= block all) | **added July 2026**; 1 = allow, 2 = block, 3 = ask |
+| DefaultGeolocationSetting | ✅ active (cr10+) | int enum | 2 (= block all) | **added July 2026**; 1 = allow, 2 = block, 3 = ask |
+| DefaultSensorsSetting | ✅ active (cr88+) | int enum | 2 (= block all) | **added July 2026**; motion/orientation sensors — fingerprinting vector |
+| ExtensionInstallBlocklist | ✅ active (cr86+) | list | `["*"]` | **added July 2026**; `*` blocks all installs and disables already-installed extensions |
+| SafeSitesFilterBehavior | ✅ active (cr69+) | int enum | 1 (= filter) | **added July 2026**; built-in adult-content URL filter |
+| BrowserGuestModeEnabled | ✅ active (cr38+) | bool | false | **added July 2026**; guest windows bypass profile restrictions — parental hole |
+| HighEfficiencyModeEnabled | ✅ active (cr108+) | bool | true | **added July 2026**; forces Memory Saver tab discarding on |
+| HardwareAccelerationModeEnabled | ✅ active (cr46+) | bool | true | **added July 2026**; `dynamic_refresh: false` — needs browser restart |
+| EnableMediaRouter | ✅ active (cr52+) | bool | false | **added July 2026**; disables Cast + its LAN device discovery; `dynamic_refresh: false` — needs browser restart |
+| MediaRecommendationsEnabled | ✅ active (cr87+) | bool | false | **added July 2026** |
+| PromotionalTabsEnabled | ⛔ `deprecated: true` | — | — | considered July 2026, rejected — Chromium YAML marks it deprecated. **Do not add** |
 
 ## Cross-cutting checks
 
