@@ -1,17 +1,50 @@
+# Which browser to manage. All three speak the Chromium managed-policy
+# dialect; only the registry path and vendor-specific keys differ.
+param(
+    [ValidateSet("brave", "chrome", "edge")]
+    [string] $Browser = "brave"
+)
+
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    # Carry -ExecutionPolicy Bypass into the elevated instance: the user
-    # often launches via "powershell -ExecutionPolicy Bypass -File ..." and
-    # the relaunch would otherwise revert to the machine default policy and
-    # silently fail to start.
-    Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Path)`"" -Verb RunAs
+    # Carry -ExecutionPolicy Bypass and -Browser into the elevated
+    # instance: the user often launches via "powershell -ExecutionPolicy
+    # Bypass -File ..." and the relaunch would otherwise revert to the
+    # machine default policy (and default browser) and silently fail.
+    Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Path)`" -Browser $Browser" -Verb RunAs
     exit
 }
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-$machineRegistryPath = "HKLM:\SOFTWARE\Policies\BraveSoftware\Brave"
-$userRegistryPath   = "HKCU:\SOFTWARE\Policies\BraveSoftware\Brave"
+$browserDefs = @{
+    brave = @{
+        Label = "Brave"
+        RegistryPath = "HKLM:\SOFTWARE\Policies\BraveSoftware\Brave"
+        ProcessName = "brave"
+        VendorCategory = "Brave Features"
+        PrefsRepair = $true
+    }
+    chrome = @{
+        Label = "Google Chrome"
+        RegistryPath = "HKLM:\SOFTWARE\Policies\Google\Chrome"
+        ProcessName = "chrome"
+        VendorCategory = "Chrome Features"
+        PrefsRepair = $false
+    }
+    edge = @{
+        Label = "Microsoft Edge"
+        RegistryPath = "HKLM:\SOFTWARE\Policies\Microsoft\Edge"
+        ProcessName = "msedge"
+        VendorCategory = "Edge Features"
+        PrefsRepair = $false
+    }
+}
+$browserDef = $browserDefs[$Browser]
+$browserLabel = $browserDef.Label
+
+$machineRegistryPath = $browserDef.RegistryPath
+$userRegistryPath   = $browserDef.RegistryPath -replace "^HKLM:", "HKCU:"
 $registryPath       = $machineRegistryPath
 
 Clear-Host
@@ -25,7 +58,7 @@ function Set-DnsSettings {
         [string] $dnsMode,
         [string] $dnsTemplates
     )
-    $regKey = "HKLM:\Software\Policies\BraveSoftware\Brave"
+    $regKey = $script:machineRegistryPath
     $resolvedMode = $dnsMode
 
     if ($dnsMode -eq "custom") {
@@ -163,8 +196,12 @@ function Repair-BravePrefs {
     Returns a hashtable @{ Removed = N; Running = $true/$false }.
     Safe to call when files or keys do not exist.
     #>
-    # Every Brave channel runs as brave.exe on Windows.
-    $running = ($null -ne (Get-Process brave -ErrorAction SilentlyContinue))
+    # Every channel of a browser shares one process name on Windows.
+    $running = ($null -ne (Get-Process $script:browserDef.ProcessName -ErrorAction SilentlyContinue))
+
+    if (-not $script:browserDef.PrefsRepair) {
+        return @{ Removed = 0; Running = $running }
+    }
 
     $removed = 0
     foreach ($channelDir in @('Brave-Browser', 'Brave-Browser-Beta', 'Brave-Browser-Nightly', 'Brave-Browser-Dev')) {
@@ -285,7 +322,7 @@ if ($appsUseLightTheme) {
 # ---------------------------------------------------------------------------
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "SlimBrave Neo"
+$form.Text = "SlimBrave Neo - $browserLabel"
 # Segoe UI replaces the WinForms default (8.25pt Microsoft Sans Serif) and
 # is inherited by every control that doesn't set its own font.
 $form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
@@ -440,20 +477,20 @@ function Add-FeatureCheckboxes {
 # ---------------------------------------------------------------------------
 
 $telemetryFeatures = @(
-    @{ Name = "Disable Metrics Reporting"; Key = "MetricsReportingEnabled"; Value = 0; Type = "DWord"
+    @{ Name = "Disable Metrics Reporting"; Key = "MetricsReportingEnabled"; Browsers = @("brave", "chrome"); Value = 0; Type = "DWord"
        Tip = "Stops Brave from sending anonymous usage statistics and crash reports to Brave's servers." },
-    @{ Name = "Disable Safe Browsing Reporting"; Key = "SafeBrowsingExtendedReportingEnabled"; Value = 0; Type = "DWord"
+    @{ Name = "Disable Safe Browsing Reporting"; Key = "SafeBrowsingExtendedReportingEnabled"; Browsers = @("brave", "chrome"); Value = 0; Type = "DWord"
        Tip = "Stops extended Safe Browsing reports (details about suspicious pages and downloads) from being sent to Google. Safe Browsing protection itself stays on." },
-    @{ Name = "Disable URL Data Collection"; Key = "UrlKeyedAnonymizedDataCollectionEnabled"; Value = 0; Type = "DWord"
+    @{ Name = "Disable URL Data Collection"; Key = "UrlKeyedAnonymizedDataCollectionEnabled"; Browsers = @("brave", "chrome"); Value = 0; Type = "DWord"
        Tip = "Stops URL-keyed anonymized data collection, which reports the URLs you visit to improve suggestion and safety features." },
-    @{ Name = "Disable P3A Analytics"; Key = "BraveP3AEnabled"; Value = 0; Type = "DWord"
+    @{ Name = "Disable P3A Analytics"; Key = "BraveP3AEnabled"; Browsers = @("brave"); Value = 0; Type = "DWord"
        Tip = "Disables P3A (Privacy-Preserving Product Analytics), Brave's anonymized product usage telemetry." },
-    @{ Name = "Disable Stats Ping"; Key = "BraveStatsPingEnabled"; Value = 0; Type = "DWord"
+    @{ Name = "Disable Stats Ping"; Key = "BraveStatsPingEnabled"; Browsers = @("brave"); Value = 0; Type = "DWord"
        Tip = "Stops the daily usage ping that counts this install in Brave's active-user statistics." }
 )
 
 $privacyFeatures = @(
-    @{ Name = "Disable Safe Browsing"; Key = "SafeBrowsingProtectionLevel"; Value = 0; Type = "DWord"
+    @{ Name = "Disable Safe Browsing"; Key = "SafeBrowsingProtectionLevel"; Browsers = @("brave", "chrome"); Value = 0; Type = "DWord"
        Tip = "Turns Google Safe Browsing fully off: nothing is checked against Google, but you also lose the phishing/malware warning pages. Only for users who understand the trade-off." },
     @{ Name = "Disable Autofill (Addresses)"; Key = "AutofillAddressEnabled"; Value = 0; Type = "DWord"
        Tip = "Stops Brave from saving and auto-filling street addresses in web forms." },
@@ -461,21 +498,23 @@ $privacyFeatures = @(
        Tip = "Stops Brave from saving and auto-filling credit card numbers in web forms." },
     @{ Name = "Disable Password Manager"; Key = "PasswordManagerEnabled"; Value = 0; Type = "DWord"
        Tip = "Disables the built-in password manager (no save prompts, no autofill). Recommended if you use a dedicated password manager." },
-    @{ Name = "Disable Password Leak Detection"; Key = "PasswordLeakDetectionEnabled"; Value = 0; Type = "DWord"
+    @{ Name = "Disable Password Leak Detection"; Key = "PasswordLeakDetectionEnabled"; Browsers = @("brave", "chrome"); Value = 0; Type = "DWord"
        Tip = "Stops the online check that compares your saved credentials against known breach lists. Defense in depth if you audit passwords with your own manager instead." },
     @{ Name = "Disable Browser Sign-in"; Key = "BrowserSignin"; Value = 0; Type = "DWord"
        Tip = "Prevents signing in to the browser itself with an account." },
-    @{ Name = "Enable Global Privacy Control"; Key = "BraveGlobalPrivacyControlEnabled"; Value = 1; Type = "DWord"
+    @{ Name = "Disable Sync"; Key = "SyncDisabled"; Value = 1; Type = "DWord"
+       Tip = "Disables browser sync, which shares bookmarks, history, and settings across devices." },
+    @{ Name = "Enable Global Privacy Control"; Key = "BraveGlobalPrivacyControlEnabled"; Browsers = @("brave"); Value = 1; Type = "DWord"
        Tip = "Sends the GPC signal with every request, telling sites not to sell or share your data. Legally binding in some regions (e.g. under CCPA)." },
-    @{ Name = "Enable De-AMP"; Key = "BraveDeAmpEnabled"; Value = 1; Type = "DWord"
+    @{ Name = "Enable De-AMP"; Key = "BraveDeAmpEnabled"; Browsers = @("brave"); Value = 1; Type = "DWord"
        Tip = "Skips Google AMP pages and loads the publisher's original page instead." },
-    @{ Name = "Enable Debouncing"; Key = "BraveDebouncingEnabled"; Value = 1; Type = "DWord"
+    @{ Name = "Enable Debouncing"; Key = "BraveDebouncingEnabled"; Browsers = @("brave"); Value = 1; Type = "DWord"
        Tip = "Skips known tracking redirects and navigates straight to the final destination URL." },
-    @{ Name = "Strip Tracking URL Parameters"; Key = "BraveTrackingQueryParametersFilteringEnabled"; Value = 1; Type = "DWord"
+    @{ Name = "Strip Tracking URL Parameters"; Key = "BraveTrackingQueryParametersFilteringEnabled"; Browsers = @("brave"); Value = 1; Type = "DWord"
        Tip = "Removes known tracking parameters (fbclid, gclid, mc_eid, ...) from URLs before they load." },
-    @{ Name = "Reduce Language Fingerprinting"; Key = "BraveReduceLanguageEnabled"; Value = 1; Type = "DWord"
+    @{ Name = "Reduce Language Fingerprinting"; Key = "BraveReduceLanguageEnabled"; Browsers = @("brave"); Value = 1; Type = "DWord"
        Tip = "Reports a generic language configuration to sites, making your browser harder to fingerprint." },
-    @{ Name = "Disable WebRTC IP Leak"; Key = "WebRtcIPHandling"; Value = "disable_non_proxied_udp"; Type = "String"
+    @{ Name = "Disable WebRTC IP Leak"; Key = "WebRtcIPHandling"; Browsers = @("brave", "chrome"); Value = "disable_non_proxied_udp"; Type = "String"
        Tip = "Restricts WebRTC to proxied connections so video/voice calls can't expose your real IP address behind a VPN or proxy." },
     @{ Name = "Disable QUIC Protocol"; Key = "QuicAllowed"; Value = 0; Type = "DWord"
        Tip = "Disables the QUIC (HTTP/3) transport so all traffic uses TCP. Useful when a firewall or filter can't inspect QUIC; may slightly slow some Google sites." },
@@ -501,15 +540,15 @@ $accessFeatures = @(
        Tip = "Blocks all sites from reading motion and orientation sensors, a known fingerprinting vector. Rarely breaks anything on desktop." },
     @{ Name = "Force Google SafeSearch"; Key = "ForceGoogleSafeSearch"; Value = 1; Type = "DWord"
        Tip = "Forces SafeSearch on for all Google searches. Mainly useful for parental controls." },
-    @{ Name = "Filter Adult Content (SafeSites)"; Key = "SafeSitesFilterBehavior"; Value = 1; Type = "DWord"
+    @{ Name = "Filter Adult Content (SafeSites)"; Key = "SafeSitesFilterBehavior"; Browsers = @("brave", "chrome"); Value = 1; Type = "DWord"
        Tip = "Enables the built-in SafeSites URL filter, which blocks sites classified as adult content. Mainly useful for parental controls." },
     @{ Name = "Disable Guest Mode"; Key = "BrowserGuestModeEnabled"; Value = 0; Type = "DWord"
        Tip = "Removes guest browsing sessions. Closes the loophole where a guest window bypasses profile-level restrictions and history." },
     @{ Name = "Block All Extensions"; Key = "ExtensionInstallBlocklist"; Value = @("*"); Type = "List"
        Tip = "Blocks installation of every extension and disables ones already installed. For lockdown/parental setups - a proxy or VPN extension would bypass DNS filtering." },
-    @{ Name = "Disable Incognito Mode"; Key = "IncognitoModeAvailability"; Value = 1; Type = "DWord"; Group = "incognito"
+    @{ Name = "Disable Incognito Mode"; Key = "IncognitoModeAvailability"; Browsers = @("brave", "chrome"); Value = 1; Type = "DWord"; Group = "incognito"
        Tip = "Removes private browsing entirely - no incognito windows can be opened. Mutually exclusive with Force Incognito Mode." },
-    @{ Name = "Force Incognito Mode"; Key = "IncognitoModeAvailability"; Value = 2; Type = "DWord"; Group = "incognito"
+    @{ Name = "Force Incognito Mode"; Key = "IncognitoModeAvailability"; Browsers = @("brave", "chrome"); Value = 2; Type = "DWord"; Group = "incognito"
        Tip = "Every window opens in incognito: no history, and logins and most extensions stop persisting. Mutually exclusive with Disable Incognito Mode." }
 )
 
@@ -556,24 +595,87 @@ $braveFeatures = @(
        Tip = "Disables Speedreader, the distraction-free article reading mode." },
     @{ Name = "Disable Tor"; Key = "TorDisabled"; Value = 1; Type = "DWord"
        Tip = "Removes the 'New private window with Tor' option." },
-    @{ Name = "Disable Sync"; Key = "SyncDisabled"; Value = 1; Type = "DWord"
-       Tip = "Disables Brave Sync, which shares bookmarks, history, and settings across devices via a sync chain." },
     @{ Name = "Disable Email Aliases"; Key = "EmailAliasesEnabled"; Value = 0; Type = "DWord"
        Tip = "Disables the Email Aliases feature for generating throwaway email addresses." }
+)
+
+# Chrome-only keys, verified against Chromium policy_definitions YAML
+# (see AUDIT.md). The four Privacy Sandbox policies were considered and
+# rejected: Chromium marks them deprecated.
+$chromeFeatures = @(
+    @{ Name = "Disable Feedback Collection"; Key = "UserFeedbackAllowed"; Value = 0; Type = "DWord"
+       Tip = "Blocks the built-in 'Report an issue' feedback uploads to Google." },
+    @{ Name = "Disable Chrome Labs"; Key = "BrowserLabsEnabled"; Value = 0; Type = "DWord"
+       Tip = "Removes the Chrome Labs beaker icon and its experimental-feature promos from the toolbar." },
+    @{ Name = "Disable Search Side Panel"; Key = "GoogleSearchSidePanelEnabled"; Value = 0; Type = "DWord"
+       Tip = "Disables the Google Search side panel companion on all web pages." },
+    @{ Name = "Disable Gemini Integrations"; Key = "GeminiSettings"; Value = 1; Type = "DWord"
+       Tip = "Turns off Gemini AI integrations in Chrome (requires Chrome 137+)." },
+    @{ Name = "Restrict Field Trials (Critical Only)"; Key = "ChromeVariations"; Value = 1; Type = "DWord"
+       Tip = "Stops Google from A/B-testing experimental behavior changes on this browser; only variations carrying critical security fixes still apply." }
+)
+
+# Edge-only keys, verified against Microsoft's per-policy Edge
+# documentation (see AUDIT.md). Includes Edge's renamed equivalents of
+# Chromium policies (InPrivate, WebRTC, SmartScreen, Password Monitor,
+# Efficiency Mode). MetricsReportingEnabled, PromotionalTabsEnabled,
+# EdgeFollowEnabled, and EdgeWalletEtreeEnabled were considered and
+# rejected: Microsoft marks them obsolete or deprecated.
+$edgeFeatures = @(
+    @{ Name = "Minimize Diagnostic Data"; Key = "DiagnosticData"; Value = 0; Type = "DWord"
+       Tip = "Sets diagnostic data collection about browser usage to Off, the minimum Edge allows via policy." },
+    @{ Name = "Disable Personalization Reporting"; Key = "PersonalizationReportingEnabled"; Value = 0; Type = "DWord"
+       Tip = "Stops Microsoft from using your browsing history to personalize ads, search, and news." },
+    @{ Name = "Disable Feedback Collection"; Key = "UserFeedbackAllowed"; Value = 0; Type = "DWord"
+       Tip = "Blocks the built-in 'Send feedback' uploads to Microsoft." },
+    @{ Name = "Disable Sidebar & Copilot Hub"; Key = "HubsSidebarEnabled"; Value = 0; Type = "DWord"
+       Tip = "Removes the sidebar rail, including the Copilot hub and its app panels." },
+    @{ Name = "Disable Collections"; Key = "EdgeCollectionsEnabled"; Value = 0; Type = "DWord"
+       Tip = "Removes the Collections feature from the toolbar and menus." },
+    @{ Name = "Disable Shopping Assistant"; Key = "EdgeShoppingAssistantEnabled"; Value = 0; Type = "DWord"
+       Tip = "Disables coupons, price comparison, and cashback prompts while shopping." },
+    @{ Name = "Disable Microsoft Rewards"; Key = "ShowMicrosoftRewards"; Value = 0; Type = "DWord"
+       Tip = "Hides Microsoft Rewards experiences and stops related tracking." },
+    @{ Name = "Disable Wallet Checkout"; Key = "EdgeWalletCheckoutEnabled"; Value = 0; Type = "DWord"
+       Tip = "Disables the Microsoft Wallet express-checkout overlay on shopping sites." },
+    @{ Name = "Disable New Tab MSN Feed"; Key = "NewTabPageContentEnabled"; Value = 0; Type = "DWord"
+       Tip = "Removes the MSN news feed and sponsored content from the new tab page." },
+    @{ Name = "Disable Asset Delivery Service"; Key = "EdgeAssetDeliveryServiceEnabled"; Value = 0; Type = "DWord"
+       Tip = "Stops Edge from downloading extra feature payloads and experiments from Microsoft's asset delivery service." },
+    @{ Name = "Enable Sleeping Tabs"; Key = "SleepingTabsEnabled"; Value = 1; Type = "DWord"
+       Tip = "Forces sleeping tabs on: background tabs release memory and CPU after inactivity." },
+    @{ Name = "Enable Efficiency Mode"; Key = "EfficiencyModeEnabled"; Value = 1; Type = "DWord"
+       Tip = "Forces efficiency mode on to reduce CPU and battery use." },
+    @{ Name = "Disable Startup Boost"; Key = "StartupBoostEnabled"; Value = 0; Type = "DWord"
+       Tip = "Stops Edge processes from pre-launching at Windows sign-in and staying resident after close." },
+    @{ Name = "Disable Spotlight Recommendations"; Key = "SpotlightExperiencesAndRecommendationsEnabled"; Value = 0; Type = "DWord"
+       Tip = "Turns off Windows Spotlight tips and Microsoft feature recommendations inside Edge." },
+    @{ Name = "Disable SmartScreen"; Key = "SmartScreenEnabled"; Value = 0; Type = "DWord"
+       Tip = "Turns Microsoft Defender SmartScreen fully off: no URL or download reputation checks are sent to Microsoft, but you also lose the phishing/malware warnings. Only for users who understand the trade-off." },
+    @{ Name = "Disable Password Monitor"; Key = "PasswordMonitorAllowed"; Value = 0; Type = "DWord"
+       Tip = "Stops the online check that compares your saved credentials against known breach lists." },
+    @{ Name = "Disable WebRTC IP Leak (Edge)"; Key = "WebRtcLocalhostIpHandling"; Value = "disable_non_proxied_udp"; Type = "String"
+       Tip = "Restricts WebRTC to proxied connections so video/voice calls can't expose your real IP address behind a VPN or proxy." },
+    @{ Name = "Force Bing SafeSearch (Strict)"; Key = "ForceBingSafeSearch"; Value = 2; Type = "DWord"
+       Tip = "Forces strict SafeSearch for all Bing searches. Mainly useful for parental controls." },
+    @{ Name = "Disable InPrivate Mode"; Key = "InPrivateModeAvailability"; Value = 1; Type = "DWord"; Group = "incognito"
+       Tip = "Removes InPrivate browsing entirely. Mutually exclusive with Force InPrivate Mode." },
+    @{ Name = "Force InPrivate Mode"; Key = "InPrivateModeAvailability"; Value = 2; Type = "DWord"; Group = "incognito"
+       Tip = "Every window opens InPrivate: no history, and logins stop persisting. Mutually exclusive with Disable InPrivate Mode." }
 )
 
 $perfFeatures = @(
     @{ Name = "Disable Background Mode"; Key = "BackgroundModeEnabled"; Value = 0; Type = "DWord"
        Tip = "Stops Brave from keeping background processes running after the last window is closed." },
-    @{ Name = "Enable Memory Saver"; Key = "HighEfficiencyModeEnabled"; Value = 1; Type = "DWord"
+    @{ Name = "Enable Memory Saver"; Key = "HighEfficiencyModeEnabled"; Browsers = @("brave", "chrome"); Value = 1; Type = "DWord"
        Tip = "Forces Memory Saver on: inactive tabs are discarded to free RAM and reload when you return to them." },
     @{ Name = "Force Hardware Acceleration"; Key = "HardwareAccelerationModeEnabled"; Value = 1; Type = "DWord"
        Tip = "Pins GPU hardware acceleration on so rendering and video decode stay off the CPU. Takes effect after a browser restart." },
     @{ Name = "Disable Media Router (Cast)"; Key = "EnableMediaRouter"; Value = 0; Type = "DWord"
        Tip = "Disables the Google Cast media router and its background device discovery on the local network. Takes effect after a browser restart." },
-    @{ Name = "Disable Media Recommendations"; Key = "MediaRecommendationsEnabled"; Value = 0; Type = "DWord"
+    @{ Name = "Disable Media Recommendations"; Key = "MediaRecommendationsEnabled"; Browsers = @("brave", "chrome"); Value = 0; Type = "DWord"
        Tip = "Disables the media history and recommendation surfaces built from what you watch." },
-    @{ Name = "Disable Shopping List"; Key = "ShoppingListEnabled"; Value = 0; Type = "DWord"
+    @{ Name = "Disable Shopping List"; Key = "ShoppingListEnabled"; Browsers = @("brave", "chrome"); Value = 0; Type = "DWord"
        Tip = "Disables the price-tracking shopping list feature." },
     @{ Name = "Always Open PDF Externally"; Key = "AlwaysOpenPdfExternally"; Value = 1; Type = "DWord"
        Tip = "Downloads PDF files and opens them in your system PDF viewer instead of the built-in viewer." },
@@ -589,7 +691,7 @@ $perfFeatures = @(
        Tip = "Stops Brave from asking to become your default browser." },
     @{ Name = "Disable Developer Tools"; Key = "DeveloperToolsAvailability"; Value = 2; Type = "DWord"
        Tip = "Blocks DevTools (F12) and extension debugging everywhere. Don't enable this if you do web development." },
-    @{ Name = "Disable Wayback Machine"; Key = "BraveWaybackMachineEnabled"; Value = 0; Type = "DWord"
+    @{ Name = "Disable Wayback Machine"; Key = "BraveWaybackMachineEnabled"; Browsers = @("brave"); Value = 0; Type = "DWord"
        Tip = "Stops Brave from offering an archive.org snapshot when a page returns 404." }
 )
 
@@ -606,14 +708,33 @@ $perfFeatures = @(
 # $env:SLIMBRAVE_COLUMNS to "2" or "3" before launching.
 # ---------------------------------------------------------------------------
 
-$categories = @(
+$vendorFeatureSets = @{
+    brave  = $braveFeatures
+    chrome = $chromeFeatures
+    edge   = $edgeFeatures
+}
+
+# Feature rows carry an optional Browsers list restricting them to a
+# subset; untagged rows apply to every browser. Categories that filter
+# down to zero rows (e.g. Telemetry & Reporting on Edge, which replaces
+# every Chromium telemetry key with its own) are dropped entirely.
+$allCategories = @(
     @{ Name = "Telemetry & Reporting";        Features = $telemetryFeatures },
     @{ Name = "Privacy & Security";           Features = $privacyFeatures },
     @{ Name = "Permissions & Access";         Features = $accessFeatures },
-    @{ Name = "Shields & Content Protection"; Features = $shieldsContentFeatures },
-    @{ Name = "Brave Features";               Features = $braveFeatures },
+    @{ Name = "Shields & Content Protection"; Features = $shieldsContentFeatures; Browsers = @("brave") },
+    @{ Name = $browserDef.VendorCategory;     Features = $vendorFeatureSets[$Browser] },
     @{ Name = "Performance & Bloat";          Features = $perfFeatures }
 )
+$categories = @()
+foreach ($cat in $allCategories) {
+    if ($cat.Browsers -and $cat.Browsers -notcontains $Browser) { continue }
+    $feats = @($cat.Features | Where-Object {
+        -not $_.Browsers -or $_.Browsers -contains $Browser
+    })
+    if ($feats.Count -eq 0) { continue }
+    $categories += @{ Name = $cat.Name; Features = $feats }
+}
 $categoryByName = @{}
 foreach ($cat in $categories) { $categoryByName[$cat.Name] = $cat }
 
@@ -635,13 +756,13 @@ if ($env:SLIMBRAVE_COLUMNS -eq "2" -or $env:SLIMBRAVE_COLUMNS -eq "3") {
 if ($columnCount -eq 3) {
     $columnLayout = @(
         @("Privacy & Security", "Telemetry & Reporting"),
-        @("Permissions & Access", "Brave Features"),
+        @("Permissions & Access", $browserDef.VendorCategory),
         @("Shields & Content Protection", "Performance & Bloat")
     )
 } else {
     $columnLayout = @(
         @("Privacy & Security", "Permissions & Access", "Shields & Content Protection"),
-        @("Telemetry & Reporting", "Brave Features", "Performance & Bloat")
+        @("Telemetry & Reporting", $browserDef.VendorCategory, "Performance & Bloat")
     )
 }
 
@@ -677,6 +798,9 @@ for ($col = 0; $col -lt $columnLayout.Count; $col++) {
 
     $y = $colStartY
     foreach ($catName in $columnLayout[$col]) {
+        # Categories can be absent for the selected browser (dropped as
+        # empty after browser filtering, e.g. Shields on Chrome/Edge).
+        if (-not $categoryByName.ContainsKey($catName)) { continue }
         $category = $categoryByName[$catName]
         Add-SectionLabel $panel $category.Name $y
         $y += $rowHeight
@@ -820,7 +944,7 @@ $exportButton = New-ActionButton "Export Settings" 20 $theme.ExportText `
 $importButton = New-ActionButton "Import Settings" 213 $theme.ImportText `
     "Load selections from a JSON file or one of the bundled presets. Nothing is written until you click Apply Settings."
 $saveButton = New-ActionButton "Apply Settings" 407 $theme.ApplyText `
-    "Write every checked policy to the registry and remove unchecked ones. Restart Brave (close all brave.exe processes) for changes to take effect."
+    "Write every checked policy to the registry and remove unchecked ones. Restart $browserLabel (close all $($browserDef.ProcessName).exe processes) for changes to take effect."
 $resetButton = New-ActionButton "Reset All Settings" 600 $theme.ResetText `
     "Delete ALL Brave policies from machine and user scope - including any set by other tools - and scrub leaked Shields entries from your Brave profiles."
 
@@ -923,13 +1047,14 @@ $saveButton.Add_Click({
     # exceptions into the user profile that survive policy removal).
     $repair = Repair-BravePrefs
 
-    $msg = "Settings applied successfully! Restart Brave to see changes."
+    $procExe = "$($browserDef.ProcessName).exe"
+    $msg = "Settings applied successfully! Restart $browserLabel to see changes."
     if ($repair.Removed -gt 0) {
         $plural = if ($repair.Removed -ne 1) { "s" } else { "" }
-        $msg = "Settings applied. Cleaned $($repair.Removed) leaked profile pref$plural. Restart Brave to see changes."
+        $msg = "Settings applied. Cleaned $($repair.Removed) leaked profile pref$plural. Restart $browserLabel to see changes."
     }
     if ($repair.Running) {
-        $msg += "`n`nBrave is running. Fully close it (taskkill /IM brave.exe /F or end all brave.exe in Task Manager) before reopening, or the changes may not stick."
+        $msg += "`n`n$browserLabel is running. Fully close it (taskkill /IM $procExe /F or end all $procExe in Task Manager) before reopening, or the changes may not stick."
     }
 
     [System.Windows.Forms.MessageBox]::Show(
@@ -946,7 +1071,7 @@ $saveButton.Add_Click({
 
 function Reset-AllSettings {
     $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "Warning: This will erase ALL Brave policy settings and restore them to their default state. Do you wish to continue?",
+        "Warning: This will erase ALL $browserLabel policy settings and restore them to their default state. Do you wish to continue?",
         "Confirm SlimBrave Neo Reset",
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Warning
@@ -973,7 +1098,7 @@ function Reset-AllSettings {
                 $msg += "`n`nAlso cleaned $($repair.Removed) leaked profile pref$plural that previous SlimBrave versions wrote to your Brave profile."
             }
             if ($repair.Running) {
-                $msg += "`n`nBrave is running. Fully close it (Task Manager: end all brave.exe) before reopening for the reset to take effect."
+                $msg += "`n`n$browserLabel is running. Fully close it (Task Manager: end all $($browserDef.ProcessName).exe) before reopening for the reset to take effect."
             }
 
             [System.Windows.Forms.MessageBox]::Show(
@@ -1037,6 +1162,7 @@ $exportButton.Add_Click({
         # (on any platform) lands back on "unmanaged" instead of forcing a
         # managed DNS policy. The template only matters for custom/secure.
         $settingsToExport = [ordered]@{
+            Browser  = $Browser
             Features = $featureMap
         }
         $dnsMode = $dnsDropdown.SelectedItem
@@ -1081,6 +1207,17 @@ $importButton.Add_Click({
     if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         try {
             $importedSettings = Get-Content -Path $openFileDialog.FileName -Raw | ConvertFrom-Json
+
+            $declared = "$($importedSettings.Browser)".ToLower()
+            if ($declared -and $declared -ne $Browser) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "This config targets '$declared' but SlimBrave Neo is managing '$Browser'.`nRelaunch with:  .\SlimBrave.ps1 -Browser $declared",
+                    "Wrong Browser",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning
+                )
+                return
+            }
 
             # Uncheck everything first
             foreach ($checkbox in $allFeatures) {

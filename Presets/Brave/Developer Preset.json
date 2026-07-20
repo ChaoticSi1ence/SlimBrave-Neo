@@ -1,4 +1,5 @@
 {
+    "Browser": "brave",
     "Features": {
         "MetricsReportingEnabled": false,
         "SafeBrowsingExtendedReportingEnabled": false,

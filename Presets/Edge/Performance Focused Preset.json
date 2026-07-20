@@ -1,0 +1,19 @@
+{
+    "Browser": "edge",
+    "Features": {
+        "DiagnosticData": 0,
+        "SleepingTabsEnabled": true,
+        "EfficiencyModeEnabled": true,
+        "HardwareAccelerationModeEnabled": true,
+        "StartupBoostEnabled": false,
+        "BackgroundModeEnabled": false,
+        "NewTabPageContentEnabled": false,
+        "HubsSidebarEnabled": false,
+        "EdgeCollectionsEnabled": false,
+        "EdgeShoppingAssistantEnabled": false,
+        "EdgeAssetDeliveryServiceEnabled": false,
+        "EnableMediaRouter": false,
+        "DefaultBrowserSettingEnabled": false
+    },
+    "DnsMode": "automatic"
+}

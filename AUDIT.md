@@ -87,6 +87,42 @@ authoritative sources:
 | MediaRecommendationsEnabled | ✅ active (cr87+) | bool | false | **added July 2026** |
 | PromotionalTabsEnabled | ⛔ `deprecated: true` | — | — | considered July 2026, rejected — Chromium YAML marks it deprecated. **Do not add** |
 
+## Chrome-specific keys (July 2026 — multi-browser support)
+
+Source: same Chromium policy_definitions YAML as above. These appear only in the "Chrome Features" category.
+
+| Key | Status | Type | Project value | Notes |
+|---|---|---|---|---|
+| UserFeedbackAllowed | ✅ active (cr77+) | bool | false | also valid on Edge (documented separately by Microsoft) |
+| BrowserLabsEnabled | ✅ active (cr89+) | bool | false | |
+| GoogleSearchSidePanelEnabled | ✅ active (cr115+) | bool | false | |
+| GeminiSettings | ✅ active (cr137+) | int enum | 1 (= disable) | `supported_on: chrome.win, chrome.mac` only — **absent from the Linux catalog** |
+| ChromeVariations | ✅ active (cr83+) | int enum | 1 (= critical fixes only) | 2 (= disable all) deliberately not used: it also drops security-critical variation killswitches |
+| PrivacySandboxPromptEnabled / AdTopics / SiteEnabledAds / AdMeasurement | ⛔ all `deprecated: true` | — | — | considered and rejected — Google sunset Privacy Sandbox; **do not add** |
+| LensOverlaySettings | ⛔ `deprecated: true` | — | — | considered and rejected |
+
+## Edge keys (July 2026 — multi-browser support)
+
+Source: Microsoft's per-policy Edge documentation (`learn.microsoft.com/deployedge/microsoft-edge-policies/<key>`). Chromium YAML does not cover Edge — Microsoft maintains a separate policy set that renames several Chromium keys. **Edge is Windows + macOS only:** the docs list no Linux support per policy, so no Linux Edge catalog exists to audit.
+
+Renamed equivalents (the Chromium originals are excluded from the Edge catalog):
+
+| Chromium key (excluded) | Edge key (used) | Project value |
+|---|---|---|
+| MetricsReportingEnabled (obsolete in Edge 89) | DiagnosticData | 0 (= off) |
+| IncognitoModeAvailability | InPrivateModeAvailability | 1 / 2 (grouped) |
+| WebRtcIPHandling | WebRtcLocalhostIpHandling | disable_non_proxied_udp |
+| PasswordLeakDetectionEnabled | PasswordMonitorAllowed | false |
+| SafeBrowsingProtectionLevel / SafeBrowsingExtendedReportingEnabled | SmartScreenEnabled | false (opt-in toggle, like Disable Safe Browsing) |
+| HighEfficiencyModeEnabled | EfficiencyModeEnabled (≥106) | true |
+| ShoppingListEnabled | EdgeShoppingAssistantEnabled | false |
+
+Also excluded from Edge (no equivalent): UrlKeyedAnonymizedDataCollectionEnabled, SafeSitesFilterBehavior, MediaRecommendationsEnabled (all 404 in Microsoft's policy reference).
+
+Edge-only keys, all ✅ active: PersonalizationReportingEnabled (false), UserFeedbackAllowed (false), HubsSidebarEnabled (false; the *recommended* variant is obsolete, the mandatory policy is not), EdgeCollectionsEnabled (false), ShowMicrosoftRewards (false), EdgeWalletCheckoutEnabled (false), NewTabPageContentEnabled (false), EdgeAssetDeliveryServiceEnabled (false), SleepingTabsEnabled (true), ForceBingSafeSearch (2 = strict), StartupBoostEnabled (false, **Windows only**), SpotlightExperiencesAndRecommendationsEnabled (false, **Windows only**).
+
+Rejected as obsolete/deprecated by Microsoft: PromotionalTabsEnabled (Edge's own copy — "will become obsolete"), EdgeFollowEnabled (obsolete after 126), EdgeWalletEtreeEnabled (deprecated). **Do not add.**
+
 ## Cross-cutting checks
 
 - **Windows registry path** — `HKLM:\SOFTWARE\Policies\BraveSoftware\Brave` confirmed correct against Brave's official Group Policy documentation (`BraveSoftware\Brave-Browser` is the *install* dir name, not the policy path).
@@ -95,6 +131,6 @@ authoritative sources:
 
 ## Re-audit procedure
 
-1. Diff the key list in each script against the two YAML directories above.
-2. For any key, fetch `<dir>/<Key>.yaml` and check `deprecated:` and `supported_on:`.
-3. Treat brave-core/Chromium source as the tiebreaker over support articles and third-party guides — the docs lag the source.
+1. Diff the key list in each script against the two YAML directories above (Brave/Chromium keys) and Microsoft's per-policy pages (Edge keys).
+2. For any Chromium key, fetch `<dir>/<Key>.yaml` and check `deprecated:` and `supported_on:`. For any Edge key, fetch `learn.microsoft.com/deployedge/microsoft-edge-policies/<key>` and check the obsolete banner and "Supported versions".
+3. Treat brave-core/Chromium source (and, for Edge, Microsoft's policy reference) as the tiebreaker over support articles and third-party guides — the docs lag the source.

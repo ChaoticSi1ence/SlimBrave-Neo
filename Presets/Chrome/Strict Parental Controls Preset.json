@@ -1,0 +1,19 @@
+{
+    "Browser": "chrome",
+    "Features": {
+        "MetricsReportingEnabled": false,
+        "IncognitoModeAvailability": 1,
+        "BrowserGuestModeEnabled": false,
+        "ForceGoogleSafeSearch": true,
+        "SafeSitesFilterBehavior": 1,
+        "ExtensionInstallBlocklist": [
+            "*"
+        ],
+        "BrowserSignin": 0,
+        "SyncDisabled": true,
+        "GeminiSettings": 1,
+        "DeveloperToolsAvailability": 2
+    },
+    "DnsMode": "custom",
+    "DnsTemplates": "https://family.cloudflare-dns.com/dns-query"
+}

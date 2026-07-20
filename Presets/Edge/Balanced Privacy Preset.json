@@ -1,0 +1,21 @@
+{
+    "Browser": "edge",
+    "Features": {
+        "DiagnosticData": 0,
+        "PersonalizationReportingEnabled": false,
+        "UserFeedbackAllowed": false,
+        "AutofillCreditCardEnabled": false,
+        "NetworkPredictionOptions": 2,
+        "BlockThirdPartyCookies": true,
+        "PaymentMethodQueryEnabled": false,
+        "AlternateErrorPagesEnabled": false,
+        "HubsSidebarEnabled": false,
+        "EdgeShoppingAssistantEnabled": false,
+        "ShowMicrosoftRewards": false,
+        "EdgeWalletCheckoutEnabled": false,
+        "NewTabPageContentEnabled": false,
+        "BackgroundModeEnabled": false,
+        "DefaultBrowserSettingEnabled": false
+    },
+    "DnsMode": "automatic"
+}

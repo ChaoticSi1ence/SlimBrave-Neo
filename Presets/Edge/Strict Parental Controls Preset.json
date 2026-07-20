@@ -1,0 +1,18 @@
+{
+    "Browser": "edge",
+    "Features": {
+        "DiagnosticData": 0,
+        "InPrivateModeAvailability": 1,
+        "BrowserGuestModeEnabled": false,
+        "ForceGoogleSafeSearch": true,
+        "ForceBingSafeSearch": 2,
+        "ExtensionInstallBlocklist": [
+            "*"
+        ],
+        "BrowserSignin": 0,
+        "SyncDisabled": true,
+        "DeveloperToolsAvailability": 2
+    },
+    "DnsMode": "custom",
+    "DnsTemplates": "https://family.cloudflare-dns.com/dns-query"
+}

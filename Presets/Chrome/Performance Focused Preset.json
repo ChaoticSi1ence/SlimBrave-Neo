@@ -1,0 +1,18 @@
+{
+    "Browser": "chrome",
+    "Features": {
+        "MetricsReportingEnabled": false,
+        "HighEfficiencyModeEnabled": true,
+        "HardwareAccelerationModeEnabled": true,
+        "EnableMediaRouter": false,
+        "MediaRecommendationsEnabled": false,
+        "BackgroundModeEnabled": false,
+        "ShoppingListEnabled": false,
+        "BrowserLabsEnabled": false,
+        "GoogleSearchSidePanelEnabled": false,
+        "GeminiSettings": 1,
+        "UserFeedbackAllowed": false,
+        "DefaultBrowserSettingEnabled": false
+    },
+    "DnsMode": "automatic"
+}

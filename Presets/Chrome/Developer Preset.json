@@ -1,0 +1,15 @@
+{
+    "Browser": "chrome",
+    "Features": {
+        "MetricsReportingEnabled": false,
+        "SafeBrowsingExtendedReportingEnabled": false,
+        "UrlKeyedAnonymizedDataCollectionEnabled": false,
+        "UserFeedbackAllowed": false,
+        "AlternateErrorPagesEnabled": false,
+        "BackgroundModeEnabled": false,
+        "MediaRecommendationsEnabled": false,
+        "ShoppingListEnabled": false,
+        "DefaultBrowserSettingEnabled": false
+    },
+    "DnsMode": "automatic"
+}

@@ -1,10 +1,13 @@
 {
+    "Browser": "brave",
     "Features": {
         "BraveP3AEnabled": false,
         "BraveStatsPingEnabled": false,
         "IncognitoModeAvailability": 1,
         "BrowserGuestModeEnabled": false,
-        "ExtensionInstallBlocklist": ["*"],
+        "ExtensionInstallBlocklist": [
+            "*"
+        ],
         "ForceGoogleSafeSearch": true,
         "SafeSitesFilterBehavior": 1,
         "BrowserSignin": 0,

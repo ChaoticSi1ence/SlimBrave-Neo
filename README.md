@@ -4,7 +4,7 @@
 
 <img src="https://github.com/user-attachments/assets/3e90a996-a74a-4ca1-bea6-0869275bab58" width="160" height="240">
 
-**Debloat and harden Brave Browser on Linux, macOS, and Windows.**
+**Debloat and harden Brave, Google Chrome, and Microsoft Edge on Linux, macOS, and Windows.**
 
 [![Python 3](https://img.shields.io/badge/Python_3-stdlib_only-3776AB?logo=python&logoColor=white)](https://python.org)
 [![No Dependencies](https://img.shields.io/badge/Dependencies-None-brightgreen)]()
@@ -13,7 +13,7 @@
 [![macOS](https://img.shields.io/badge/macOS-Supported-000000?logo=apple&logoColor=white)]()
 [![Windows](https://img.shields.io/badge/Windows-Supported-0078D6?logo=windows&logoColor=white)]()
 
-SlimBrave Neo uses Chromium enterprise managed policies to disable telemetry, bloat, and unwanted features in Brave Browser. No browser extensions, no hacks, just clean policy enforcement that Brave respects natively.
+SlimBrave Neo uses Chromium enterprise managed policies to disable telemetry, bloat, and unwanted features in Brave Browser — and in Google Chrome and Microsoft Edge too. No browser extensions, no hacks, just clean policy enforcement the browsers respect natively. Brave stays the default; pass `--browser chrome` / `--browser edge` (or `-Browser` on Windows) to manage the others. Edge is supported on Windows and macOS only: Microsoft's policy documentation doesn't cover Edge on Linux, so there is nothing authoritative to audit a Linux Edge catalog against.
 
 </div>
 
@@ -58,9 +58,13 @@ That's it. No `pip install`, no `jq`, no external dependencies. Just Python 3 an
 **CLI mode (non-interactive):**
 
 ```bash
-sudo python3 slimbrave-linux.py --import "./Presets/Maximum Privacy Preset.json"
+sudo python3 slimbrave-linux.py --import "./Presets/Brave/Maximum Privacy Preset.json"
 sudo python3 slimbrave-linux.py --export ~/SlimBraveNeoSettings.json
 sudo python3 slimbrave-linux.py --reset
+
+# Manage Google Chrome instead of Brave (policies at /etc/opt/chrome):
+sudo python3 slimbrave-linux.py --browser chrome
+sudo python3 slimbrave-linux.py --browser chrome --import "./Presets/Chrome/Maximum Privacy Preset.json"
 ```
 
 **Multiple Brave channels (Stable / Beta / Nightly):** Brave hardcodes the managed-policy directory to `/etc/brave/policies` for every channel, so a single policy file applies to all of them — no per-channel selector is needed. If multiple channels are installed, leaked Shields exceptions are scrubbed from each channel's user-data directory and "Brave is running" detection covers all installed channels.
@@ -89,9 +93,13 @@ When `--persist` is omitted on the CLI, the mode currently installed on the Mac 
 When you click Apply in the TUI, SlimBrave Neo asks two macOS-only questions in order: which Brave channels to manage (only when more than one is installed), then whether to persist across reboots. Both prompts have a sticky default — Enter keeps whichever scope and mode are currently installed.
 
 ```bash
-sudo python3 slimbrave-mac.py --import "./Presets/Maximum Privacy Preset.json" --persist on
-sudo python3 slimbrave-mac.py --import "./Presets/Maximum Privacy Preset.json" --persist off
+sudo python3 slimbrave-mac.py --import "./Presets/Brave/Maximum Privacy Preset.json" --persist on
+sudo python3 slimbrave-mac.py --import "./Presets/Brave/Maximum Privacy Preset.json" --persist off
 sudo python3 slimbrave-mac.py --reset
+
+# Manage Chrome or Edge instead of Brave:
+sudo python3 slimbrave-mac.py --browser chrome
+sudo python3 slimbrave-mac.py --browser edge --import "./Presets/Edge/Debloat Preset.json"
 ```
 
 **Finishing the Configuration Profile install (macOS 26).** With `--persist on`, SlimBrave Neo writes a `.mobileconfig` and opens System Settings, but macOS 11+ disallows CLI-driven profile installs so you finish the step in the GUI: a "Profile Downloaded" notification appears; in System Settings click **General** → **Device Management**, scroll down to **Downloaded**, double-click **SlimBrave Neo - Brave Policy**, click **Install**, and enter your login password. Policies then take effect immediately and persist across reboots. To uninstall, run `--reset` or remove the profile under the same Device Management pane. Reference: [Apple — Install configuration profiles on Mac](https://support.apple.com/guide/mac-help/mh35561/mac).
@@ -99,7 +107,7 @@ sudo python3 slimbrave-mac.py --reset
 **CLI mode (non-interactive):**
 
 ```bash
-sudo python3 slimbrave-mac.py --import "./Presets/Maximum Privacy Preset.json"
+sudo python3 slimbrave-mac.py --import "./Presets/Brave/Maximum Privacy Preset.json"
 sudo python3 slimbrave-mac.py --export ~/SlimBraveNeoSettings.json
 sudo python3 slimbrave-mac.py --reset
 sudo python3 slimbrave-mac.py --import preset.json --channels stable,beta
@@ -114,11 +122,20 @@ After applying, restart Brave and verify at `brave://policy`.
 iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/main/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; .\SlimBrave.ps1
 ```
 
+To manage Google Chrome or Microsoft Edge instead of Brave:
+
+```powershell
+.\SlimBrave.ps1 -Browser chrome
+.\SlimBrave.ps1 -Browser edge
+```
+
 Requires Administrator privileges. Hover over any option in the app for a plain-English description of what it does and the exact policy it writes. The app follows your Windows light/dark theme, and on low-resolution displays (e.g. 720p/768p) automatically reflows from two columns into three shorter ones so no options or buttons run off the bottom of the screen.
 
 ---
 
 ## Features
+
+Each browser gets its own audited catalog. The sections below show the full Brave set; Chrome and Edge share every Chromium-common toggle (marked keys excepted) plus their own vendor section. Rows that don't exist for the selected browser simply don't appear in the UI.
 
 ### Telemetry & Reporting
 - Disable Metrics Reporting
@@ -156,7 +173,7 @@ Site-permission defaults plus the escape hatches (guest, incognito, extensions) 
 - Block All Extensions (blocks new installs and disables existing ones — lockdown/parental setups)
 - Disable / Force Incognito Mode (mutually exclusive)
 
-### Brave Features
+### Brave Features (Brave only)
 - Disable Brave Rewards
 - Disable Brave Wallet
 - Disable Brave VPN
@@ -168,10 +185,28 @@ Site-permission defaults plus the escape hatches (guest, incognito, extensions) 
 - Disable Web Discovery
 - Disable Speedreader
 - Disable Tor
-- Disable Sync
 - Disable Email Aliases
 
-### Shields & Content Protection
+*(Disable Sync lives under Privacy & Security — `SyncDisabled` is a Chromium-common key that works in all three browsers.)*
+
+### Chrome Features (Chrome only)
+Verified against Chromium's policy source; the four Privacy Sandbox policies were considered and rejected — Google has deprecated them:
+- Disable Feedback Collection
+- Disable Chrome Labs
+- Disable Search Side Panel
+- Disable Gemini Integrations (Chrome 137+; Windows/macOS — Google doesn't ship the policy on Linux)
+- Restrict Field Trials (Critical Only — stops Google A/B experiments; security-critical variations still apply)
+
+### Edge Features (Edge only)
+Verified against Microsoft's per-policy Edge documentation. Edge renames several Chromium policies, so its catalog carries the equivalents: InPrivate instead of Incognito, `WebRtcLocalhostIpHandling`, SmartScreen instead of Safe Browsing, Password Monitor instead of Leak Detection, Efficiency Mode instead of Memory Saver, and `DiagnosticData` instead of `MetricsReportingEnabled`:
+- Minimize Diagnostic Data, Disable Personalization Reporting, Disable Feedback Collection
+- Disable Sidebar & Copilot Hub, Collections, Shopping Assistant, Microsoft Rewards, Wallet Checkout
+- Disable New Tab MSN Feed, Asset Delivery Service, Spotlight Recommendations (Windows), Startup Boost (Windows)
+- Enable Sleeping Tabs, Enable Efficiency Mode
+- Disable SmartScreen, Disable Password Monitor, Disable WebRTC IP Leak, Force Bing SafeSearch (Strict)
+- Disable / Force InPrivate Mode (mutually exclusive)
+
+### Shields & Content Protection (Brave only)
 Pin Brave's own protection defaults as managed policy so they can't be weakened per-site or in settings (requires Brave 1.83+):
 - Enforce Ad Blocking
 - Enforce Fingerprinting Protection
@@ -209,7 +244,8 @@ Pin Brave's own protection defaults as managed policy so they can't be weakened 
 
 | Flag | Description |
 |------|-------------|
-| `--import PATH` | Import a SlimBrave Neo JSON config and apply policies |
+| `--browser NAME` | Which browser to manage: `brave` (default), `chrome`, or `edge` (`edge` on macOS/Windows only). Windows uses `-Browser NAME`. |
+| `--import PATH` | Import a SlimBrave Neo JSON config and apply policies (the config's `Browser` field must match the selected browser) |
 | `--export PATH` | Export current policy to a SlimBrave Neo JSON config |
 | `--reset` | Remove the managed policy file |
 | `--policy-file PATH` | Override policy file path |
@@ -224,6 +260,8 @@ Import/export uses the same JSON format as the Windows PowerShell version. Confi
 
 <details>
 <summary><strong>Presets</strong></summary>
+
+Presets live in per-browser folders — `Presets/Brave/`, `Presets/Chrome/`, `Presets/Edge/` — and carry a `"Browser"` field; importing one into the wrong browser is rejected with a clear error instead of silently skipping most keys. The Brave set is described below. Chrome mirrors it (Maximum Privacy, Balanced Privacy, Performance Focused, Developer, Strict Parental Controls) using Chrome's catalog — its Balanced preset deliberately leaves browser sign-in and sync available, since those are core Chrome conveniences. Edge gets Maximum Privacy, Balanced Privacy, Performance Focused, Strict Parental Controls, and a dedicated **Debloat** preset that strips the MSN feed, sidebar/Copilot, Rewards, shopping, Collections, Spotlight, and startup boost without touching protective features like SmartScreen.
 
 ### Maximum Privacy Preset
 - **Telemetry:** Blocks all reporting (metrics, safe browsing, URL collection, feedback).
@@ -273,12 +311,16 @@ Import/export uses the same JSON format as the Windows PowerShell version. Confi
 
 SlimBrave Neo writes Chromium [managed enterprise policies](https://chromeenterprise.google/policies/) to platform-specific locations. Brave reads these on startup and enforces the policies. No browser modifications needed.
 
-| Platform | Policy Location |
-|----------|----------------|
-| Linux | `/etc/brave/policies/managed/slimbrave.json` (shared across all channels) |
-| macOS — `--persist off` | `/Library/Managed Preferences/com.brave.Browser{,.beta,.nightly}.plist` (one per selected channel). |
-| macOS — `--persist on` | Apple Configuration Profile installed via System Settings → General → Device Management. No plist files written; the profile system manages the values. |
-| Windows | Registry keys via PowerShell |
+| Platform | Browser | Policy Location |
+|----------|---------|----------------|
+| Linux | Brave | `/etc/brave/policies/managed/slimbrave.json` (shared across all channels) |
+| Linux | Chrome | `/etc/opt/chrome/policies/managed/slimbrave.json` (shared across all channels) |
+| macOS — `--persist off` | Brave | `/Library/Managed Preferences/com.brave.Browser{,.beta,.nightly}.plist` (one per selected channel) |
+| macOS — `--persist off` | Chrome / Edge | `/Library/Managed Preferences/com.google.Chrome.plist` / `com.microsoft.Edge.plist` (every channel reads the shared domain) |
+| macOS — `--persist on` | all | Apple Configuration Profile (one per browser) installed via System Settings → General → Device Management |
+| Windows | Brave | `HKLM:\SOFTWARE\Policies\BraveSoftware\Brave` |
+| Windows | Chrome | `HKLM:\SOFTWARE\Policies\Google\Chrome` |
+| Windows | Edge | `HKLM:\SOFTWARE\Policies\Microsoft\Edge` |
 
 **Additional behavior:**
 - Auto-detects Brave installations: Arch (`brave-bin`), deb/rpm, Flatpak, Snap, macOS App (Stable / Beta / Nightly), and PATH fallback
