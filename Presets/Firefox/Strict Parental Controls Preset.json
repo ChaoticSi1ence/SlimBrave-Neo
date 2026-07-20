@@ -1,0 +1,27 @@
+{
+    "Browser": "firefox",
+    "Features": {
+        "DisableTelemetry": true,
+        "DisableFirefoxStudies": true,
+        "DisablePrivateBrowsing": true,
+        "BlockAboutConfig": true,
+        "ExtensionSettings": {
+            "*": {
+                "installation_mode": "blocked"
+            }
+        },
+        "DisableFirefoxAccounts": true,
+        "Permissions": {
+            "Location": {
+                "BlockNewRequests": true,
+                "Locked": true
+            },
+            "Notifications": {
+                "BlockNewRequests": true,
+                "Locked": true
+            }
+        }
+    },
+    "DnsMode": "custom",
+    "DnsTemplates": "https://family.cloudflare-dns.com/dns-query"
+}

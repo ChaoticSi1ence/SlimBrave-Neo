@@ -39,6 +39,7 @@ ALLOWED_POLICY_DIRS = (
     "/etc/brave/policies/managed",
     "/etc/chromium/policies/managed",
     "/etc/opt/chrome/policies/managed",
+    "/etc/firefox/policies",
 )
 
 # Brave channel definitions on Linux. Each channel has its own user-data
@@ -80,22 +81,51 @@ CHROME_CHANNELS = [
 # is no authoritative source to audit a Linux Edge catalog against.
 # ---------------------------------------------------------------------------
 
+# Mozilla Firefox reads a single system-wide policies.json on Linux; the
+# file name is fixed (Firefox loads exactly "policies.json") and the
+# content is wrapped in a top-level {"policies": {...}} object.
+FIREFOX_CHANNELS = [
+    {"id": "stable", "label": "Stable",
+     "user_data_dir": "firefox", "process_name": "firefox"},
+    {"id": "esr", "label": "ESR",
+     "user_data_dir": "firefox", "process_name": "firefox-esr"},
+]
+
 BROWSERS = {
     "brave": {
         "label": "Brave",
+        "engine": "chromium",
         "policy_dir": "/etc/brave/policies/managed",
+        "policy_file": "slimbrave.json",
         "channels": LINUX_CHANNELS,
         "config_root": "BraveSoftware",   # under ~/.config
         "prefs_repair": True,             # braveShields leak repair
     },
     "chrome": {
         "label": "Google Chrome",
+        "engine": "chromium",
         "policy_dir": "/etc/opt/chrome/policies/managed",
+        "policy_file": "slimbrave.json",
         "channels": CHROME_CHANNELS,
         "config_root": "",
         "prefs_repair": False,
     },
+    "firefox": {
+        "label": "Mozilla Firefox",
+        "engine": "firefox",
+        "policy_dir": "/etc/firefox/policies",
+        "policy_file": "policies.json",
+        "channels": FIREFOX_CHANNELS,
+        "config_root": "",
+        "prefs_repair": False,
+    },
 }
+
+# Untagged catalog rows apply to every Chromium-engine browser; Firefox
+# speaks a different policy dialect, so its rows are always tagged.
+CHROMIUM_BROWSERS = tuple(
+    name for name, cfg in BROWSERS.items() if cfg["engine"] == "chromium"
+)
 
 SELECTED_BROWSER = "brave"
 
@@ -108,12 +138,16 @@ def browser_label():
     return browser_config()["label"]
 
 
+def browser_engine():
+    return browser_config()["engine"]
+
+
 def select_browser(name):
     """Point the module-level policy paths at the chosen browser."""
     global SELECTED_BROWSER, POLICY_DIR, POLICY_FILE
     SELECTED_BROWSER = name
     POLICY_DIR = BROWSERS[name]["policy_dir"]
-    POLICY_FILE = os.path.join(POLICY_DIR, "slimbrave.json")
+    POLICY_FILE = os.path.join(POLICY_DIR, BROWSERS[name]["policy_file"])
 
 
 def _user_home_for_brave():
@@ -267,6 +301,12 @@ def detect_brave():
         flatpak_id = "com.google.Chrome"
         path_names = ("google-chrome-stable", "google-chrome", "chrome")
         snap_root = None
+    elif SELECTED_BROWSER == "firefox":
+        native_paths = ("/usr/lib/firefox/firefox", "/opt/firefox/firefox",
+                        "/usr/lib64/firefox/firefox")
+        flatpak_id = "org.mozilla.firefox"
+        path_names = ("firefox", "firefox-esr")
+        snap_root = "/snap/firefox/current"
     else:
         native_paths = (
             "/opt/brave-bin/brave",                  # Arch (brave-bin AUR)
@@ -503,6 +543,81 @@ CATEGORIES = [
             {"name": "Disable Wayback Machine", "key": "BraveWaybackMachineEnabled", "value": False, "browsers": ("brave",)},
         ],
     },
+    # ------------------------------------------------------------------
+    # Mozilla Firefox catalog. Firefox speaks its own policy dialect
+    # (policies.json / org.mozilla.firefox), so nothing above applies to
+    # it; every row is verified against mozilla/enterprise-admin-reference
+    # policies-schema.json (see AUDIT.md). Values may be nested objects —
+    # the writers serialize them as-is.
+    # ------------------------------------------------------------------
+    {
+        "name": "Telemetry & Reporting",
+        "browsers": ("firefox",),
+        "features": [
+            {"name": "Disable Telemetry", "key": "DisableTelemetry", "value": True},
+            {"name": "Disable Firefox Studies", "key": "DisableFirefoxStudies", "value": True},
+            {"name": "Disable Feedback Commands", "key": "DisableFeedbackCommands", "value": True},
+            {"name": "Disable Captive Portal Pings", "key": "CaptivePortal", "value": False},
+        ],
+    },
+    {
+        "name": "Privacy & Security",
+        "browsers": ("firefox",),
+        "features": [
+            {"name": "Enforce Tracking Protection (Strict)", "key": "EnableTrackingProtection",
+             "value": {"Value": True, "Locked": True, "Cryptomining": True,
+                       "Fingerprinting": True, "EmailTracking": True}},
+            {"name": "Force HTTPS-Only Mode", "key": "HttpsOnlyMode", "value": "force_enabled"},
+            {"name": "Disable Password Manager", "key": "PasswordManagerEnabled", "value": False},
+            {"name": "Disable Login Save Prompts", "key": "OfferToSaveLogins", "value": False},
+            {"name": "Disable Form History", "key": "DisableFormHistory", "value": True},
+            {"name": "Disable Autofill (Addresses)", "key": "AutofillAddressEnabled", "value": False},
+            {"name": "Disable Autofill (Credit Cards)", "key": "AutofillCreditCardEnabled", "value": False},
+            {"name": "Disable Firefox Accounts & Sync", "key": "DisableFirefoxAccounts", "value": True},
+            {"name": "Disable Network Prediction (Prefetch)", "key": "NetworkPrediction", "value": False},
+            {"name": "Disable Search Suggestions", "key": "SearchSuggestEnabled", "value": False},
+        ],
+    },
+    {
+        "name": "Permissions & Access",
+        "browsers": ("firefox",),
+        "features": [
+            {"name": "Block Location & Notification Prompts", "key": "Permissions",
+             "value": {"Location": {"BlockNewRequests": True, "Locked": True},
+                       "Notifications": {"BlockNewRequests": True, "Locked": True}}},
+            {"name": "Disable Private Browsing", "key": "DisablePrivateBrowsing", "value": True},
+            {"name": "Block about:config", "key": "BlockAboutConfig", "value": True},
+            {"name": "Block All Extensions", "key": "ExtensionSettings",
+             "value": {"*": {"installation_mode": "blocked"}}},
+        ],
+    },
+    {
+        "name": "Firefox Features",
+        "browsers": ("firefox",),
+        "features": [
+            {"name": "Disable Pocket", "key": "DisablePocket", "value": True},
+            {"name": "Clean New Tab (No Sponsored Content)", "key": "FirefoxHome",
+             "value": {"Search": True, "TopSites": True, "SponsoredTopSites": False,
+                       "Highlights": False, "Pocket": False, "SponsoredPocket": False,
+                       "Stories": False, "SponsoredStories": False, "Weather": False,
+                       "Snippets": False, "Locked": True}},
+            {"name": "Disable Recommendations & Onboarding", "key": "UserMessaging",
+             "value": {"WhatsNew": False, "ExtensionRecommendations": False,
+                       "FeatureRecommendations": False, "UrlbarInterventions": False,
+                       "SkipOnboarding": True, "MoreFromMozilla": False,
+                       "FirefoxLabs": False, "Locked": True}},
+            {"name": "Disable AI Features", "key": "AIControls",
+             "value": {"Default": {"Value": "blocked", "Locked": True}}},
+        ],
+    },
+    {
+        "name": "Performance & Bloat",
+        "browsers": ("firefox",),
+        "features": [
+            {"name": "Force Hardware Acceleration", "key": "HardwareAcceleration", "value": True},
+            {"name": "Disable Default Browser Prompt", "key": "DontCheckDefaultBrowser", "value": True},
+        ],
+    },
 ]
 
 # "unmanaged" (the default) writes no DNS policy at all, leaving Brave's
@@ -531,10 +646,13 @@ def build_rows(installations=None):
     browser = SELECTED_BROWSER
     rows = []
     for cat in CATEGORIES:
-        if browser not in cat.get("browsers", tuple(BROWSERS)):
+        cat_browsers = cat.get("browsers", CHROMIUM_BROWSERS)
+        if browser not in cat_browsers:
             continue
+        # Feature rows inherit their category's browser scope unless
+        # they narrow it further with their own tag.
         feats = [f for f in cat["features"]
-                 if browser in f.get("browsers", tuple(BROWSERS))]
+                 if browser in f.get("browsers", cat_browsers)]
         if not feats:
             continue
         rows.append({"type": ROW_HEADER, "text": cat["name"]})
@@ -733,10 +851,13 @@ def repair_brave_prefs(installations=None):
 
 
 def _read_one_policy(plist_path):
-    """Read a single JSON policy file."""
+    """Read a single JSON policy file (unwrapping Firefox's container)."""
     try:
         with open(plist_path, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+            if browser_engine() == "firefox" and isinstance(data, dict):
+                return data.get("policies", {})
+            return data
     except (FileNotFoundError, PermissionError):
         return {}
     except Exception:
@@ -785,8 +906,21 @@ def _build_policy(rows):
 
     # "unmanaged" writes no DNS keys at all; since Apply fully overwrites
     # the policy file, any previously-managed DNS policy is removed.
+    # Firefox has no mode enum — its DNSOverHTTPS object maps as:
+    # off = Enabled false; automatic = Enabled true (fallback allowed);
+    # secure/custom = Enabled true with fallback off (+ ProviderURL).
     if dns_mode and dns_mode != "unmanaged":
-        if dns_mode == "custom":
+        if browser_engine() == "firefox":
+            if dns_mode == "off":
+                policy["DNSOverHTTPS"] = {"Enabled": False, "Locked": True}
+            elif dns_mode == "automatic":
+                policy["DNSOverHTTPS"] = {"Enabled": True, "Locked": True}
+            else:  # secure / custom
+                doh = {"Enabled": True, "Fallback": False, "Locked": True}
+                if dns_template:
+                    doh["ProviderURL"] = dns_template
+                policy["DNSOverHTTPS"] = doh
+        elif dns_mode == "custom":
             policy["DnsOverHttpsMode"] = "secure"
             policy["DnsOverHttpsTemplates"] = dns_template
         else:
@@ -797,7 +931,13 @@ def _build_policy(rows):
 
 
 def _write_one_policy(plist_path, policy):
-    """Write a single JSON policy file and return (ok, error_msg)."""
+    """Write a single JSON policy file and return (ok, error_msg).
+
+    Firefox reads a top-level {"policies": {...}} wrapper in its
+    policies.json; Chromium browsers read a flat key/value object.
+    """
+    if browser_engine() == "firefox":
+        policy = {"policies": policy}
     try:
         os.makedirs(os.path.dirname(plist_path), exist_ok=True)
         _atomic_write(plist_path, json.dumps(policy, indent=4))
@@ -921,6 +1061,22 @@ def reset_policy(rows, installations=None):
     return True, msg
 
 
+def _policy_dns_state(policy):
+    """Return (mode, template) from an on-disk policy, engine-aware."""
+    if browser_engine() == "firefox":
+        doh = policy.get("DNSOverHTTPS")
+        if not isinstance(doh, dict):
+            return (None, "")
+        if not doh.get("Enabled", False):
+            return ("off", "")
+        tmpl = doh.get("ProviderURL", "")
+        if doh.get("Fallback", True) and not tmpl:
+            return ("automatic", "")
+        return ("secure", tmpl)
+    return (policy.get("DnsOverHttpsMode"),
+            policy.get("DnsOverHttpsTemplates", ""))
+
+
 def sync_rows_with_policy(rows, policy):
     """Pre-check rows that match an existing policy on disk."""
     if not policy:
@@ -930,15 +1086,14 @@ def sync_rows_with_policy(rows, policy):
             if row["key"] in policy and policy[row["key"]] == row["value"]:
                 row["checked"] = True
         elif row["type"] == ROW_DNS:
-            dns_val = policy.get("DnsOverHttpsMode")
-            dns_tmpl = policy.get("DnsOverHttpsTemplates", "")
+            dns_val, dns_tmpl = _policy_dns_state(policy)
             if dns_val == "secure" and dns_tmpl:
                 if "custom" in row["options"]:
                     row["selected"] = row["options"].index("custom")
             elif dns_val in row["options"]:
                 row["selected"] = row["options"].index(dns_val)
         elif row["type"] == ROW_DNS_TEMPLATE:
-            tmpl = policy.get("DnsOverHttpsTemplates", "")
+            _, tmpl = _policy_dns_state(policy)
             if tmpl:
                 row["value"] = tmpl
                 row["cursor"] = len(tmpl)

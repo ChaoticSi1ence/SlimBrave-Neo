@@ -1,7 +1,7 @@
 # Which browser to manage. All three speak the Chromium managed-policy
 # dialect; only the registry path and vendor-specific keys differ.
 param(
-    [ValidateSet("brave", "chrome", "edge")]
+    [ValidateSet("brave", "chrome", "edge", "firefox")]
     [string] $Browser = "brave"
 )
 
@@ -20,6 +20,7 @@ Add-Type -AssemblyName System.Drawing
 $browserDefs = @{
     brave = @{
         Label = "Brave"
+        Engine = "chromium"
         RegistryPath = "HKLM:\SOFTWARE\Policies\BraveSoftware\Brave"
         ProcessName = "brave"
         VendorCategory = "Brave Features"
@@ -27,6 +28,7 @@ $browserDefs = @{
     }
     chrome = @{
         Label = "Google Chrome"
+        Engine = "chromium"
         RegistryPath = "HKLM:\SOFTWARE\Policies\Google\Chrome"
         ProcessName = "chrome"
         VendorCategory = "Chrome Features"
@@ -34,9 +36,24 @@ $browserDefs = @{
     }
     edge = @{
         Label = "Microsoft Edge"
+        Engine = "chromium"
         RegistryPath = "HKLM:\SOFTWARE\Policies\Microsoft\Edge"
         ProcessName = "msedge"
         VendorCategory = "Edge Features"
+        PrefsRepair = $false
+    }
+    firefox = @{
+        # Firefox speaks Mozilla's policy dialect, not Chromium's. On
+        # Windows SlimBrave Neo writes <install dir>\distribution\
+        # policies.json — Mozilla's officially supported cross-platform
+        # location that handles nested policy values uniformly (the
+        # registry mapping for nested policies is a separate ADMX
+        # dialect and easy to get subtly wrong).
+        Label = "Mozilla Firefox"
+        Engine = "firefox"
+        RegistryPath = "HKLM:\SOFTWARE\Policies\Mozilla\Firefox"  # unused; reset clears policies.json instead
+        ProcessName = "firefox"
+        VendorCategory = "Firefox Features"
         PrefsRepair = $false
     }
 }
@@ -48,6 +65,52 @@ $userRegistryPath   = $browserDef.RegistryPath -replace "^HKLM:", "HKCU:"
 $registryPath       = $machineRegistryPath
 
 Clear-Host
+
+# ---------------------------------------------------------------------------
+# Firefox policies.json helpers (Engine = "firefox" only)
+# ---------------------------------------------------------------------------
+
+function Get-FirefoxPoliciesPath {
+    # Resolve <install dir>\distribution\policies.json from the registry,
+    # falling back to the default install location.
+    $installDir = $null
+    try {
+        $cv = (Get-ItemProperty "HKLM:\SOFTWARE\Mozilla\Mozilla Firefox" -ErrorAction SilentlyContinue).CurrentVersion
+        if ($cv) {
+            $installDir = (Get-ItemProperty "HKLM:\SOFTWARE\Mozilla\Mozilla Firefox\$cv\Main" -ErrorAction SilentlyContinue)."Install Directory"
+        }
+    } catch { $installDir = $null }
+    if (-not $installDir) { $installDir = Join-Path $env:ProgramFiles "Mozilla Firefox" }
+    return (Join-Path $installDir "distribution\policies.json")
+}
+
+function Read-FirefoxPolicies {
+    # Returns the inner policies object from policies.json, or $null.
+    $path = Get-FirefoxPoliciesPath
+    if (-not (Test-Path $path)) { return $null }
+    try {
+        return (Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json).policies
+    } catch {
+        return $null
+    }
+}
+
+function Write-FirefoxPolicies {
+    param ($Policies)
+    $path = Get-FirefoxPoliciesPath
+    $dir = Split-Path $path -Parent
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $json = @{ policies = $Policies } | ConvertTo-Json -Depth 12
+    # Firefox expects UTF-8 without BOM.
+    [System.IO.File]::WriteAllText($path, $json, (New-Object System.Text.UTF8Encoding $false))
+}
+
+function ConvertTo-CanonicalJson {
+    # Depth-stable serialization used to compare a feature's canonical
+    # value with what is on disk (nested Firefox policy objects).
+    param ($Value)
+    return ($Value | ConvertTo-Json -Depth 12 -Compress)
+}
 
 # ---------------------------------------------------------------------------
 # DNS helper - handles both DnsOverHttpsMode and DnsOverHttpsTemplates
@@ -223,7 +286,7 @@ function Test-FeatureValueMatches {
     # pattern list). In dict-format imports we treat the key's presence as
     # "apply our list", since encoding alternative list values in a
     # round-trippable way is out of scope.
-    if ($feature.Type -eq "List") { return $true }
+    if ($feature.Type -eq "List" -or $feature.Type -eq "Json") { return $true }
     if ($feature.Type -eq "DWord") {
         try { return ([int]$feature.Value -eq [int]$expected) }
         catch { return $false }
@@ -458,7 +521,11 @@ function Add-FeatureCheckboxes {
             }
         })
         if ($feature.Tip) {
-            $valueText = if ($feature.Type -eq "List") { $feature.Value -join ", " } else { $feature.Value }
+            $valueText = switch ($feature.Type) {
+                "List" { $feature.Value -join ", " }
+                "Json" { ConvertTo-CanonicalJson $feature.Value }
+                default { $feature.Value }
+            }
             $tooltip.SetToolTip($checkbox, "$($feature.Tip)`n`nPolicy: $($feature.Key) = $valueText")
         }
         $Panel.Controls.Add($checkbox)
@@ -708,6 +775,86 @@ $perfFeatures = @(
 # $env:SLIMBRAVE_COLUMNS to "2" or "3" before launching.
 # ---------------------------------------------------------------------------
 
+# Mozilla Firefox catalog — every key verified against
+# mozilla/enterprise-admin-reference policies-schema.json (see AUDIT.md).
+# Values may be nested hashtables; they are serialized into policies.json
+# as-is. Type "Json" marks structured values (presence = apply canonical).
+$ffTelemetryFeatures = @(
+    @{ Name = "Disable Telemetry"; Key = "DisableTelemetry"; Value = $true; Type = "Bool"
+       Tip = "Stops Firefox from sending usage, performance, and crash telemetry to Mozilla." },
+    @{ Name = "Disable Firefox Studies"; Key = "DisableFirefoxStudies"; Value = $true; Type = "Bool"
+       Tip = "Stops Mozilla from running remote experiments (Shield studies) on this browser." },
+    @{ Name = "Disable Feedback Commands"; Key = "DisableFeedbackCommands"; Value = $true; Type = "Bool"
+       Tip = "Removes the Report Broken Site / feedback menu items that upload data to Mozilla." },
+    @{ Name = "Disable Default Browser Agent"; Key = "DisableDefaultBrowserAgent"; Value = $true; Type = "Bool"
+       Tip = "Disables the scheduled Windows task that reports default-browser status to Mozilla." },
+    @{ Name = "Disable Captive Portal Pings"; Key = "CaptivePortal"; Value = $false; Type = "Bool"
+       Tip = "Stops the periodic connectivity check requests to detectportal.firefox.com." }
+)
+
+$ffPrivacyFeatures = @(
+    @{ Name = "Enforce Tracking Protection (Strict)"; Key = "EnableTrackingProtection"; Type = "Json"
+       Value = @{ Value = $true; Locked = $true; Cryptomining = $true; Fingerprinting = $true; EmailTracking = $true }
+       Tip = "Pins Enhanced Tracking Protection on with cryptomining, fingerprinting, and email-tracking blocking, locked as managed policy." },
+    @{ Name = "Force HTTPS-Only Mode"; Key = "HttpsOnlyMode"; Value = "force_enabled"; Type = "String"
+       Tip = "Always upgrades connections to HTTPS; sites that cannot serve HTTPS show a warning page." },
+    @{ Name = "Disable Password Manager"; Key = "PasswordManagerEnabled"; Value = $false; Type = "Bool"
+       Tip = "Disables the built-in password manager. Recommended if you use a dedicated password manager." },
+    @{ Name = "Disable Login Save Prompts"; Key = "OfferToSaveLogins"; Value = $false; Type = "Bool"
+       Tip = "Stops Firefox from offering to remember logins." },
+    @{ Name = "Disable Form History"; Key = "DisableFormHistory"; Value = $true; Type = "Bool"
+       Tip = "Stops Firefox from remembering what you type in web forms and the search bar." },
+    @{ Name = "Disable Autofill (Addresses)"; Key = "AutofillAddressEnabled"; Value = $false; Type = "Bool"
+       Tip = "Stops Firefox from saving and auto-filling street addresses in web forms." },
+    @{ Name = "Disable Autofill (Credit Cards)"; Key = "AutofillCreditCardEnabled"; Value = $false; Type = "Bool"
+       Tip = "Stops Firefox from saving and auto-filling credit card numbers in web forms." },
+    @{ Name = "Disable Firefox Accounts & Sync"; Key = "DisableFirefoxAccounts"; Value = $true; Type = "Bool"
+       Tip = "Disables signing in to a Mozilla account and everything that depends on it, including Sync." },
+    @{ Name = "Disable Network Prediction (Prefetch)"; Key = "NetworkPrediction"; Value = $false; Type = "Bool"
+       Tip = "Stops Firefox from pre-resolving DNS for links it guesses you might click." },
+    @{ Name = "Disable Search Suggestions"; Key = "SearchSuggestEnabled"; Value = $false; Type = "Bool"
+       Tip = "Stops sending what you type in the address bar to your search engine for live suggestions." }
+)
+
+$ffAccessFeatures = @(
+    @{ Name = "Block Location & Notification Prompts"; Key = "Permissions"; Type = "Json"
+       Value = @{ Location = @{ BlockNewRequests = $true; Locked = $true }
+                  Notifications = @{ BlockNewRequests = $true; Locked = $true } }
+       Tip = "Blocks all new site requests for location access and web notifications, locked as managed policy." },
+    @{ Name = "Disable Private Browsing"; Key = "DisablePrivateBrowsing"; Value = $true; Type = "Bool"
+       Tip = "Removes private browsing entirely - no private windows can be opened. Mainly for parental controls." },
+    @{ Name = "Block about:config"; Key = "BlockAboutConfig"; Value = $true; Type = "Bool"
+       Tip = "Blocks the about:config advanced preferences page, closing the loophole where managed settings can be flipped back." },
+    @{ Name = "Block All Extensions"; Key = "ExtensionSettings"; Type = "Json"
+       Value = @{ "*" = @{ installation_mode = "blocked" } }
+       Tip = "Blocks installation of every extension. For lockdown/parental setups - a proxy or VPN extension would bypass DNS filtering." }
+)
+
+$ffVendorFeatures = @(
+    @{ Name = "Disable Pocket"; Key = "DisablePocket"; Value = $true; Type = "Bool"
+       Tip = "Removes Pocket integration from the browser." },
+    @{ Name = "Clean New Tab (No Sponsored Content)"; Key = "FirefoxHome"; Type = "Json"
+       Value = @{ Search = $true; TopSites = $true; SponsoredTopSites = $false; Highlights = $false
+                  Pocket = $false; SponsoredPocket = $false; Stories = $false; SponsoredStories = $false
+                  Weather = $false; Snippets = $false; Locked = $true }
+       Tip = "Keeps search and your own top sites on the new tab page but removes sponsored tiles, stories, weather, and snippets, locked as managed policy." },
+    @{ Name = "Disable Recommendations & Onboarding"; Key = "UserMessaging"; Type = "Json"
+       Value = @{ WhatsNew = $false; ExtensionRecommendations = $false; FeatureRecommendations = $false
+                  UrlbarInterventions = $false; SkipOnboarding = $true; MoreFromMozilla = $false
+                  FirefoxLabs = $false; Locked = $true }
+       Tip = "Turns off extension/feature recommendations, onboarding tours, What's New notices, and More-from-Mozilla promos." },
+    @{ Name = "Disable AI Features"; Key = "AIControls"; Type = "Json"
+       Value = @{ Default = @{ Value = "blocked"; Locked = $true } }
+       Tip = "Blocks all AI features (sidebar chatbot, smart tab groups, link previews, PDF alt text) as managed policy." }
+)
+
+$ffPerfFeatures = @(
+    @{ Name = "Force Hardware Acceleration"; Key = "HardwareAcceleration"; Value = $true; Type = "Bool"
+       Tip = "Pins GPU hardware acceleration on so rendering and video decode stay off the CPU." },
+    @{ Name = "Disable Default Browser Prompt"; Key = "DontCheckDefaultBrowser"; Value = $true; Type = "Bool"
+       Tip = "Stops Firefox from asking to become your default browser." }
+)
+
 $vendorFeatureSets = @{
     brave  = $braveFeatures
     chrome = $chromeFeatures
@@ -718,14 +865,24 @@ $vendorFeatureSets = @{
 # subset; untagged rows apply to every browser. Categories that filter
 # down to zero rows (e.g. Telemetry & Reporting on Edge, which replaces
 # every Chromium telemetry key with its own) are dropped entirely.
-$allCategories = @(
-    @{ Name = "Telemetry & Reporting";        Features = $telemetryFeatures },
-    @{ Name = "Privacy & Security";           Features = $privacyFeatures },
-    @{ Name = "Permissions & Access";         Features = $accessFeatures },
-    @{ Name = "Shields & Content Protection"; Features = $shieldsContentFeatures; Browsers = @("brave") },
-    @{ Name = $browserDef.VendorCategory;     Features = $vendorFeatureSets[$Browser] },
-    @{ Name = "Performance & Bloat";          Features = $perfFeatures }
-)
+if ($browserDef.Engine -eq "firefox") {
+    $allCategories = @(
+        @{ Name = "Telemetry & Reporting";  Features = $ffTelemetryFeatures },
+        @{ Name = "Privacy & Security";     Features = $ffPrivacyFeatures },
+        @{ Name = "Permissions & Access";   Features = $ffAccessFeatures },
+        @{ Name = "Firefox Features";       Features = $ffVendorFeatures },
+        @{ Name = "Performance & Bloat";    Features = $ffPerfFeatures }
+    )
+} else {
+    $allCategories = @(
+        @{ Name = "Telemetry & Reporting";        Features = $telemetryFeatures },
+        @{ Name = "Privacy & Security";           Features = $privacyFeatures },
+        @{ Name = "Permissions & Access";         Features = $accessFeatures },
+        @{ Name = "Shields & Content Protection"; Features = $shieldsContentFeatures; Browsers = @("brave") },
+        @{ Name = $browserDef.VendorCategory;     Features = $vendorFeatureSets[$Browser] },
+        @{ Name = "Performance & Bloat";          Features = $perfFeatures }
+    )
+}
 $categories = @()
 foreach ($cat in $allCategories) {
     if ($cat.Browsers -and $cat.Browsers -notcontains $Browser) { continue }
@@ -968,6 +1125,53 @@ $saveButton.Add_Click({
         return
     }
 
+    # Firefox: build the full policies object and write policies.json in
+    # one shot — no registry involved.
+    if ($browserDef.Engine -eq "firefox") {
+        $ffPolicies = [ordered]@{}
+        foreach ($checkbox in $allFeatures) {
+            if ($checkbox.Checked) {
+                $ffPolicies[$checkbox.Tag.Key] = $checkbox.Tag.Value
+            }
+        }
+        # DNS: Firefox's DNSOverHTTPS object maps as off = Enabled false;
+        # automatic = Enabled true (fallback allowed); secure/custom =
+        # Enabled true with fallback off (+ ProviderURL).
+        $ffDnsMode = $dnsDropdown.SelectedItem
+        if ($ffDnsMode -and $ffDnsMode -ne "unmanaged") {
+            if ($ffDnsMode -eq "off") {
+                $ffPolicies["DNSOverHTTPS"] = @{ Enabled = $false; Locked = $true }
+            } elseif ($ffDnsMode -eq "automatic") {
+                $ffPolicies["DNSOverHTTPS"] = @{ Enabled = $true; Locked = $true }
+            } else {
+                $doh = @{ Enabled = $true; Fallback = $false; Locked = $true }
+                if (-not [string]::IsNullOrWhiteSpace($dnsTemplateBox.Text)) {
+                    $doh["ProviderURL"] = $dnsTemplateBox.Text
+                }
+                $ffPolicies["DNSOverHTTPS"] = $doh
+            }
+        }
+        try {
+            Write-FirefoxPolicies -Policies $ffPolicies
+            $ffMsg = "Settings applied successfully to:`n$(Get-FirefoxPoliciesPath)`n`nRestart $browserLabel to see changes."
+            if ($null -ne (Get-Process $browserDef.ProcessName -ErrorAction SilentlyContinue)) {
+                $ffMsg += "`n`n$browserLabel is running. Fully close it before reopening."
+            }
+            [System.Windows.Forms.MessageBox]::Show(
+                $ffMsg, "SlimBrave Neo",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Failed to write policies.json: $_", "Apply Failed",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            )
+        }
+        return
+    }
+
     # Created lazily here rather than at launch, so merely opening the app
     # never writes to the registry.
     if (-not (Test-Path -Path $registryPath)) {
@@ -1078,6 +1282,27 @@ function Reset-AllSettings {
     )
 
     if ($confirm -eq "Yes") {
+        if ($browserDef.Engine -eq "firefox") {
+            try {
+                $ffPath = Get-FirefoxPoliciesPath
+                if (Test-Path $ffPath) { Remove-Item -Force $ffPath }
+                [System.Windows.Forms.MessageBox]::Show(
+                    "All $browserLabel policy settings have been reset (removed $ffPath).",
+                    "Reset Successful",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Information
+                )
+                return $true
+            } catch {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "An error occurred while resetting the settings: $_",
+                    "Reset Failed",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Error
+                )
+                return $false
+            }
+        }
         try {
             if (Test-Path -Path $registryPath) {
                 Remove-Item -Path $registryPath -Recurse -Force
@@ -1124,7 +1349,7 @@ function Reset-AllSettings {
 
 $resetButton.Add_Click({
     if (Reset-AllSettings) {
-        if (-not (Test-Path -Path $registryPath)) {
+        if ($browserDef.Engine -ne "firefox" -and -not (Test-Path -Path $registryPath)) {
             New-Item -Path $registryPath -Force | Out-Null
         }
         # Uncheck all boxes and reset DNS controls
@@ -1176,7 +1401,8 @@ $exportButton.Add_Click({
 
         try {
             # -Depth 5 covers Features -> key -> list values (Shields).
-            $settingsToExport | ConvertTo-Json -Depth 5 | Out-File -FilePath $saveFileDialog.FileName -Force
+            # -Depth 12 covers Features -> key -> nested Firefox objects.
+            $settingsToExport | ConvertTo-Json -Depth 12 | Out-File -FilePath $saveFileDialog.FileName -Force
             [System.Windows.Forms.MessageBox]::Show(
                 "Settings exported successfully to:`n$($saveFileDialog.FileName)",
                 "Export Successful",
@@ -1290,6 +1516,40 @@ $importButton.Add_Click({
 # ---------------------------------------------------------------------------
 
 function Initialize-CurrentSettings {
+    if ($browserDef.Engine -eq "firefox") {
+        $ffCurrent = Read-FirefoxPolicies
+        foreach ($checkbox in $allFeatures) {
+            $feature = $checkbox.Tag
+            $checkbox.Checked = $false
+            if ($ffCurrent -and ($ffCurrent.PSObject.Properties.Name -contains $feature.Key)) {
+                $onDisk = $ffCurrent.$($feature.Key)
+                # Nested values compare via canonical JSON; scalars directly.
+                if ($feature.Type -eq "Json") {
+                    $checkbox.Checked = ((ConvertTo-CanonicalJson $onDisk) -eq (ConvertTo-CanonicalJson $feature.Value))
+                } else {
+                    $checkbox.Checked = ("$onDisk" -eq "$($feature.Value)")
+                }
+            }
+        }
+        $dnsDropdown.SelectedItem = "unmanaged"
+        $dnsTemplateBox.Text = ""
+        if ($ffCurrent -and ($ffCurrent.PSObject.Properties.Name -contains "DNSOverHTTPS")) {
+            $doh = $ffCurrent.DNSOverHTTPS
+            if (-not $doh.Enabled) {
+                $dnsDropdown.SelectedItem = "off"
+            } elseif ($doh.ProviderURL) {
+                $dnsDropdown.SelectedItem = "custom"
+                $dnsTemplateBox.Text = $doh.ProviderURL
+            } elseif ($doh.PSObject.Properties.Name -contains "Fallback" -and -not $doh.Fallback) {
+                $dnsDropdown.SelectedItem = "secure"
+            } else {
+                $dnsDropdown.SelectedItem = "automatic"
+            }
+        }
+        $dnsTemplateBox.Enabled = ($dnsDropdown.SelectedItem -in @("custom", "secure"))
+        return
+    }
+
     # Read from both machine (HKLM) and user (HKCU) policy scopes.
     # Machine scope takes precedence; user scope is a fallback.
     $machineSettings = Get-ItemProperty -Path $registryPath -ErrorAction SilentlyContinue

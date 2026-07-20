@@ -1,0 +1,67 @@
+{
+    "Browser": "firefox",
+    "Features": {
+        "DisableTelemetry": true,
+        "DisableFirefoxStudies": true,
+        "DisableFeedbackCommands": true,
+        "DisableDefaultBrowserAgent": true,
+        "CaptivePortal": false,
+        "EnableTrackingProtection": {
+            "Value": true,
+            "Locked": true,
+            "Cryptomining": true,
+            "Fingerprinting": true,
+            "EmailTracking": true
+        },
+        "HttpsOnlyMode": "force_enabled",
+        "PasswordManagerEnabled": false,
+        "OfferToSaveLogins": false,
+        "DisableFormHistory": true,
+        "AutofillAddressEnabled": false,
+        "AutofillCreditCardEnabled": false,
+        "DisableFirefoxAccounts": true,
+        "NetworkPrediction": false,
+        "SearchSuggestEnabled": false,
+        "Permissions": {
+            "Location": {
+                "BlockNewRequests": true,
+                "Locked": true
+            },
+            "Notifications": {
+                "BlockNewRequests": true,
+                "Locked": true
+            }
+        },
+        "DisablePocket": true,
+        "FirefoxHome": {
+            "Search": true,
+            "TopSites": true,
+            "SponsoredTopSites": false,
+            "Highlights": false,
+            "Pocket": false,
+            "SponsoredPocket": false,
+            "Stories": false,
+            "SponsoredStories": false,
+            "Weather": false,
+            "Snippets": false,
+            "Locked": true
+        },
+        "UserMessaging": {
+            "WhatsNew": false,
+            "ExtensionRecommendations": false,
+            "FeatureRecommendations": false,
+            "UrlbarInterventions": false,
+            "SkipOnboarding": true,
+            "MoreFromMozilla": false,
+            "FirefoxLabs": false,
+            "Locked": true
+        },
+        "AIControls": {
+            "Default": {
+                "Value": "blocked",
+                "Locked": true
+            }
+        },
+        "DontCheckDefaultBrowser": true
+    }
+}

@@ -340,13 +340,13 @@ def _feature_pairs(mod, browser):
     preset needs no select_browser() call (Edge build_rows is refused on
     Linux, where the mac script falls back to Linux paths in CI).
     """
-    all_browsers = tuple(mod.BROWSERS)
     pairs = {}
     for cat in mod.CATEGORIES:
-        if browser not in cat.get("browsers", all_browsers):
+        cat_browsers = cat.get("browsers", mod.CHROMIUM_BROWSERS)
+        if browser not in cat_browsers:
             continue
         for feat in cat["features"]:
-            if browser not in feat.get("browsers", all_browsers):
+            if browser not in feat.get("browsers", cat_browsers):
                 continue
             pairs.setdefault(feat["key"], []).append(feat["value"])
     return pairs
@@ -358,11 +358,14 @@ def _feature_pairs(mod, browser):
 # - GeminiSettings: chrome.win / chrome.mac only, absent on Linux
 # - StartupBoostEnabled, SpotlightExperiencesAndRecommendationsEnabled:
 #   Edge on Windows only, absent from the macOS Edge catalog
+# - DisableDefaultBrowserAgent: the agent is a Windows-only scheduled
+#   task, so only the PowerShell script exposes the policy
 PLATFORM_OMITTED_KEYS = {
     "BackgroundModeEnabled",
     "GeminiSettings",
     "StartupBoostEnabled",
     "SpotlightExperiencesAndRecommendationsEnabled",
+    "DisableDefaultBrowserAgent",
 }
 
 
@@ -442,6 +445,68 @@ def test_export_stamps_selected_browser(mod, tmp_path):
     ok, _ = mod.export_settings(rows, str(out))
     assert ok
     assert json.loads(out.read_text())["Browser"] == "brave"
+
+
+def test_firefox_dns_maps_to_mozilla_dialect(mod):
+    try:
+        mod.select_browser("firefox")
+        rows = mod.build_rows()
+        _set_dns(mod, rows, "custom", "https://dns.example/dns-query")
+        policy, err = mod._build_policy(rows)
+        assert err == ""
+        assert "DnsOverHttpsMode" not in policy
+        doh = policy["DNSOverHTTPS"]
+        assert doh["Enabled"] is True and doh["Fallback"] is False
+        assert doh["ProviderURL"] == "https://dns.example/dns-query"
+        # Reverse mapping shows back as custom
+        fresh = mod.build_rows()
+        mod.sync_rows_with_policy(fresh, policy)
+        assert mod.get_dns_mode(fresh) == "custom"
+        assert mod.get_dns_template(fresh) == "https://dns.example/dns-query"
+    finally:
+        mod.select_browser("brave")
+
+
+def test_firefox_rows_have_no_chromium_keys(mod):
+    pairs = _feature_pairs(mod, "firefox")
+    assert "BlockThirdPartyCookies" not in pairs
+    assert "MetricsReportingEnabled" not in pairs
+    assert pairs["EnableTrackingProtection"][0]["Value"] is True
+    assert pairs["ExtensionSettings"] == [{"*": {"installation_mode": "blocked"}}]
+
+
+def test_firefox_export_import_round_trips_nested_values(mod, tmp_path):
+    try:
+        mod.select_browser("firefox")
+        rows = mod.build_rows()
+        _check_feature(mod, rows, "Enforce Tracking Protection (Strict)")
+        _check_feature(mod, rows, "Disable Telemetry")
+        expected = _checked_policy_pairs(mod, rows)
+        out = tmp_path / "ff.json"
+        ok, _ = mod.export_settings(rows, str(out))
+        assert ok
+        assert json.loads(out.read_text())["Browser"] == "firefox"
+        fresh = mod.build_rows()
+        ok, _ = mod.import_settings(fresh, str(out))
+        assert ok
+        assert _checked_policy_pairs(mod, fresh) == expected
+    finally:
+        mod.select_browser("brave")
+
+
+def test_firefox_linux_policy_file_wraps_policies(mod, tmp_path, monkeypatch):
+    if getattr(mod, "IS_MAC", False):
+        pytest.skip("wrapper applies to the JSON writer only")
+    try:
+        mod.select_browser("firefox")
+        target = tmp_path / "policies.json"
+        ok, err = mod._write_one_policy(str(target), {"DisableTelemetry": True})
+        assert ok, err
+        on_disk = json.loads(target.read_text())
+        assert on_disk == {"policies": {"DisableTelemetry": True}}
+        assert mod._read_one_policy(str(target)) == {"DisableTelemetry": True}
+    finally:
+        mod.select_browser("brave")
 
 
 def test_select_browser_switches_paths_and_rows(mod):

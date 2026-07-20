@@ -123,6 +123,28 @@ Edge-only keys, all ✅ active: PersonalizationReportingEnabled (false), UserFee
 
 Rejected as obsolete/deprecated by Microsoft: PromotionalTabsEnabled (Edge's own copy — "will become obsolete"), EdgeFollowEnabled (obsolete after 126), EdgeWalletEtreeEnabled (deprecated). **Do not add.**
 
+## Firefox keys (July 2026 — multi-browser support)
+
+Source: [mozilla/enterprise-admin-reference `schema/policies-schema.json`](https://github.com/mozilla/enterprise-admin-reference/blob/main/schema/policies-schema.json) — the machine-readable schema behind firefox-admin-docs.mozilla.org (131 policies; the old mozilla/policy-templates README now redirects there). Firefox shares **zero** keys with the Chromium catalog; every row below was checked against the schema for existence, type, and nested-property names.
+
+Booleans: DisableTelemetry, DisableFirefoxStudies, DisableFeedbackCommands, DisableDefaultBrowserAgent (**Windows-only feature** — only the PS1 exposes it), CaptivePortal (false), PasswordManagerEnabled (false), OfferToSaveLogins (false), DisableFormHistory, AutofillAddressEnabled (false), AutofillCreditCardEnabled (false), DisableFirefoxAccounts, NetworkPrediction (false), SearchSuggestEnabled (false), DisablePrivateBrowsing, BlockAboutConfig, DisablePocket, HardwareAcceleration (true), DontCheckDefaultBrowser.
+
+String enum: HttpsOnlyMode = `force_enabled` (allowed / disallowed / enabled / force_enabled).
+
+Nested objects (property names verified against the schema):
+
+| Key | Project value |
+|---|---|
+| EnableTrackingProtection | `{Value, Locked, Cryptomining, Fingerprinting, EmailTracking: true}` |
+| Permissions | `{Location: {BlockNewRequests, Locked}, Notifications: {BlockNewRequests, Locked}}` |
+| ExtensionSettings | `{"*": {installation_mode: "blocked"}}` |
+| FirefoxHome | Search/TopSites true; SponsoredTopSites, Highlights, Pocket, SponsoredPocket, Stories, SponsoredStories, Weather, Snippets false; Locked true (schema carries both the old Pocket and new Stories field names — both are set) |
+| UserMessaging | WhatsNew, ExtensionRecommendations, FeatureRecommendations, UrlbarInterventions, MoreFromMozilla, FirefoxLabs false; SkipOnboarding, Locked true |
+| AIControls | `{Default: {Value: "blocked", Locked: true}}` |
+| DNSOverHTTPS | off → `{Enabled: false, Locked}`; automatic → `{Enabled: true, Locked}`; secure/custom → `{Enabled: true, Fallback: false, Locked}` + ProviderURL |
+
+Write locations: Linux `/etc/firefox/policies/policies.json` (content wrapped in `{"policies": {...}}`); macOS the per-channel preference domain (org.mozilla.firefox / .firefoxdeveloperedition / .nightly) with **`EnterprisePoliciesEnabled: true` injected — Firefox's macOS policy engine is inert without it**; Windows `<install dir>\distribution\policies.json` (chosen over `HKLM\Software\Policies\Mozilla\Firefox` because nested policies use a separate ADMX registry dialect — one JSON writer serves all platforms). Deliberately not exposed: DisableAppUpdate and friends (never ship an update-disabling toggle), Preferences (arbitrary about:config passthrough — out of scope).
+
 ## Cross-cutting checks
 
 - **Windows registry path** — `HKLM:\SOFTWARE\Policies\BraveSoftware\Brave` confirmed correct against Brave's official Group Policy documentation (`BraveSoftware\Brave-Browser` is the *install* dir name, not the policy path).
