@@ -10,6 +10,44 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+# ---------------------------------------------------------------------------
+# High DPI & Visual Styles Support
+# Fixes blurry window / text rendering on displays with >100% DPI scaling
+# ---------------------------------------------------------------------------
+
+try {
+    [System.Windows.Forms.Application]::EnableVisualStyles()
+} catch {}
+
+try {
+    Add-Type -Namespace SlimBrave -Name DpiHelper -MemberDefinition @'
+[DllImport("user32.dll")]
+public static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
+
+[DllImport("shcore.dll")]
+public static extern int SetProcessDpiAwareness(int awareness);
+
+[DllImport("user32.dll")]
+public static extern bool SetProcessDPIAware();
+
+public static void EnableDpiAwareness() {
+    try {
+        // -4 = DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 (Windows 10 1703+)
+        if (!SetProcessDpiAwarenessContext((IntPtr)(-4))) {
+            // Fallback: 2 = PROCESS_PER_MONITOR_DPI_AWARE (Windows 8.1 / earlier Win10)
+            if (SetProcessDpiAwareness(2) != 0) {
+                // Fallback: Windows Vista / 7
+                SetProcessDPIAware();
+            }
+        }
+    } catch {
+        try { SetProcessDPIAware(); } catch {}
+    }
+}
+'@
+    [SlimBrave.DpiHelper]::EnableDpiAwareness()
+} catch {}
+
 $machineRegistryPath = "HKLM:\SOFTWARE\Policies\BraveSoftware\Brave"
 $userRegistryPath   = "HKCU:\SOFTWARE\Policies\BraveSoftware\Brave"
 $registryPath       = $machineRegistryPath
@@ -285,6 +323,7 @@ if ($appsUseLightTheme) {
 # ---------------------------------------------------------------------------
 
 $form = New-Object System.Windows.Forms.Form
+$form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
 $form.Text = "SlimBrave Neo"
 # Segoe UI replaces the WinForms default (8.25pt Microsoft Sans Serif) and
 # is inherited by every control that doesn't set its own font.
