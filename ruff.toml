@@ -1,4 +1,8 @@
 # Dev/CI-only lint config — the scripts themselves have no dependencies.
-# Ruff's default rule set (pyflakes + a pycodestyle core) is used as-is;
+# Pin the classic default rule set (pyflakes + the pycodestyle core) so CI
+# doesn't churn when a new ruff release reshuffles its defaults;
 # line length is not enforced (the feature tables read better wide).
 target-version = "py38"
+
+[lint]
+select = ["E4", "E7", "E9", "F"]
