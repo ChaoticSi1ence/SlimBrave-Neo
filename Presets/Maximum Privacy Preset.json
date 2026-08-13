@@ -5,7 +5,6 @@
         "UrlKeyedAnonymizedDataCollectionEnabled": false,
         "BraveP3AEnabled": false,
         "BraveStatsPingEnabled": false,
-        "SafeBrowsingProtectionLevel": 0,
         "AutofillAddressEnabled": false,
         "AutofillCreditCardEnabled": false,
         "PasswordManagerEnabled": false,

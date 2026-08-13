@@ -17,6 +17,17 @@ SlimBrave Neo uses Chromium enterprise managed policies to disable telemetry, bl
 
 </div>
 
+> [!NOTE]
+> **Provenance and AI use.**
+>
+> SlimBrave Neo started from [SlimBrave](https://github.com/ltx0101/SlimBrave) by [@ltx0101](https://github.com/ltx0101) — a Windows-only PowerShell script — and is released under the same GPL-3.0 license. Everything past that starting point is this project's own work: the Linux and macOS ports, the zero-dependency Python curses TUI, the CLI, multi-channel and DNS-over-HTTPS support, the preset system, the Shields and content-protection policy set, the macOS Configuration Profile path, and the leaked-Shields-exception repair logic.
+>
+> **AI is how this project is maintained, not how it was written.** Brave and Chromium ship new milestones constantly, and policy keys get deprecated, renamed, or silently dropped between releases. Claude is used to re-audit every key against upstream source on a schedule, catch drift between the three implementations, and help with refactoring, tests, and docs. Design decisions, review, and what actually ships stay human calls.
+>
+> This is stated up front because the tool runs as **root / Administrator** and rewrites enterprise policy for your browser — you should know how it is built and kept current. Keys are verified against the [brave-core](https://github.com/brave/brave-core/tree/master/components/policy/resources/templates/policy_definitions/BraveSoftware) and [Chromium](https://chromium.googlesource.com/chromium/src/+/main/components/policy/resources/templates/policy_definitions/) policy definitions — the source, which outranks any support article or guide. The receipts are in [`AUDIT.md`](AUDIT.md), it ships source-only so you can read every line first, and CI lints and tests every change.
+>
+> Found something wrong? Open an issue. Scrutiny is the point.
+
 > [!IMPORTANT]
 > **The only official source of SlimBrave Neo is this repository:**
 > [`github.com/ChaoticSi1ence/SlimBrave-Neo`](https://github.com/ChaoticSi1ence/SlimBrave-Neo)
@@ -111,56 +122,82 @@ After applying, restart Brave and verify at `brave://policy`.
 ### Windows
 
 ```powershell
-iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/main/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; .\SlimBrave.ps1
+git clone https://github.com/ChaoticSi1ence/SlimBrave-Neo.git
+cd SlimBrave-Neo
+powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1
 ```
 
-Requires Administrator privileges. Hover over any option in the app for a plain-English description of what it does and the exact policy it writes. The app follows your Windows light/dark theme, and on low-resolution displays (e.g. 720p/768p) automatically reflows from two columns into three shorter ones so no options or buttons run off the bottom of the screen.
+**No git? Fetch a tagged release, check it, then run it.** Don't fetch `main` straight into a shell — the script self-elevates to Administrator and writes machine-wide policy, and a mutable branch can change between the version someone recommended and the version you run:
+
+```powershell
+$tag = "v1.9.0"   # a release tag, never "main" — see the Releases page for the current one
+iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/$tag/SlimBrave.ps1" -OutFile "SlimBrave.ps1"
+Get-FileHash .\SlimBrave.ps1 -Algorithm SHA256
+notepad .\SlimBrave.ps1
+powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1
+```
+
+A tag pins the exact bytes, so the hash is reproducible: anyone who clones the same tag gets the same SHA-256, and re-running `Get-FileHash` later tells you whether the copy on disk is still the one you read. Read the file before the last line — that is the whole point of shipping source-only.
+
+Requires Administrator privileges; the script re-launches itself elevated. Hover over any option in the app for a plain-English description of what it does and the exact policy it writes. The app follows your Windows light/dark theme, and on low-resolution displays (e.g. 720p/768p) automatically reflows from two columns into three shorter ones so no options or buttons run off the bottom of the screen.
 
 ---
 
 ## Features
 
 ### Telemetry & Reporting
-- Disable Metrics Reporting
+- Disable Metrics Reporting (needs a restart)
 - Disable Safe Browsing Reporting
 - Disable URL Data Collection
 - Disable P3A Analytics
 - Disable Stats Ping
+- Limit Variations to Critical Fixes, or Disable Variations / Griffin Experiments outright (mutually exclusive). Griffin is the remote seed Brave fetches to flip features in a browser that is already installed; "Limit" keeps the emergency security killswitches working, "Disable" blocks those too.
+- Disable Enhanced Spell Check (Google Web Service) — mutually exclusive with Disable Spellcheck below; this row keeps offline checking and only drops the Google lookup
 
 ### Privacy & Security
-- Disable Safe Browsing
+- Disable Safe Browsing (security downgrade — Brave proxies these lookups through its own servers, so Google never sees them either way; excluded from every preset)
 - Disable Autofill (Addresses & Credit Cards)
 - Disable Password Manager
 - Disable Password Leak Detection (the online breach-list credential check)
-- Disable Browser Sign-in
+- Disable Browser Sign-in (needs a restart)
 - Enable Global Privacy Control
 - Enable De-AMP (strip Google AMP wrappers)
 - Enable Debouncing (skip known tracking redirect hops)
 - Strip Tracking URL Parameters
 - Reduce Language Fingerprinting
 - Disable WebRTC IP Leak
-- Disable QUIC Protocol
+- Disable QUIC Protocol (needs a restart)
 - Disable Network Prediction (no DNS prefetch / preconnect for links you never click)
 - Block Third Party Cookies
 - Block Payment Method Probing (sites' `canMakePayment` always answers "none saved")
 - Disable Alternate Error Pages
+- Block Remote Debugging (closes the CDP port and pipe automation tools drive the browser through — "Disable Developer Tools" does not cover it; breaks Puppeteer, Playwright and `brave://inspect`)
+- Disable DNS Interception Probes (three random hostnames resolved at every launch and network change, visible to your ISP or DoH resolver)
+- Require HTTPS for Basic Auth (breaks logins on legacy HTTP-only routers, printers and appliances)
 
 ### Permissions & Access
 Site-permission defaults plus the escape hatches (guest, incognito, extensions) that would otherwise bypass the rest of the policy set:
 - Block Web Notifications
 - Block Location Access
 - Block Motion Sensors (a fingerprinting vector)
+- Block WebUSB Access (breaks Ledger/Trezor web wallets and in-browser firmware flashers)
+- Block Web Serial Access (breaks in-browser microcontroller programming tools)
+- Block WebHID Access (may break security keys and gamepad configurators that use WebHID rather than WebAuthn)
+- Block Local Font Enumeration (`queryLocalFonts()` hands over your installed font list — a strong fingerprint that Shields' font protections don't cover)
+- Block Multi-Screen (Window Management) Access (your monitor layout, plus placing windows on a chosen screen)
 - Force Google SafeSearch
-- Filter Adult Content (SafeSites URL filter)
+- Filter Adult Content (SafeSites) — **this is a remote lookup, not a local filter.** Every URL you navigate to, including URLs loaded inside frames, is sent to Google's Safe Search API to be classified, and anything rated adult is blocked. Worth knowing in a tool whose other rows exist to keep Google out of your browsing; enable it only if the parental-control value is worth that trade.
 - Disable Guest Mode (guest windows bypass profile restrictions)
 - Block All Extensions (blocks new installs and disables existing ones — lockdown/parental setups)
-- Disable / Force Incognito Mode (mutually exclusive)
+- Block Sideloaded (External) Extensions (the silent registry / drop-in-file install channel bundleware uses; extensions you install yourself keep working)
+- Disable / Force Incognito Mode (mutually exclusive; needs a restart)
 
 ### Brave Features
 - Disable Brave Rewards
 - Disable Brave Wallet
-- Disable Brave VPN
+- Disable Brave VPN (no effect on Linux builds — Brave doesn't compile the VPN there, though `brave://policy` still reports the key as applied)
 - Disable Brave AI Chat
+- Disable Local AI (On-Device Models, Brave 1.94+) — stops the on-device model download and the AI index built from your history. Separate from AI Chat: turning Leo off does not cover it. Forward-looking, so older Brave ignores it; needs a restart.
 - Disable Brave Shields / Force Shields On for all sites (mutually exclusive)
 - Disable Brave News
 - Disable Brave Talk
@@ -172,7 +209,7 @@ Site-permission defaults plus the escape hatches (guest, incognito, extensions) 
 - Disable Email Aliases
 
 ### Shields & Content Protection
-Pin Brave's own protection defaults as managed policy so they can't be weakened per-site or in settings (requires Brave 1.83+):
+Pin Brave's own protection defaults as managed policy so they can't be weakened per-site or in settings (requires Brave 1.84+; fingerprinting protection also works on 1.83):
 - Enforce Ad Blocking
 - Enforce Fingerprinting Protection
 - Force HTTPS Upgrades (Strict — sites that can't serve HTTPS show an interstitial)
@@ -190,7 +227,7 @@ Pin Brave's own protection defaults as managed policy so they can't be weakened 
 - Disable Shopping List
 - Always Open PDF Externally
 - Disable Translate
-- Disable Spellcheck
+- Disable Spellcheck (all of it, offline included — mutually exclusive with Disable Enhanced Spell Check)
 - Disable Search Suggestions
 - Disable Printing
 - Disable Default Browser Prompt
@@ -202,10 +239,13 @@ Pin Brave's own protection defaults as managed policy so they can't be weakened 
 - Four managed modes: `automatic`, `off`, `secure`, `custom` (`off` force-disables DoH as policy)
 - Custom DoH template URL support (e.g. `https://cloudflare-dns.com/dns-query`)
 - Inline editable template field in the TUI
+- `secure` and `custom` **require** a template URL and are refused without one. Chromium would otherwise apply the mode with an empty resolver list and resolve nothing at all — and being machine-managed policy, you couldn't fix it from `brave://settings`. `automatic` is exempt: an empty template there is valid, and a template is honoured if you set one.
 
 ---
 
-## CLI Reference
+## CLI Reference (Linux and macOS)
+
+The Windows PowerShell script is GUI-only: it declares no parameters and ignores anything on its command line, so flags land silently in `$args` and the window opens anyway. Use its Import and Export buttons instead.
 
 | Flag | Description |
 |------|-------------|
@@ -215,7 +255,7 @@ Pin Brave's own protection defaults as managed policy so they can't be weakened 
 | `--policy-file PATH` | Override policy file path |
 | `--doh-templates URL` | Set custom DNS-over-HTTPS template URL |
 | `--channels LIST` | Comma-separated channels to target (`stable,beta,nightly`; Linux also accepts `dev`). Default `auto` = all detected. macOS writes one plist per channel; Linux always shares a single policy file. |
-| `--persist MODE` | macOS persistence: `off` (plist only; may reset after reboot on macOS 13+) or `on` (install an Apple Configuration Profile via System Settings; durable, Apple-recommended). Omitted = reuse whatever mode is currently installed; falls back to `off` if nothing is. Linux ignores this flag — its `/etc/brave/policies` file is already durable. |
+| `--persist MODE` | **macOS only** (`slimbrave-mac.py`). `off` (plist only; may reset after reboot on macOS 13+) or `on` (install an Apple Configuration Profile via System Settings; durable, Apple-recommended). Omitted = reuse whatever mode is currently installed; falls back to `off` if nothing is. `slimbrave-linux.py` does not accept this flag at all and exits 2 if it is passed; `slimbrave-mac.py` run on Linux accepts only `off`, because `/etc/brave/policies` is already durable. |
 | `-h`, `--help` | Show help |
 
 Import/export uses the same JSON format as the Windows PowerShell version. Configs are cross-platform compatible.
@@ -225,44 +265,52 @@ Import/export uses the same JSON format as the Windows PowerShell version. Confi
 <details>
 <summary><strong>Presets</strong></summary>
 
+A preset is a starting point, not a verdict — import it, untick whatever you don't want, then Apply. Every preset except Strict Parental turns off Background Mode; that policy is Windows/Linux only, so on macOS the key is skipped and the rest of the preset applies unchanged. None of the presets ships "Disable Safe Browsing", "Allow Permissive Referrers", or the two mutually-exclusive Shields overrides.
+
 ### Maximum Privacy Preset
-- **Telemetry:** Blocks all reporting (metrics, safe browsing, URL collection, feedback).
-- **Privacy:** Disables autofill, password manager, leak detection, sign-in, WebRTC leaks, QUIC, and network prediction; blocks payment-method probing, web notifications, location access, and motion sensors; enforces Global Privacy Control. (Location is fully blocked, not "ask" — maps and delivery sites need addresses typed manually; uncheck "Block Location Access" if that is too strict.)
-- **Brave Features:** Kills Rewards, Wallet, VPN, AI Chat, Tor, Sync, and Email Aliases.
+- **Telemetry:** Turns off every reporting channel — metrics, extended Safe Browsing reports, URL-keyed data collection, P3A analytics, and the daily stats ping.
+- **Safe Browsing:** Left **on**. Only the extended *reports* are disabled. Brave routes Safe Browsing lookups through its own servers rather than Google's, so switching the protection off would cost you phishing and malware interstitials for essentially no privacy gain — the "Disable Safe Browsing (security downgrade)" toggle is there if you disagree, but no preset sets it.
+- **Privacy:** Disables autofill (addresses and cards), the password manager, leak detection, browser sign-in, WebRTC IP exposure, QUIC, network prediction and alternate error pages; blocks third-party cookies, payment-method probing, web notifications, location access, and motion sensors; enables Global Privacy Control, De-AMP, debouncing, tracking-parameter stripping, and reduced language fingerprinting. (Location is fully blocked, not "ask" — maps and delivery sites need addresses typed manually; uncheck "Block Location Access" if that is too strict.)
+- **Brave Features:** Kills Rewards, Wallet, VPN, AI Chat, News, Talk, Playlist, Speedreader, Web Discovery, Tor, Sync, and Email Aliases.
 - **Shields:** Pins ad blocking, fingerprinting protection, strict HTTPS, capped referrers, and forget-on-close storage as managed policy.
-- **Performance:** Disables background processes, Cast device discovery, media recommendations, and bloat.
+- **Performance and bloat — read this one before applying.** It goes well past "background processes": background mode, Cast device discovery, media recommendations, and the shopping list are off, and so are **developer tools, printing, the built-in PDF viewer** (PDFs download and open in your system viewer instead), **translation, spellcheck, search suggestions, and the default-browser prompt**. If you need devtools or printing, use the Developer preset, or untick those rows in the Performance & Bloat section before Apply.
 - **DNS:** Left unmanaged. Forcing DoH off would hand every DNS query to your ISP in cleartext, while forcing DoH on concentrates that visibility at the DoH provider — which trade-off is right depends on who you distrust more, so the preset leaves the choice to you (set it manually in the DNS section if you have a preference).
 - **Note:** No longer forces incognito-only browsing (earlier versions set `IncognitoModeAvailability: 2`, which silently disabled history, persistent logins, and most extensions). Forget-on-close storage covers the privacy goal; the Force Incognito toggle is still available manually.
-- **Best for:** Paranoid users, journalists, activists, or anyone who wants Brave as private as possible.
+- **Best for:** Paranoid users, journalists, activists, or anyone who wants Brave as private as possible — provided they read the performance bullet first.
 
 ### Balanced Privacy Preset
-- **Telemetry:** Blocks all tracking but keeps basic safe browsing.
-- **Privacy:** Blocks third-party cookies, payment-method probing, and network prediction; enables Global Privacy Control — but allows password manager and autofill for addresses.
-- **Brave Features:** Disables Rewards, Wallet, VPN, and AI features.
-- **Performance:** Turns off background services, media recommendations, and ads.
+- **Telemetry:** Same five reporting channels as Maximum Privacy — metrics, extended Safe Browsing reports, URL-keyed collection, P3A, stats ping. Safe Browsing protection itself stays on.
+- **Privacy:** Blocks third-party cookies, payment-method probing, network prediction and alternate error pages; enables Global Privacy Control, De-AMP, debouncing, tracking-parameter stripping, and reduced language fingerprinting; disables **QUIC** (all traffic falls back to TCP) and restricts **WebRTC** to proxied connections, which can break in-browser video and voice calls. Credit-card autofill is off, but address autofill and the password manager are deliberately kept.
+- **Accounts:** Browser sign-in and **Brave Sync** are both disabled, so bookmarks, history and settings stop syncing across your devices. Untick "Disable Sync" and "Disable Browser Sign-in" before Apply if you rely on a sync chain.
+- **Brave Features:** Disables Rewards, Wallet, VPN, AI Chat, News, Talk, Web Discovery, and **Tor** (the "New private window with Tor" option disappears).
+- **Performance:** Turns off background mode, media recommendations, the shopping list, and the default-browser prompt.
 - **DNS:** Uses automatic DoH (lets Brave choose the fastest secure DNS).
-- **Best for:** Most users who want privacy but still need convenience features.
+- **Best for:** Most users who want privacy but still need convenience features — the password manager, address autofill, and Shields left at Brave's own defaults.
 
 ### Performance Focused Preset
-- **Telemetry:** Blocks metrics reporting, P3A analytics, and the daily stats ping (Safe Browsing stays untouched).
-- **Brave Features:** Disables Rewards, Wallet, VPN, AI, Speedreader, and Web Discovery to declutter the browser.
-- **Performance:** Forces Memory Saver and hardware acceleration on; kills background processes, Cast device discovery, media recommendations, shopping features, and promotions. Network prediction is deliberately left on — prefetch makes browsing faster at a small privacy cost, which is the right trade for this preset.
+- **Telemetry:** Blocks metrics reporting, P3A analytics, and the daily stats ping (Safe Browsing and its extended reports stay untouched).
+- **Privacy:** The three no-cost speedups only — De-AMP, debouncing, and tracking-parameter stripping. Nothing else in Privacy & Security is touched.
+- **Brave Features:** Disables Rewards, Wallet, VPN, AI Chat, News, Talk, Playlist, Speedreader, Web Discovery, and the Wayback Machine prompt to declutter the browser.
+- **Performance:** Forces Memory Saver and hardware acceleration on; kills background mode, Cast device discovery, media recommendations, the shopping list, and the default-browser prompt. Network prediction is deliberately left on — prefetch makes browsing faster at a small privacy cost, which is the right trade for this preset.
 - **DNS:** Automatic DoH for a balance of speed and security.
 - **Best for:** Users who want a faster, cleaner Brave without extreme privacy tweaks.
 
 ### Developer Preset
-- **Telemetry:** Blocks all reporting.
-- **Privacy:** Disables alternate error pages so you always see the real network error, never a suggestion page.
-- **Brave Features:** Disables Rewards, Wallet, and VPN but keeps developer tools, printing, spellcheck, and the built-in PDF viewer.
-- **Performance:** Turns off background services, media recommendations, and ads.
+- **Telemetry:** Blocks all five reporting channels (metrics, extended Safe Browsing reports, URL-keyed collection, P3A, stats ping).
+- **Privacy:** Disables alternate error pages so you always see the real network error, never a suggestion page. Nothing else in Privacy & Security is touched.
+- **Brave Features:** Disables Rewards, Wallet, VPN, AI Chat (Leo), News, and Talk.
+- **Kept on purpose:** developer tools, printing, spellcheck, the built-in PDF viewer, QUIC, and Sync — the things the other presets take away and a developer needs back.
+- **Performance:** Turns off background mode, media recommendations, the shopping list, and the default-browser prompt.
 - **DNS:** Automatic DoH (default secure DNS).
-- **Best for:** Developers who need dev tools but still want telemetry and ads disabled.
+- **Best for:** Developers who need dev tools and a working network stack but still want telemetry and Brave's monetised features out of the way.
 
 ### Strict Parental Controls Preset
-- **Privacy:** Blocks incognito mode **and guest mode** (a guest window would bypass every other restriction), forces Google SafeSearch plus the built-in SafeSites adult-content filter, and disables sign-in.
+- **Telemetry:** P3A analytics and the daily stats ping.
+- **Privacy:** Blocks incognito mode **and guest mode** (a guest window would bypass every other restriction), forces Google SafeSearch, enables the SafeSites adult-content filter, disables browser sign-in and **Brave Sync**, and turns on De-AMP, debouncing, tracking-parameter stripping, and reduced language fingerprinting.
+- **SafeSites is a Google callout.** `SafeSitesFilterBehavior` sends every URL the browser navigates to — including URLs loaded inside frames — to Google's Safe Search API for classification. It is a remote lookup, not a local blocklist. That is the price of the filter; if it isn't acceptable, untick "Filter Adult Content (SafeSites)" and rely on the DNS filter alone.
 - **Extensions:** Blocks all extension installs and disables existing ones — a proxy or VPN extension would bypass the DNS filter.
-- **Brave Features:** Disables Rewards, Wallet, VPN, Tor, and dev tools.
-- **DNS:** Uses custom DoH (can be set to a family-friendly DNS like Cloudflare for Families).
+- **Brave Features:** Disables Rewards, Wallet, VPN, AI Chat, News, Talk, Web Discovery, Tor, and developer tools.
+- **DNS — no plaintext fallback.** The preset sets a custom DoH template of `https://family.cloudflare-dns.com/dns-query` (Cloudflare for Families). Custom mode is Chromium's **secure** DoH mode: Brave sends DNS-over-HTTPS queries *only*, and a lookup that fails is not retried against your system resolver. If that endpoint is blocked or unreachable — captive-portal Wi-Fi, some corporate and school networks — **nothing resolves at all** until you change the DNS mode back to `unmanaged` and re-Apply, or reset the policy entirely. Point it at a resolver you know works on the networks the machine will be used on.
 - **Best for:** Parents, schools, or workplaces that need restricted browsing.
 
 </details>
@@ -284,7 +332,7 @@ SlimBrave Neo writes Chromium [managed enterprise policies](https://chromeenterp
 - Auto-detects Brave installations: Arch (`brave-bin`), deb/rpm, Flatpak, Snap, macOS App (Stable / Beta / Nightly), and PATH fallback
 - Reads existing policies on startup and pre-checks matching features; on macOS, the Apply-time channel prompt pre-ticks channels that already have a SlimBrave-managed policy (sticky default)
 - Full overwrite on Apply, so unchecked features are cleanly removed
-- Import/export compatible with Windows PowerShell version (handles UTF-16 BOM encoding)
+- Import/export compatible with the Windows PowerShell version: all three scripts now export UTF-8 without a BOM, and all three still read the UTF-16 files older PowerShell exports produced
 
 ---
 
@@ -292,29 +340,38 @@ SlimBrave Neo writes Chromium [managed enterprise policies](https://chromeenterp
 <summary><strong>Requirements</strong></summary>
 
 **Linux:**
-- Python 3 (no external dependencies)
+- Python 3.9+ (no external dependencies)
 - Root privileges (`sudo`)
 - Brave Browser installed (any packaging method)
 
 **macOS:**
-- Python 3 (no external dependencies)
+- Python 3.9+ (no external dependencies)
 - Root privileges (`sudo`)
 - Brave Browser installed
 
 **Windows:**
 - Windows 10/11
-- PowerShell
+- Windows PowerShell 5.1 (the one that ships with Windows — no install needed)
 - Administrator privileges
+
+3.9 is the floor CI lints against; the scripts themselves use nothing newer than 3.7 syntax.
 
 </details>
 
 <details>
 <summary><strong>Windows: "Running Scripts is Disabled on this System"</strong></summary>
 
-Run this command in PowerShell:
+Launch the script the way the Quick Start does — the bypass applies to that one process and nothing else:
 
 ```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned
+powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1
+```
+
+You do not need to change your machine's execution policy for SlimBrave Neo, and you shouldn't: `Set-ExecutionPolicy RemoteSigned` with no `-Scope` defaults to `LocalMachine` and weakens script execution permanently, for every user on the box. If you want a lasting change anyway, scope it to yourself and know how to undo it:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser   # apply
+Set-ExecutionPolicy -ExecutionPolicy Undefined   -Scope CurrentUser   # undo
 ```
 
 </details>
@@ -333,10 +390,12 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned
 
 ---
 
-## Contributors
+## Credits
 
-- **[@alsyundawy](https://github.com/alsyundawy)** - macOS version
-- **[@zhaoJianNet](https://github.com/zhaoJianNet)** - macOS refinements
+- **[@ltx0101](https://github.com/ltx0101)** — [SlimBrave](https://github.com/ltx0101/SlimBrave), the upstream Windows PowerShell script this project grew out of (GPL-3.0)
+- **[@alsyundawy](https://github.com/alsyundawy)** — macOS version
+- **[@zhaoJianNet](https://github.com/zhaoJianNet)** — macOS refinements
+
 ---
 
 <div align="center">

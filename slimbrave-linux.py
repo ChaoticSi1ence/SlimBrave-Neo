@@ -159,9 +159,19 @@ def _atomic_write(path, data, *, binary=False, mode=0o644):
     directory = os.path.dirname(path) or "."
     fd, tmp = tempfile.mkstemp(prefix=".slimbrave.", suffix=".tmp", dir=directory)
     try:
-        with os.fdopen(fd, "wb" if binary else "w") as f:
+        # Pin the text encoding: readers use utf-8 explicitly, so inheriting
+        # the locale's would round-trip non-ASCII through the wrong codec.
+        with os.fdopen(fd, "wb" if binary else "w",
+                       encoding=None if binary else "utf-8") as f:
             f.write(data)
-        os.chmod(tmp, mode)
+            # fchmod on the descriptor, not chmod on the path — the temp
+            # file can sit in a directory the unprivileged user owns, so a
+            # second path lookup here is redirectable. (Windows only grew
+            # os.fchmod in 3.13; fall back there.)
+            if hasattr(os, "fchmod"):
+                os.fchmod(f.fileno(), mode)
+            else:
+                os.chmod(tmp, mode)
         os.replace(tmp, path)
     except Exception:
         try:
@@ -202,6 +212,7 @@ def detect_brave():
     primary_path = ""
     warnings = []
     found_any = False
+    home = _user_home_for_brave()
 
     # Arch (brave-bin AUR package)
     if os.path.isfile("/opt/brave-bin/brave"):
@@ -211,25 +222,26 @@ def detect_brave():
         method, primary_path, found_any = "deb/rpm", "/opt/brave.com/brave/brave-browser", True
     elif os.path.isfile("/opt/brave.com/brave/brave"):
         method, primary_path, found_any = "deb/rpm", "/opt/brave.com/brave/brave", True
-    else:
-        try:
-            result = subprocess.run(
-                ["flatpak", "info", "com.brave.Browser"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            if result.returncode == 0:
-                method, primary_path, found_any = "flatpak", "com.brave.Browser", True
-        except FileNotFoundError:
-            pass  # flatpak not installed
 
-    if not found_any:
-        snap_path = "/snap/brave/current/opt/brave.com/brave/brave"
-        if os.path.isfile(snap_path) or os.path.isdir("/snap/brave/current"):
+    # Flatpak and Snap are probed unconditionally, not as the `else` of the
+    # native chain: a mixed install has both, and the Snap warning applies
+    # whenever a Snap Brave exists. Flatpak is checked on the filesystem
+    # rather than via `flatpak info`, which under sudo runs with HOME=/root
+    # and so never sees the user's --user installation.
+    if os.path.isdir("/var/lib/flatpak/app/com.brave.Browser") or (
+            home and os.path.isdir(os.path.join(
+                home, ".local", "share", "flatpak", "app", "com.brave.Browser"))):
+        if not found_any:
+            method, primary_path, found_any = "flatpak", "com.brave.Browser", True
+
+    snap_path = "/snap/brave/current/opt/brave.com/brave/brave"
+    if os.path.isfile(snap_path) or os.path.isdir("/snap/brave/current"):
+        if not found_any:
             method, primary_path, found_any = "snap", snap_path, True
-            warnings.append(
-                "Snap confinement may prevent policies from taking effect. "
-                "Native packages are recommended."
-            )
+        warnings.append(
+            "Snap confinement may prevent policies from taking effect. "
+            "Native packages are recommended."
+        )
 
     if not found_any:
         for name in ("brave-browser-stable", "brave-browser", "brave"):
@@ -246,7 +258,6 @@ def detect_brave():
 
     # Detect installed Linux channels by user-data dir presence (best effort).
     installations = []
-    home = _user_home_for_brave()
     detected_labels = []
     for ch in LINUX_CHANNELS:
         ch_dir = (
@@ -310,7 +321,9 @@ def detect_brave():
 # Features with a `group` key are mutually exclusive within that group:
 # checking one silently unchecks the others. Used for policies where two
 # rows set conflicting values for the same key (IncognitoModeAvailability,
-# DefaultBraveReferrersSetting) and for the Shields URL lists.
+# DefaultBraveReferrersSetting, ChromeVariations), for the Shields URL
+# lists, and for the two spellcheck rows — upstream states the enhanced
+# spell check policy has no effect once SpellcheckEnabled is false.
 CATEGORIES = [
     {
         "name": "Telemetry & Reporting",
@@ -320,12 +333,15 @@ CATEGORIES = [
             {"name": "Disable URL Data Collection", "key": "UrlKeyedAnonymizedDataCollectionEnabled", "value": False},
             {"name": "Disable P3A Analytics", "key": "BraveP3AEnabled", "value": False},
             {"name": "Disable Stats Ping", "key": "BraveStatsPingEnabled", "value": False},
+            {"name": "Limit Variations to Critical Fixes", "key": "ChromeVariations", "value": 1, "group": "variations"},
+            {"name": "Disable Variations / Griffin Experiments", "key": "ChromeVariations", "value": 2, "group": "variations"},
+            {"name": "Disable Enhanced Spell Check (Google Web Service)", "key": "SpellCheckServiceEnabled", "value": False, "group": "spellcheck"},
         ],
     },
     {
         "name": "Privacy & Security",
         "features": [
-            {"name": "Disable Safe Browsing", "key": "SafeBrowsingProtectionLevel", "value": 0},
+            {"name": "Disable Safe Browsing (security downgrade)", "key": "SafeBrowsingProtectionLevel", "value": 0},
             {"name": "Disable Autofill (Addresses)", "key": "AutofillAddressEnabled", "value": False},
             {"name": "Disable Autofill (Credit Cards)", "key": "AutofillCreditCardEnabled", "value": False},
             {"name": "Disable Password Manager", "key": "PasswordManagerEnabled", "value": False},
@@ -342,6 +358,9 @@ CATEGORIES = [
             {"name": "Block Third Party Cookies", "key": "BlockThirdPartyCookies", "value": True},
             {"name": "Block Payment Method Probing", "key": "PaymentMethodQueryEnabled", "value": False},
             {"name": "Disable Alternate Error Pages", "key": "AlternateErrorPagesEnabled", "value": False},
+            {"name": "Block Remote Debugging", "key": "RemoteDebuggingAllowed", "value": False},
+            {"name": "Disable DNS Interception Probes", "key": "DNSInterceptionChecksEnabled", "value": False},
+            {"name": "Require HTTPS for Basic Auth", "key": "BasicAuthOverHttpEnabled", "value": False},
         ],
     },
     {
@@ -353,10 +372,16 @@ CATEGORIES = [
             {"name": "Block Web Notifications", "key": "DefaultNotificationsSetting", "value": 2},
             {"name": "Block Location Access", "key": "DefaultGeolocationSetting", "value": 2},
             {"name": "Block Motion Sensors", "key": "DefaultSensorsSetting", "value": 2},
+            {"name": "Block WebUSB Access", "key": "DefaultWebUsbGuardSetting", "value": 2},
+            {"name": "Block Web Serial Access", "key": "DefaultSerialGuardSetting", "value": 2},
+            {"name": "Block WebHID Access", "key": "DefaultWebHidGuardSetting", "value": 2},
+            {"name": "Block Local Font Enumeration", "key": "DefaultLocalFontsSetting", "value": 2},
+            {"name": "Block Multi-Screen (Window Management) Access", "key": "DefaultWindowManagementSetting", "value": 2},
             {"name": "Force Google SafeSearch", "key": "ForceGoogleSafeSearch", "value": True},
             {"name": "Filter Adult Content (SafeSites)", "key": "SafeSitesFilterBehavior", "value": 1},
             {"name": "Disable Guest Mode", "key": "BrowserGuestModeEnabled", "value": False},
             {"name": "Block All Extensions", "key": "ExtensionInstallBlocklist", "value": ["*"]},
+            {"name": "Block Sideloaded (External) Extensions", "key": "BlockExternalExtensions", "value": True},
             {"name": "Disable Incognito Mode", "key": "IncognitoModeAvailability", "value": 1, "group": "incognito"},
             {"name": "Force Incognito Mode", "key": "IncognitoModeAvailability", "value": 2, "group": "incognito"},
         ],
@@ -366,8 +391,9 @@ CATEGORIES = [
         "features": [
             {"name": "Disable Brave Rewards", "key": "BraveRewardsDisabled", "value": True},
             {"name": "Disable Brave Wallet", "key": "BraveWalletDisabled", "value": True},
-            {"name": "Disable Brave VPN", "key": "BraveVPNDisabled", "value": True},
+            {"name": "Disable Brave VPN (no effect on Linux builds)", "key": "BraveVPNDisabled", "value": True},
             {"name": "Disable Brave AI Chat", "key": "BraveAIChatEnabled", "value": False},
+            {"name": "Disable Local AI (On-Device Models, Brave 1.94+)", "key": "BraveLocalAIEnabled", "value": False},
             {"name": "Disable Brave Shields", "key": "BraveShieldsDisabledForUrls", "value": ["https://*", "http://*"], "group": "shields"},
             {"name": "Force Shields On (All Sites)", "key": "BraveShieldsEnabledForUrls", "value": ["https://*", "http://*"], "group": "shields"},
             {"name": "Disable Brave News", "key": "BraveNewsDisabled", "value": True},
@@ -381,9 +407,10 @@ CATEGORIES = [
         ],
     },
     {
-        # Brave 1.83+ content-protection enforcers. These pin Brave's own
-        # privacy defaults as managed policy so neither the user nor a
-        # malicious page/extension can quietly weaken them.
+        # Brave 1.84+ content-protection enforcers (fingerprinting
+        # protection also works on 1.83). These pin Brave's own privacy
+        # defaults as managed policy so neither the user nor a malicious
+        # page/extension can quietly weaken them.
         "name": "Shields & Content Protection",
         "features": [
             {"name": "Enforce Ad Blocking", "key": "DefaultBraveAdblockSetting", "value": 2},
@@ -405,7 +432,7 @@ CATEGORIES = [
             {"name": "Disable Shopping List", "key": "ShoppingListEnabled", "value": False},
             {"name": "Always Open PDF Externally", "key": "AlwaysOpenPdfExternally", "value": True},
             {"name": "Disable Translate", "key": "TranslateEnabled", "value": False},
-            {"name": "Disable Spellcheck", "key": "SpellcheckEnabled", "value": False},
+            {"name": "Disable Spellcheck", "key": "SpellcheckEnabled", "value": False, "group": "spellcheck"},
             {"name": "Disable Search Suggestions", "key": "SearchSuggestEnabled", "value": False},
             {"name": "Disable Printing", "key": "PrintingEnabled", "value": False},
             {"name": "Disable Default Browser Prompt", "key": "DefaultBrowserSettingEnabled", "value": False},
@@ -498,6 +525,31 @@ def toggle_feature_row(rows, target):
             if row.get("type") == ROW_FEATURE and row.get("group") == group:
                 row["checked"] = False
 
+
+def _enforce_groups(rows, features_map):
+    """Collapse every group down to at most one checked row.
+
+    Import and policy-sync set `checked` per row with no group awareness,
+    so a config naming both BraveShieldsDisabledForUrls and
+    BraveShieldsEnabledForUrls ticks both and _build_policy emits force-off
+    and force-on for the same wildcards. `features_map` supplies the source
+    order (the config's or the policy's key order) and the last key listed
+    wins, matching the PS1 CheckedChanged handler's behaviour.
+    """
+    order = list(features_map)
+    groups = {r.get("group") for r in rows
+              if r["type"] == ROW_FEATURE and r.get("group")}
+    for group in groups:
+        members = [r for r in rows
+                   if r["type"] == ROW_FEATURE
+                   and r.get("group") == group and r["checked"]]
+        if len(members) < 2:
+            continue
+        keep = max(members, key=lambda r: order.index(r["key"]))
+        for r in members:
+            if r is not keep:
+                r["checked"] = False
+
 # ---------------------------------------------------------------------------
 # BOM-aware JSON reader (handles PowerShell UTF-16 exports)
 # ---------------------------------------------------------------------------
@@ -538,16 +590,63 @@ def read_json_file(path):
 # ---------------------------------------------------------------------------
 
 
+def _pid_is_alive(pid):
+    """True if `pid` names a live process.
+
+    /proc is the cheap check; signal 0 is the fallback for kernels without
+    it. Never reached off POSIX — os.kill there terminates rather than
+    probes.
+    """
+    if os.path.isdir(f"/proc/{pid}"):
+        return True
+    if os.name != "posix":
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True  # it exists, we just can't signal it
+    return True
+
+
+def _singleton_lock_pid(prefs_path):
+    """Return the pid holding a profile's Chromium SingletonLock, or None.
+
+    Chromium symlinks <user-data-dir>/SingletonLock to "<hostname>-<pid>"
+    for as long as the profile is open. This is the only running-check that
+    covers every channel: `pgrep -x` matches /proc/<pid>/comm, capped at 15
+    characters, so "brave-browser-beta" and friends can never match.
+    """
+    if not prefs_path:
+        return None
+    user_data = os.path.dirname(os.path.dirname(prefs_path))
+    try:
+        target = os.readlink(os.path.join(user_data, "SingletonLock"))
+    except OSError:
+        return None
+    pid_part = target.rsplit("-", 1)[-1]
+    return int(pid_part) if pid_part.isdigit() else None
+
+
 def _is_brave_running(installations=None):
     """True if any of the listed Brave installations have a live process."""
     if installations is None:
         names = ["brave"]
     else:
+        for inst in installations:
+            pid = _singleton_lock_pid(inst.get("prefs_path"))
+            if pid is not None and _pid_is_alive(pid):
+                return True
         names = [i["process_name"] for i in installations if i.get("process_name")]
         if not names:
             names = ["brave"]
 
     for name in names:
+        # A name longer than comm's 15-char cap can only ever be a false
+        # negative, so don't spend a process asking.
+        if len(name) > 15:
+            continue
         try:
             result = subprocess.run(
                 ["pgrep", "-x", name],
@@ -560,8 +659,83 @@ def _is_brave_running(installations=None):
     return False
 
 
+def _sudo_user_identity():
+    """Return (name, uid, gid) of the invoking user, or None if there is none."""
+    sudo_user = os.environ.get("SUDO_USER")
+    if not sudo_user:
+        return None
+    try:
+        import pwd
+        info = pwd.getpwnam(sudo_user)
+    except (ImportError, KeyError):
+        return None
+    if info.pw_uid == 0:
+        return None
+    return (sudo_user, info.pw_uid, info.pw_gid)
+
+
 def _repair_one_prefs(pref_path):
-    """Scrub SlimBrave's Shields-disabled exceptions from a single prefs file."""
+    """Scrub a single prefs file, dropping root first where we can.
+
+    Every path component under the user's home is theirs to replace, so
+    doing the read-modify-write as root would follow a symlinked
+    `Default`/`Profile *` into a file root owns and then hand it over.
+    Fork and drop to the invoking user's uid/gid instead — the child can
+    only reach what that user could already reach. Returns the number of
+    entries removed (0 on any failure, so a broken drop repairs nothing
+    rather than repairing as root).
+    """
+    identity = _sudo_user_identity()
+    if identity is None or not hasattr(os, "fork") or os.geteuid() != 0:
+        return _scrub_one_prefs(pref_path)
+
+    name, uid, gid = identity
+    read_fd, write_fd = os.pipe()
+    try:
+        pid = os.fork()
+    except OSError:
+        os.close(read_fd)
+        os.close(write_fd)
+        return 0
+
+    if pid == 0:
+        removed = 0
+        try:
+            os.close(read_fd)
+            try:
+                os.initgroups(name, gid)
+            except (AttributeError, OSError):
+                pass  # supplementary groups are best-effort
+            os.setgid(gid)
+            os.setuid(uid)
+            removed = _scrub_one_prefs(pref_path)
+        except BaseException:
+            removed = 0
+        finally:
+            try:
+                # Decimal, not a raw byte: a single byte wraps at 256 and
+                # would report a large scrub as 0. Well under PIPE_BUF, so
+                # the write is atomic and one read gets all of it.
+                os.write(write_fd, str(removed).encode("ascii"))
+            except OSError:
+                pass
+            os._exit(0)
+
+    os.close(write_fd)
+    try:
+        reply = os.read(read_fd, 32)
+    except OSError:
+        reply = b""
+    os.close(read_fd)
+    os.waitpid(pid, 0)
+    try:
+        return int(reply)
+    except ValueError:
+        return 0
+
+
+def _scrub_one_prefs(pref_path):
+    """Remove SlimBrave's Shields-disabled exceptions from one prefs file."""
     if not pref_path or not os.path.isfile(pref_path):
         return 0
 
@@ -599,8 +773,8 @@ def _repair_one_prefs(pref_path):
     except OSError:
         return 0
 
-    # We're root via sudo — return the file to its original owner so the
-    # user's Brave can rewrite it on the next session.
+    # Normally a no-op: _repair_one_prefs' fork already dropped to this
+    # user, so the file never changed hands. Kept for the inline path.
     _chown_to_sudo_user(pref_path)
 
     return removed
@@ -679,8 +853,13 @@ def _build_policy(rows):
         elif row["type"] == ROW_DNS_TEMPLATE:
             dns_template = row["value"].strip()
 
-    if dns_mode == "custom" and not dns_template:
-        return None, "Custom DNS requires a DoH template URL."
+    # "secure" with no template is a working configuration that resolves
+    # nothing: Chromium applies the mode, blanks the templates pref, and
+    # the system-resolver fallback is gated off for kSecure. The user can't
+    # undo it in settings either, because the policy is machine-managed.
+    # "automatic" is exempt — an empty template is valid and documented.
+    if dns_mode in ("custom", "secure") and not dns_template:
+        return None, "Secure/custom DNS requires a DoH template URL."
 
     # "unmanaged" writes no DNS keys at all; since Apply fully overwrites
     # the policy file, any previously-managed DNS policy is removed.
@@ -690,7 +869,9 @@ def _build_policy(rows):
             policy["DnsOverHttpsTemplates"] = dns_template
         else:
             policy["DnsOverHttpsMode"] = dns_mode
-            if dns_mode == "secure" and dns_template:
+            # Chromium honours a template in "automatic" mode too (it just
+            # keeps the plaintext fallback), so don't discard one.
+            if dns_mode in ("automatic", "secure") and dns_template:
                 policy["DnsOverHttpsTemplates"] = dns_template
     return policy, ""
 
@@ -705,11 +886,6 @@ def _write_one_policy(plist_path, policy):
     except OSError as e:
         return False, f"Failed to write policy: {e}"
     return True, ""
-
-
-def _selected_channel_targets(installations):
-    """Linux has no per-channel scoping, so every installation is targeted."""
-    return list(installations)
 
 
 def _dedupe_plist_targets(installations):
@@ -736,7 +912,7 @@ def apply_policy(rows, installations=None):
     if installations is None:
         targets = [(POLICY_FILE, "")]
     else:
-        targets = _dedupe_plist_targets(_selected_channel_targets(installations))
+        targets = _dedupe_plist_targets(installations)
 
     if not targets:
         return False, "No Brave channel selected."
@@ -750,12 +926,9 @@ def apply_policy(rows, installations=None):
         if label:
             written_labels.append(label)
 
-    repair_targets = (
-        _selected_channel_targets(installations)
-        if installations else None
-    )
     return True, _post_apply_message(
-        *repair_brave_prefs(repair_targets), labels=written_labels,
+        *repair_brave_prefs(installations if installations else None),
+        labels=written_labels,
     )
 
 
@@ -763,13 +936,20 @@ def _post_apply_message(repaired, brave_running, labels=None):
     """Build the status message after a successful Apply or Reset."""
     scope = f" to {', '.join(labels)}" if labels else ""
     base = f"Settings applied{scope}. Restart Brave to see changes."
-    if repaired > 0:
+    # Only claim a repair count that can survive: Chromium serves prefs
+    # from an in-memory PrefService and flushes on shutdown, so a running
+    # Brave writes back over whatever we just cleaned.
+    if repaired > 0 and not brave_running:
         base = (
             f"Applied{scope}; cleaned {repaired} leaked profile "
             f"pref{'s' if repaired != 1 else ''}. Restart Brave."
         )
     if brave_running:
-        base += " (Brave is running — fully close it before reopening.)"
+        base += (
+            " Brave is running: any leaked profile prefs cleaned now will be "
+            "overwritten when Brave next saves. Fully close Brave and run "
+            "Apply again to make it stick."
+        )
     return base
 
 
@@ -778,7 +958,7 @@ def reset_policy(rows, installations=None):
     if installations is None:
         targets = [(POLICY_FILE, "")]
     else:
-        targets = _dedupe_plist_targets(_selected_channel_targets(installations))
+        targets = _dedupe_plist_targets(installations)
 
     if not targets:
         return False, "No Brave channel selected."
@@ -802,20 +982,20 @@ def reset_policy(rows, installations=None):
     except OSError as e:
         return False, f"Failed to reset: {e}"
 
-    repair_targets = (
-        _selected_channel_targets(installations)
-        if installations else None
-    )
-    repaired, running = repair_brave_prefs(repair_targets)
+    repaired, running = repair_brave_prefs(installations if installations else None)
     scope = f" for {', '.join(cleared_labels)}" if cleared_labels else ""
     msg = f"All settings reset{scope}. Restart Brave to see changes."
-    if repaired > 0:
+    if repaired > 0 and not running:
         msg = (
             f"Reset{scope}; cleaned {repaired} leaked profile "
             f"pref{'s' if repaired != 1 else ''}. Restart Brave."
         )
     if running:
-        msg += " (Brave is running — fully close it before reopening.)"
+        msg += (
+            " Brave is running: any leaked profile prefs cleaned now will be "
+            "overwritten when Brave next saves. Fully close Brave and run "
+            "Reset again to make it stick."
+        )
     return True, msg
 
 
@@ -840,6 +1020,8 @@ def sync_rows_with_policy(rows, policy):
             if tmpl:
                 row["value"] = tmpl
                 row["cursor"] = len(tmpl)
+                row["scroll"] = 0
+    _enforce_groups(rows, policy)
 
 # ---------------------------------------------------------------------------
 # Import / Export (PS1-compatible JSON format)
@@ -861,11 +1043,13 @@ def export_settings(rows, path):
 
     # DnsMode is omitted when DNS is unmanaged, so importing the file
     # (on any platform) lands back on "unmanaged" instead of forcing a
-    # managed DNS policy. The template only matters for custom/secure.
+    # managed DNS policy. The template set mirrors _build_policy exactly —
+    # "automatic" honours one too, and dropping it here would silently
+    # hand DNS back to the default resolver on the next import.
     settings = {"Features": features}
     if dns_mode and dns_mode != "unmanaged":
         settings["DnsMode"] = dns_mode
-        if dns_template and dns_mode in ("custom", "secure"):
+        if dns_template and dns_mode in ("custom", "secure", "automatic"):
             settings["DnsTemplates"] = dns_template
 
     try:
@@ -886,7 +1070,9 @@ def _parse_imported_features(features_obj):
     if isinstance(features_obj, dict):
         return dict(features_obj), False
     if isinstance(features_obj, list):
-        return {k: None for k in features_obj}, True
+        # Drop non-string entries: a nested object would be unhashable and
+        # blow up the dict comprehension.
+        return {k: None for k in features_obj if isinstance(k, str)}, True
     return {}, False
 
 
@@ -900,6 +1086,13 @@ def import_settings(rows, path):
         return False, f"Invalid JSON: {e}"
     except OSError as e:
         return False, f"Read error: {e}"
+
+    # `[1,2]`, `null`, `"x"` and `3` are all valid JSON that would die at
+    # the first .get() — in the TUI that traceback escapes curses.wrapper.
+    if not isinstance(config, dict):
+        return False, (
+            f"Invalid config: expected a JSON object, got {type(config).__name__}"
+        )
 
     features_map, is_legacy = _parse_imported_features(config.get("Features"))
     dns_mode = config.get("DnsMode", "")
@@ -934,6 +1127,7 @@ def import_settings(rows, path):
             row["cursor"] = len(dns_template)
             row["scroll"] = 0
 
+    _enforce_groups(rows, features_map)
     return True, f"Imported from {path}"
 
 # ---------------------------------------------------------------------------
@@ -1049,7 +1243,16 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
             val = row["value"] if row["value"] else ""
             if tmpl_active:
                 field_w = max(10, usable_w - 22)
-                scroll = row.get("scroll", 0)
+                # The stored offset was computed against whatever width the
+                # terminal had when the user last typed; re-derive it for
+                # the current field so a resize can't strand the text.
+                scroll = max(0, min(row.get("scroll", 0), len(val)))
+                cur_pos = row.get("cursor", 0)
+                if cur_pos - scroll >= field_w:
+                    scroll = cur_pos - field_w + 1
+                elif cur_pos < scroll:
+                    scroll = cur_pos
+                row["scroll"] = scroll
                 visible_text = val[scroll:scroll + field_w]
                 line = f"    Template: [{visible_text}]"
                 attr = curses.color_pair(CP_NORMAL)
@@ -1069,10 +1272,12 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
                 and current_dns_mode in ("custom", "secure")):
             tmpl_val = row["value"]
             field_start = 15
+            field_w = max(10, usable_w - 22)
             scroll = row.get("scroll", 0)
             cur_pos = row.get("cursor", 0)
             cur_screen_pos = field_start + cur_pos - scroll
-            if 0 <= cur_screen_pos < usable_w:
+            # Stay inside the bracketed field, not just inside the line.
+            if field_start <= cur_screen_pos < min(usable_w, field_start + field_w):
                 try:
                     ch = tmpl_val[cur_pos] if cur_pos < len(tmpl_val) else " "
                     stdscr.addnstr(y, cur_screen_pos, ch, 1,
@@ -1201,7 +1406,9 @@ def main(stdscr, override_installations=None):
 
     if brave_info["warnings"]:
         status_msg = brave_info["warnings"][0]
-        status_ok = not brave_info["found"]
+        # Both warnings (Snap confinement, Brave not found) are problems —
+        # neither belongs in the success color.
+        status_ok = False
     else:
         status_msg = ""
         status_ok = True
@@ -1219,11 +1426,18 @@ def main(stdscr, override_installations=None):
         if cursor_idx > 0 and rows[cursor_idx - 1]["type"] == ROW_HEADER:
             if cursor_idx - 1 < scroll_offset:
                 scroll_offset = cursor_idx - 1
+        # A grown terminal leaves the offset past the last full page, which
+        # paints one row above a screen of blanks. The clamps above already
+        # put the cursor in view, so this can't hide it.
+        scroll_offset = max(0, min(scroll_offset, len(rows) - visible_count))
 
         draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
              status_msg, status_ok, install_method)
 
         key = stdscr.getch()
+        if key == curses.KEY_RESIZE:
+            curses.update_lines_cols()
+            continue
         row = rows[cursor_idx]
 
         if (focus == FOCUS_LIST
@@ -1351,8 +1565,8 @@ def main(stdscr, override_installations=None):
                 if btn_label == "Apply":
                     dns_mode = get_dns_mode(rows)
                     dns_tmpl = get_dns_template(rows)
-                    if dns_mode == "custom" and not dns_tmpl:
-                        status_msg = "Custom DNS requires a DoH template URL."
+                    if dns_mode in ("custom", "secure") and not dns_tmpl:
+                        status_msg = "Secure/custom DNS requires a DoH template URL."
                         status_ok = False
                     else:
                         status_ok, status_msg = apply_policy(rows, installations)
@@ -1421,11 +1635,26 @@ def cli_import(path, installations, doh_templates=""):
         return 1
     print(msg)
 
+    # A template is inert unless the mode asks for one, and most presets
+    # carry no DnsMode at all — promote those rather than dropping the flag
+    # silently. "automatic" keeps its mode (Chromium honours a template
+    # there); "off" is a contradiction only the caller can resolve.
     if doh_templates:
+        dns_mode = get_dns_mode(rows)
+        if dns_mode == "off":
+            print(
+                "Error: --doh-templates conflicts with DnsMode 'off' in "
+                f"{path}. Remove one of them.",
+                file=sys.stderr,
+            )
+            return 1
         for row in rows:
-            if row["type"] == ROW_DNS_TEMPLATE:
+            if row["type"] == ROW_DNS and dns_mode == "unmanaged":
+                row["selected"] = row["options"].index("custom")
+            elif row["type"] == ROW_DNS_TEMPLATE:
                 row["value"] = doh_templates
-                break
+                row["cursor"] = len(doh_templates)
+                row["scroll"] = 0
 
     ok, msg = apply_policy(rows, installations)
     if not ok:
@@ -1477,13 +1706,17 @@ def cli_reset(installations):
         return 1
 
     repaired, running = repair_brave_prefs(installations)
-    if repaired > 0:
+    if repaired > 0 and not running:
         print(
             f"Cleaned {repaired} leaked profile "
             f"pref{'s' if repaired != 1 else ''} from Brave's user profile."
         )
     if running:
-        print("Note: Brave is running — fully close it before reopening.")
+        print(
+            "Note: Brave is running — any leaked profile prefs cleaned now "
+            "will be overwritten when Brave next saves. Fully close Brave "
+            "and run --reset again to make it stick."
+        )
     return 0
 
 
@@ -1556,6 +1789,12 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
+
+    # --doh-templates is only ever read by cli_import; --reset, --export and
+    # the TUI would drop it without a word.
+    if args.doh_templates and not args.import_path:
+        print("Error: --doh-templates requires --import", file=sys.stderr)
+        sys.exit(2)
 
     override_installations = None
     if args.policy_file:

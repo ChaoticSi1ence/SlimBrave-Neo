@@ -2,7 +2,13 @@
 # Pin the classic default rule set (pyflakes + the pycodestyle core) so CI
 # doesn't churn when a new ruff release reshuffles its defaults;
 # line length is not enforced (the feature tables read better wide).
-target-version = "py38"
+#
+# target-version is the syntax floor, and only that: ruff rejects syntax
+# newer than it whatever rules are selected, but nothing here proves the
+# scripts still *run* on that version — only a pytest job pinned to it
+# does, and the matrix currently runs "3.x" everywhere. 3.9 is the oldest
+# release still worth claiming; the scripts use nothing newer than 3.7.
+target-version = "py39"
 
 [lint]
 select = ["E4", "E7", "E9", "F"]

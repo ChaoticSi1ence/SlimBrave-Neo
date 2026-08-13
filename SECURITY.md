@@ -22,8 +22,10 @@ can read before running:
 | macOS    | `slimbrave-mac.py`   | Python 3 (stdlib only) |
 | Windows  | `SlimBrave.ps1`      | PowerShell |
 
-The `Presets/` directory contains JSON configuration files. That is the entire
-surface area of the project.
+The `Presets/` directory contains JSON configuration files. The repository also
+contains `tests/`, `.github/`, `ruff.toml`, and `assets/` — none of which
+execute on your machine. The three scripts above are the only code that runs
+locally.
 
 ### What official does *not* include
 
@@ -57,6 +59,155 @@ Use one of these two methods:
 The URL bar must show `github.com/ChaoticSi1ence/SlimBrave-Neo` or
 `raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo`. Anything else is not
 from this project.
+
+### Release integrity: checksums and signed tags
+
+Both methods above prove *where* a file came from, not *what* it is. `main` is
+a moving branch — a fetch from `.../main/SlimBrave.ps1` returns whatever was
+merged minutes ago, and no checksum can cover a target that changes. For a
+copy you can actually verify, use a release tag.
+
+**Project policy, from the first tagged release onward:**
+
+- **Release tags are signed** with the maintainer's key (`git tag -s`). In a
+  clone, check one with:
+
+  ```
+  git verify-tag v1.0.0
+  ```
+
+  (Import the maintainer's public key first; it is published on the
+  ChaoticSi1ence GitHub profile and on the release page.)
+
+- **Each release publishes SHA-256 sums** for all three scripts, in the
+  release notes and as a `SHA256SUMS` file attached to that release. Compute
+  them locally and compare:
+
+  ```powershell
+  Get-FileHash -Algorithm SHA256 .\SlimBrave.ps1
+  ```
+
+  ```
+  sha256sum slimbrave-linux.py            # Linux
+  shasum -a 256 slimbrave-mac.py          # macOS
+  ```
+
+If the sums do not match, do not run the script — re-download from a tag and
+check again, and if it still differs, report it (see below).
+
+**Maintainer checklist at release time** — the sums are only worth anything if
+this is done every time:
+
+1. Tag the reviewed commit with `git tag -s vX.Y.Z` and push the tag.
+2. Generate the sums from a clean checkout **of that tag**, not from a working
+   tree: `sha256sum SlimBrave.ps1 slimbrave-linux.py slimbrave-mac.py > SHA256SUMS`.
+3. Paste the sums into the release notes and attach `SHA256SUMS`.
+4. Never move or re-cut a published tag. If a release is bad, yank it and cut
+   a new version.
+
+---
+
+## What this tool does with elevated privileges
+
+SlimBrave Neo writes **managed enterprise policy** — machine-wide settings
+Brave reads at startup. Writing those requires Administrator on Windows and
+root (`sudo`) on Linux/macOS, so the tool asks for elevation and you should
+know exactly what it does with it.
+
+What it never does, on any platform: it makes **no network connections** (the
+scripts import no HTTP client and shell out to no downloader), installs no
+service, daemon, scheduled task, launch agent or startup entry, runs nothing in
+the background after it exits, and touches no path outside the ones listed
+below. Every write is either a policy location, the Shields-exception scrub
+described under each platform, or the JSON config file you pick yourself in the
+Import/Export dialog (`--import` / `--export` on Linux and macOS).
+
+### Windows — `SlimBrave.ps1`
+
+The script self-elevates by relaunching itself through UAC (`Start-Process
+-Verb RunAs`). Declining the prompt changes nothing. If you were prompted for
+separate admin credentials, the relaunch forwards your own profile path and SID
+so the per-user cleanup below still targets *your* account and not the admin's.
+
+It writes to exactly three places:
+
+| Location | What happens there |
+|----------|--------------------|
+| `HKLM:\SOFTWARE\Policies\BraveSoftware\Brave` | One value per ticked option (or one numbered subkey for list policies), plus `DnsOverHttpsMode` / `DnsOverHttpsTemplates`. Created only when you press Apply — opening the app writes nothing. |
+| `HKCU:\SOFTWARE\Policies\BraveSoftware\Brave` (or `HKEY_USERS\<your SID>\...` when elevated as another account) | Values are only **removed** here, never written, so a leftover user-scope policy cannot override the machine one. |
+| `%LOCALAPPDATA%\BraveSoftware\<channel>\User Data\<profile>\Preferences` | Only the `profile.content_settings.exceptions.braveShields` entries for `http://*,*` and `https://*,*` are deleted. Nothing else in the file is read back out or changed. Covers Stable/Beta/Nightly/Dev and every profile (`Default`, `Profile 1`, ...). Skipped entirely while Brave is running, because Brave would overwrite the file on its next save. |
+
+Those Shields entries are a leak from **pre-1.x SlimBrave**, which wrote
+content-setting exceptions straight into the profile. Removing the registry
+policy does not roll them back, so unchecking "Disable Brave Shields" would
+otherwise leave Shields stuck off.
+
+**Reset is scoped to this tool's own keys.** It removes only the policy names
+SlimBrave Neo manages, in both scopes, and the two DNS values. It does not
+delete the `...\Policies\BraveSoftware\Brave` key itself and does not touch
+other values inside it — a group-policy `ExtensionInstallForcelist`,
+`URLBlocklist`, `ProxySettings` or anything another tool set survives.
+
+Reset clears those managed names outright; that is what a reset is for. Apply
+is stricter: a **list** policy you left unticked is removed only when the list
+on disk is byte-for-byte the one SlimBrave writes, so an
+`ExtensionInstallBlocklist` an admin owns is reported as skipped and left
+in place.
+
+### Linux — `slimbrave-linux.py`
+
+Root is needed for one file: `/etc/brave/policies/managed/slimbrave.json`
+(mode `0644`, written atomically). That single file is the entire policy
+footprint — every Brave channel reads it, because brave-core hardcodes the
+directory. `--policy-file` can point elsewhere, but only inside
+`/etc/brave/policies/managed` or `/etc/chromium/policies/managed`; anything
+else is refused.
+
+The Shields-exception scrub runs over
+`~/.config/BraveSoftware/<channel>/<profile>/Preferences` for the invoking
+user (resolved from `SUDO_USER`, not from root's home), plus the Flatpak
+profile under `~/.var/app/com.brave.Browser` when present. It is done in a
+forked child that drops to that user's uid/gid first, so root never follows a
+path component inside someone's home directory.
+
+`--reset` unlinks the policy file it wrote. Nothing else in
+`/etc/brave/policies/managed` is touched.
+
+### macOS — `slimbrave-mac.py`
+
+Root writes `/Library/Managed Preferences/com.brave.Browser.plist`, and the
+matching `com.brave.Browser.beta` / `com.brave.Browser.nightly` plists for
+whichever channels you select. `--policy-file` can only target
+`/Library/Managed Preferences` or `/Library/Preferences`; anything else is
+refused.
+
+With `--persist on`, the policy is instead delivered as a **Configuration
+Profile** (identifier `io.github.slimbrave-neo.brave-policy`) — Apple's
+supported path, because macOS 13+ can clear directly-written managed plists at
+reboot. The profile is staged into a private per-run `0700` temp directory and
+handed to System Settings; **you approve the install yourself** in Device
+Management. The tool also runs `killall cfprefsd` so the new values are picked
+up without a reboot.
+
+The Shields-exception scrub is the same as Linux, over
+`~/Library/Application Support/BraveSoftware/<channel>/<profile>/Preferences`,
+with the same privilege drop.
+
+`--reset` removes the plists it wrote and removes the Configuration Profile by
+identifier. No other managed preference is touched.
+
+### How to undo everything
+
+| Platform | Undo |
+|----------|------|
+| Windows  | Run the script and press **Reset**. |
+| Linux    | `sudo python3 slimbrave-linux.py --reset` — or just `sudo rm /etc/brave/policies/managed/slimbrave.json`. |
+| macOS    | `sudo python3 slimbrave-mac.py --reset`. If a Configuration Profile was installed, it can also be removed by hand in System Settings → General → Device Management. |
+
+Then restart Brave and check `brave://policy` — none of the keys the tool
+manages should still be listed. On Linux and macOS the Shields-exception scrub
+happens on reset too; on Windows it happens unless Brave is running, in which
+case the dialog tells you to close Brave and reset again.
 
 ---
 

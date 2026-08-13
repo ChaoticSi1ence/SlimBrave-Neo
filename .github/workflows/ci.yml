@@ -5,30 +5,76 @@ on:
     branches: [main]
   pull_request:
 
+# Nothing here writes to the repo.
+permissions:
+  contents: read
+
+# A new push to the same ref supersedes the run in flight.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   python:
-    name: pytest + ruff
-    runs-on: ubuntu-latest
+    name: pytest + ruff (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS matters: slimbrave-mac.py resolves CHANNEL_IDS from
+        # LINUX_CHANNELS anywhere but Darwin, so channel logic is otherwise
+        # only ever tested against the wrong data.
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
-      # Dev/CI-only tools; the scripts themselves stay stdlib-only.
-      - run: pip install pytest ruff
-      - run: ruff check .
+      # Dev/CI-only tools; the scripts themselves stay stdlib-only. Pinned so a
+      # tool release cannot turn a green branch red on its own.
+      - run: pip install pytest==9.1.1 ruff==0.16.2
+      # Both scripts import curses at module level, so pytest cannot even
+      # reach collection on Windows without this.
+      - if: runner.os == 'Windows'
+        run: pip install windows-curses
+      # Lint once — ruff's verdict is platform-independent, and one run keeps
+      # each inline annotation from landing three times.
+      - if: runner.os == 'Linux'
+        run: ruff check --output-format=github .
       - run: pytest -q
 
   powershell:
-    name: PSScriptAnalyzer
-    runs-on: ubuntu-latest
+    name: parse + PSScriptAnalyzer
+    # Windows PowerShell 5.1 is the only engine SlimBrave.ps1 targets, and it
+    # is the only one that rejects the pwsh 7 syntax (??, ternary, &&) the
+    # script is required to stay clear of.
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: powershell
     steps:
       - uses: actions/checkout@v4
-      - name: Lint SlimBrave.ps1
-        shell: pwsh
+      # Must run before the analyzer: Invoke-ScriptAnalyzer only emits
+      # ParseError records when ParseError is in -Severity, and otherwise
+      # analyses a partial AST — a syntax error would ship green.
+      - name: Parse SlimBrave.ps1
         run: |
-          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
-          $results = Invoke-ScriptAnalyzer -Path ./SlimBrave.ps1 -Severity Warning, Error
+          $tokens = $null
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path ./SlimBrave.ps1).Path, [ref]$tokens, [ref]$errors)
+          foreach ($e in $errors) {
+              $msg = $e.Message -replace '\r?\n', ' '
+              Write-Host "::error file=SlimBrave.ps1,line=$($e.Extent.StartLineNumber),col=$($e.Extent.StartColumnNumber)::$msg"
+          }
+          if ($errors) { exit 1 }
+          Write-Host "SlimBrave.ps1 parses clean under PowerShell $($PSVersionTable.PSVersion)."
+      - name: Lint SlimBrave.ps1
+        run: |
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.22.0 -Force -Scope CurrentUser
+          $results = Invoke-ScriptAnalyzer -Path ./SlimBrave.ps1 -Severity ParseError, Error
           $results | Format-Table -AutoSize | Out-String | Write-Host
-          # Warnings are informational; only hard errors fail the build.
-          if ($results | Where-Object Severity -eq 'Error') { exit 1 }
+          # Warning is deliberately out of the filter: a 66 KB WinForms script
+          # trips PSAvoidUsingWriteHost and friends on every single run.
+          if ($results) { exit 1 }
