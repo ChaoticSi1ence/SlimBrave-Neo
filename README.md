@@ -127,17 +127,13 @@ cd SlimBrave-Neo
 powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1
 ```
 
-**No git? Fetch a tagged release, check it, then run it.** Don't fetch `main` straight into a shell — the script self-elevates to Administrator and writes machine-wide policy, and a mutable branch can change between the version someone recommended and the version you run:
+**No git?** One line:
 
 ```powershell
-$tag = "v1.9.0"   # a release tag, never "main" — see the Releases page for the current one
-iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/$tag/SlimBrave.ps1" -OutFile "SlimBrave.ps1"
-Get-FileHash .\SlimBrave.ps1 -Algorithm SHA256
-notepad .\SlimBrave.ps1
-powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1
+iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/main/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; .\SlimBrave.ps1
 ```
 
-A tag pins the exact bytes, so the hash is reproducible: anyone who clones the same tag gets the same SHA-256, and re-running `Get-FileHash` later tells you whether the copy on disk is still the one you read. Read the file before the last line — that is the whole point of shipping source-only.
+This pulls the current `main`. If you'd rather pin an exact, unchanging version and check it against a published checksum before running, [`SECURITY.md`](SECURITY.md) covers tagged releases and SHA-256 sums.
 
 Requires Administrator privileges; the script re-launches itself elevated. Hover over any option in the app for a plain-English description of what it does and the exact policy it writes. The app follows your Windows light/dark theme, and on low-resolution displays (e.g. 720p/768p) automatically reflows from two columns into three shorter ones so no options or buttons run off the bottom of the screen.
 
