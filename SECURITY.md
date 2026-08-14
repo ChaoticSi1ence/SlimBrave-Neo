@@ -67,17 +67,14 @@ a moving branch — a fetch from `.../main/SlimBrave.ps1` returns whatever was
 merged minutes ago, and no checksum can cover a target that changes. For a
 copy you can actually verify, use a release tag.
 
-**Project policy, from the first tagged release onward:**
+**Project policy, from v1.9.5 onward:**
 
-- **Release tags are signed** with the maintainer's key (`git tag -s`). In a
-  clone, check one with:
-
-  ```
-  git verify-tag v1.0.0
-  ```
-
-  (Import the maintainer's public key first; it is published on the
-  ChaoticSi1ence GitHub profile and on the release page.)
+- **Tag signing is not yet in place.** There is no maintainer signing key
+  published today, so do not expect `git verify-tag` to succeed and do not
+  treat an unsigned tag as evidence of tampering. This section will be
+  updated with the key fingerprint if and when signing is set up; until
+  then the SHA-256 sums below are the integrity check this project
+  actually offers.
 
 - **Each release publishes SHA-256 sums** for all three scripts, in the
   release notes and as a `SHA256SUMS` file attached to that release. Compute
@@ -98,7 +95,8 @@ check again, and if it still differs, report it (see below).
 **Maintainer checklist at release time** — the sums are only worth anything if
 this is done every time:
 
-1. Tag the reviewed commit with `git tag -s vX.Y.Z` and push the tag.
+1. Tag the reviewed commit with `git tag -a vX.Y.Z` (use `-s` once a signing
+   key exists) and push the tag.
 2. Generate the sums from a clean checkout **of that tag**, not from a working
    tree: `sha256sum SlimBrave.ps1 slimbrave-linux.py slimbrave-mac.py > SHA256SUMS`.
 3. Paste the sums into the release notes and attach `SHA256SUMS`.
