@@ -24,6 +24,7 @@ Supports interactive curses TUI and non-interactive CLI usage:
 import argparse
 import curses
 import json
+import locale
 import os
 import shutil
 import stat
@@ -460,6 +461,24 @@ def detect_brave():
 # DefaultBraveReferrersSetting, ChromeVariations), for the Shields URL
 # lists, and for the two spellcheck rows — upstream states the enhanced
 # spell check policy has no effect once SpellcheckEnabled is false.
+
+# Content settings Chromium models as an enum rather than a boolean carry a
+# `choices` list: an ordered list of (label, value) pairs where value None
+# means "not managed" (write nothing). The first entry is always
+# ("Not managed", None) and is the default selection, so an untouched row
+# behaves exactly like the unticked checkbox it replaced. A feature without
+# `choices` stays a plain checkbox.
+#
+# The enum is NOT uniform. Allow=1 is a legal member of the notifications,
+# geolocation and sensors settings only; for the guard settings (WebUSB,
+# Serial, WebHID) and for local fonts / window management, value 1 is not a
+# member at all and Chromium rejects it, so those rows never offer "Allow".
+# Each row keeps the `value` it wrote as a checkbox: that is what a legacy
+# array-format config resolves to on import, and what the SlimBrave.ps1
+# feature table is compared against.
+CHOICES_ALLOW_ASK_BLOCK = [("Not managed", None), ("Allow", 1), ("Ask", 3), ("Block", 2)]
+CHOICES_ASK_BLOCK = [("Not managed", None), ("Ask", 3), ("Block", 2)]
+
 CATEGORIES = [
     {
         "name": "Telemetry & Reporting",
@@ -505,14 +524,14 @@ CATEGORIES = [
         # otherwise bypass the rest of the policy set.
         "name": "Permissions & Access",
         "features": [
-            {"name": "Block Web Notifications", "key": "DefaultNotificationsSetting", "value": 2},
-            {"name": "Block Location Access", "key": "DefaultGeolocationSetting", "value": 2},
-            {"name": "Block Motion Sensors", "key": "DefaultSensorsSetting", "value": 2},
-            {"name": "Block WebUSB Access", "key": "DefaultWebUsbGuardSetting", "value": 2},
-            {"name": "Block Web Serial Access", "key": "DefaultSerialGuardSetting", "value": 2},
-            {"name": "Block WebHID Access", "key": "DefaultWebHidGuardSetting", "value": 2},
-            {"name": "Block Local Font Enumeration", "key": "DefaultLocalFontsSetting", "value": 2},
-            {"name": "Block Multi-Screen (Window Management) Access", "key": "DefaultWindowManagementSetting", "value": 2},
+            {"name": "Web Notifications", "key": "DefaultNotificationsSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK},
+            {"name": "Location Access", "key": "DefaultGeolocationSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK},
+            {"name": "Motion Sensors", "key": "DefaultSensorsSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK},
+            {"name": "WebUSB Access", "key": "DefaultWebUsbGuardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK},
+            {"name": "Web Serial Access", "key": "DefaultSerialGuardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK},
+            {"name": "WebHID Access", "key": "DefaultWebHidGuardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK},
+            {"name": "Local Font Enumeration", "key": "DefaultLocalFontsSetting", "value": 2, "choices": CHOICES_ASK_BLOCK},
+            {"name": "Multi-Screen (Window Management) Access", "key": "DefaultWindowManagementSetting", "value": 2, "choices": CHOICES_ASK_BLOCK},
             {"name": "Force Google SafeSearch", "key": "ForceGoogleSafeSearch", "value": True},
             {"name": "Filter Adult Content (SafeSites)", "key": "SafeSitesFilterBehavior", "value": 1},
             {"name": "Disable Guest Mode", "key": "BrowserGuestModeEnabled", "value": False},
@@ -605,6 +624,7 @@ ROW_HEADER = 0
 ROW_FEATURE = 1
 ROW_DNS = 2
 ROW_DNS_TEMPLATE = 3
+ROW_CHOICE = 4
 
 
 def build_rows(installations=None):
@@ -620,8 +640,21 @@ def build_rows(installations=None):
     del installations  # kept for API stability; no longer affects layout
     rows = []
     for cat in CATEGORIES:
-        rows.append({"type": ROW_HEADER, "text": cat["name"]})
+        # `collapsed` lives only on headers, and import/reset/sync all
+        # mutate rows in place without touching one, so a fold survives.
+        rows.append({"type": ROW_HEADER, "text": cat["name"],
+                     "collapsed": False})
         for feat in cat["features"]:
+            if "choices" in feat:
+                rows.append({
+                    "type": ROW_CHOICE,
+                    "text": feat["name"],
+                    "key": feat["key"],
+                    "value": feat["value"],   # what the old checkbox wrote
+                    "choices": feat["choices"],
+                    "selected": 0,            # index into choices; 0 = unmanaged
+                })
+                continue
             rows.append({
                 "type": ROW_FEATURE,
                 "text": feat["name"],
@@ -631,7 +664,8 @@ def build_rows(installations=None):
                 "checked": False,
             })
     # DNS mode selector at the end
-    rows.append({"type": ROW_HEADER, "text": "DNS Over HTTPS"})
+    rows.append({"type": ROW_HEADER, "text": "DNS Over HTTPS",
+                 "collapsed": False})
     rows.append({
         "type": ROW_DNS,
         "text": "DNS Mode",
@@ -679,6 +713,36 @@ def toggle_feature_row(rows, target):
                 row["checked"] = False
 
 
+def _choice_value(row):
+    """Return the policy value a choice row is set to, or None if unmanaged."""
+    return row["choices"][row["selected"]][1]
+
+
+def _choice_index_for_value(row, value):
+    """Return the index of the choice carrying `value`, or None if illegal.
+
+    Type-strict, because `True == 1` in Python: a JSON `true` would
+    otherwise select "Allow" on the three settings that have one, and no
+    bool is a legal member of any of these enums.
+    """
+    for idx, choice in enumerate(row["choices"]):
+        choice_value = choice[1]
+        if choice_value is None:
+            continue
+        if type(choice_value) is type(value) and choice_value == value:
+            return idx
+    return None
+
+
+def cycle_choice_row(row, step=1):
+    """Advance a choice row's selection, wrapping at both ends.
+
+    Same idiom as the DNS selector: Left/Right/Space/Enter all walk the
+    same ordered list.
+    """
+    row["selected"] = (row["selected"] + step) % len(row["choices"])
+
+
 def _enforce_groups(rows, features_map):
     """Collapse every group down to at most one checked row.
 
@@ -689,6 +753,8 @@ def _enforce_groups(rows, features_map):
     order (the config's or the policy's key order) and the last key listed
     wins, matching the PS1 CheckedChanged handler's behaviour.
     """
+    # Choice rows never reach the bodies below: every test here is gated on
+    # ROW_FEATURE, and a choice row carries neither "checked" nor a group.
     order = list(features_map)
     groups = {r.get("group") for r in rows
               if r["type"] == ROW_FEATURE and r.get("group")}
@@ -1284,6 +1350,10 @@ def _build_policy(rows):
     for row in rows:
         if row["type"] == ROW_FEATURE and row["checked"]:
             policy[row["key"]] = row["value"]
+        elif row["type"] == ROW_CHOICE:
+            choice_value = _choice_value(row)
+            if choice_value is not None:
+                policy[row["key"]] = choice_value
         elif row["type"] == ROW_DNS:
             dns_mode = row["options"][row["selected"]]
         elif row["type"] == ROW_DNS_TEMPLATE:
@@ -1511,6 +1581,8 @@ def reset_policy(rows, installations=None, selected_channel_ids=None):
         for row in rows:
             if row["type"] == ROW_FEATURE:
                 row["checked"] = False
+            elif row["type"] == ROW_CHOICE:
+                row["selected"] = 0
             elif row["type"] == ROW_DNS:
                 row["selected"] = 0
             elif row["type"] == ROW_DNS_TEMPLATE:
@@ -1570,6 +1642,14 @@ def sync_rows_with_policy(rows, policy):
         if row["type"] == ROW_FEATURE:
             if row["key"] in policy and policy[row["key"]] == row["value"]:
                 row["checked"] = True
+        elif row["type"] == ROW_CHOICE:
+            # A value that is not a legal member of this key's enum leaves
+            # the row unmanaged, the same way a non-matching feature value
+            # leaves a checkbox unticked.
+            if row["key"] in policy:
+                idx = _choice_index_for_value(row, policy[row["key"]])
+                if idx is not None:
+                    row["selected"] = idx
         elif row["type"] == ROW_DNS:
             dns_val = policy.get("DnsOverHttpsMode")
             dns_tmpl = policy.get("DnsOverHttpsTemplates", "")
@@ -1616,6 +1696,12 @@ def export_settings(rows, path):
     for row in rows:
         if row["type"] == ROW_FEATURE and row["checked"]:
             features[row["key"]] = row["value"]
+        elif row["type"] == ROW_CHOICE:
+            # "Not managed" omits the key entirely, so the exported file has
+            # the same shape it had when these rows were checkboxes.
+            choice_value = _choice_value(row)
+            if choice_value is not None:
+                features[row["key"]] = choice_value
         elif row["type"] == ROW_DNS:
             dns_mode = row["options"][row["selected"]]
         elif row["type"] == ROW_DNS_TEMPLATE:
@@ -1695,6 +1781,10 @@ def import_settings(rows, path):
     # who imported the Parental Controls preset — only the first matching
     # row per key is checked in legacy mode.
     legacy_handled = set()
+    # Choice keys whose value is not a legal member of that key's enum.
+    # They stay unmanaged and are named in the result message rather than
+    # being written out as a value Brave would reject.
+    skipped_choices = []
 
     for row in rows:
         if row["type"] == ROW_FEATURE:
@@ -1711,6 +1801,21 @@ def import_settings(rows, path):
                     legacy_handled.add(key)
             else:
                 row["checked"] = (expected == row["value"])
+        elif row["type"] == ROW_CHOICE:
+            # Import is authoritative: a key the config does not name goes
+            # back to "Not managed", matching the old unticked checkbox.
+            row["selected"] = 0
+            if row["key"] in features_map:
+                if is_legacy:
+                    # The array format carries no values; naming the key
+                    # used to tick a checkbox that wrote row["value"].
+                    idx = _choice_index_for_value(row, row["value"])
+                else:
+                    idx = _choice_index_for_value(row, features_map[row["key"]])
+                if idx is None:
+                    skipped_choices.append(row["key"])
+                else:
+                    row["selected"] = idx
         elif row["type"] == ROW_DNS:
             if dns_mode in row["options"]:
                 row["selected"] = row["options"].index(dns_mode)
@@ -1720,7 +1825,11 @@ def import_settings(rows, path):
             row["scroll"] = 0
 
     _enforce_groups(rows, features_map)
-    return True, f"Imported from {path}"
+    msg = f"Imported from {path}"
+    if skipped_choices:
+        msg += ("; left unmanaged because the value is not one this policy "
+                "accepts: " + ", ".join(skipped_choices))
+    return True, msg
 
 # ---------------------------------------------------------------------------
 # TUI
@@ -1745,6 +1854,15 @@ FOCUS_LIST = 0
 FOCUS_BUTTONS = 1
 FOCUS_PROMPT = 2   # status-line text input mode
 
+# Every row type the cursor may land on. Headers joined the list when
+# Space/Enter started folding them.
+SELECTABLE_TYPES = (ROW_HEADER, ROW_FEATURE, ROW_CHOICE, ROW_DNS,
+                    ROW_DNS_TEMPLATE)
+
+# Stand-in for "the cursor is on nothing", which a filter matching zero
+# rows produces. Its type matches no key branch, so they all fall through.
+NO_ROW = {"type": None}
+
 
 def init_colors():
     """Initialize curses color pairs."""
@@ -1762,15 +1880,197 @@ def init_colors():
     curses.init_pair(CP_DIM, curses.COLOR_WHITE, -1)
 
 
-def selectable_indices(rows):
-    """Return list of row indices that can receive cursor focus."""
-    return [i for i, r in enumerate(rows)
-            if r["type"] in (ROW_FEATURE, ROW_DNS, ROW_DNS_TEMPLATE)]
+# Disclosure markers for collapsible headers, resolved once per process.
+DISCLOSURE_UNICODE = ("\u25be", "\u25b8")   # small down / right triangles
+DISCLOSURE_ASCII = ("v", ">")
+_disclosure_glyphs = None
+
+
+def disclosure_glyphs():
+    """Return the (expanded, collapsed) markers this terminal can encode.
+
+    curses encodes everything handed to addnstr with the codeset LC_CTYPE
+    gave the interpreter, and neither script sets a locale: on a plain
+    VT100 that is ANSI_X3.4-1968, where the triangles raise
+    UnicodeEncodeError — which the `except curses.error` guard wrapped
+    around every write here does not catch. Ask the codec first.
+    """
+    global _disclosure_glyphs
+    if _disclosure_glyphs is None:
+        try:
+            enc = locale.getpreferredencoding(False) or "ascii"
+            for glyph in DISCLOSURE_UNICODE:
+                glyph.encode(enc)
+            _disclosure_glyphs = DISCLOSURE_UNICODE
+        except (LookupError, UnicodeEncodeError, ValueError):
+            _disclosure_glyphs = DISCLOSURE_ASCII
+    return _disclosure_glyphs
+
+
+def header_span(rows, header_idx):
+    """Return the (start, end) row range a header owns, end-exclusive."""
+    end = header_idx + 1
+    while end < len(rows) and rows[end]["type"] != ROW_HEADER:
+        end += 1
+    return header_idx + 1, end
+
+
+def header_counts(rows, header_idx):
+    """Return (on, total) over the countable rows a header owns.
+
+    A row is on when its checkbox is ticked or its choice sits off the
+    "Not managed" slot. The DNS section holds neither kind, so it reports
+    (0, 0) and draw() omits the counter rather than painting "0/0 on".
+    """
+    start, end = header_span(rows, header_idx)
+    on = 0
+    total = 0
+    for row in rows[start:end]:
+        if row["type"] == ROW_FEATURE:
+            total += 1
+            if row["checked"]:
+                on += 1
+        elif row["type"] == ROW_CHOICE:
+            total += 1
+            if row["selected"] > 0:
+                on += 1
+    return on, total
+
+
+def collapse_state(rows):
+    """Snapshot every header's fold state, in row order."""
+    return [r.get("collapsed", False) for r in rows if r["type"] == ROW_HEADER]
+
+
+def restore_collapse_state(rows, state):
+    """Put a collapse_state() snapshot back; None restores nothing."""
+    if state is None:
+        return
+    headers = [r for r in rows if r["type"] == ROW_HEADER]
+    for header, collapsed in zip(headers, state):
+        header["collapsed"] = collapsed
+
+
+def apply_startup_collapse(rows):
+    """Fold the sections that are not managing anything.
+
+    Called once at launch, after the on-disk policy has been synced in. A
+    machine with nothing applied opens on a short overview; one that is
+    already configured opens with exactly those sections showing, so the
+    first screen answers "what is set right now?". Nothing is persisted --
+    the state is derived from what was just read off disk, and any later
+    fold the user makes is theirs to keep.
+    """
+    dns_managed = get_dns_mode(rows) != "unmanaged"
+    for idx, row in enumerate(rows):
+        if row["type"] != ROW_HEADER:
+            continue
+        on, total = header_counts(rows, idx)
+        if total:
+            row["collapsed"] = on == 0
+        else:
+            # The DNS header owns no countable rows, so judge it by
+            # whether a mode is actually being enforced.
+            row["collapsed"] = not dns_managed
+
+
+def row_matches_filter(row, needle):
+    """True when a feature or choice row's name contains `needle`."""
+    if row["type"] not in (ROW_FEATURE, ROW_CHOICE):
+        return False
+    return needle in row["text"].lower()
+
+
+def visible_indices(rows, filter_text=""):
+    """Return the row indices the list paints, top to bottom.
+
+    Unfiltered, every header shows and the rows it owns follow unless it
+    is collapsed. Filtered, only matching feature and choice rows survive
+    along with the headers owning them — collapsed headers included,
+    because a search that quietly skipped folded sections would be worse
+    than no search at all.
+    """
+    needle = filter_text.strip().lower()
+    out = []
+    idx = 0
+    while idx < len(rows):
+        if rows[idx]["type"] != ROW_HEADER:
+            out.append(idx)
+            idx += 1
+            continue
+        start, end = header_span(rows, idx)
+        if needle:
+            matched = [i for i in range(start, end)
+                       if row_matches_filter(rows[i], needle)]
+            if matched:
+                out.append(idx)
+                out.extend(matched)
+        else:
+            out.append(idx)
+            if not rows[idx].get("collapsed", False):
+                out.extend(range(start, end))
+        idx = end
+    return out
+
+
+def resolve_cursor(sel, cursor_idx):
+    """Return the (position, row index) of the nearest selectable row.
+
+    Folding a section or narrowing the filter can delete the row the
+    cursor was sitting on; land on the closest survivor so the highlight
+    never points at something the screen is not painting. With nothing
+    selectable at all — a filter matching zero rows — the row index comes
+    back as -1.
+    """
+    if not sel:
+        return 0, -1
+    if cursor_idx in sel:
+        return sel.index(cursor_idx), cursor_idx
+    pos = min(range(len(sel)), key=lambda i: (abs(sel[i] - cursor_idx), sel[i]))
+    return pos, sel[pos]
+
+
+def viewport_rows(stdscr):
+    """Return how many list rows fit between the hints and the buttons."""
+    max_y, _ = stdscr.getmaxyx()
+    return max(1, (max_y - 4) - 2)
+
+
+def clamp_scroll(rows, vis, scroll_offset, cursor_vpos, visible_count):
+    """Clamp the viewport offset against the VISIBLE row list.
+
+    scroll_offset counts positions in `vis`, not rows[]: collapse and
+    filtering change how many rows the list paints on nearly every
+    keystroke, so clamping against len(rows) would let a folded list
+    scroll off the end of itself.
+    """
+    if cursor_vpos >= 0:
+        if cursor_vpos < scroll_offset:
+            scroll_offset = cursor_vpos
+        if cursor_vpos >= scroll_offset + visible_count:
+            scroll_offset = cursor_vpos - visible_count + 1
+        # Keep the owning header on screen when the cursor sits under it.
+        if (cursor_vpos > 0
+                and rows[vis[cursor_vpos - 1]]["type"] == ROW_HEADER
+                and cursor_vpos - 1 < scroll_offset):
+            scroll_offset = cursor_vpos - 1
+    return max(0, min(scroll_offset, max(0, len(vis) - visible_count)))
+
+
+def selectable_indices(rows, filter_text=""):
+    """Return list of row indices that can receive cursor focus.
+
+    Headers are selectable now that Space/Enter folds them. Rows hidden
+    by a collapsed header or by the filter are not, so the cursor cannot
+    land on a row the list is not painting.
+    """
+    return [i for i in visible_indices(rows, filter_text)
+            if rows[i]["type"] in SELECTABLE_TYPES]
 
 
 def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
          status_msg, status_ok, install_method="",
-         prompt_label="", prompt_buf="", prompt_cur=0):
+         prompt_label="", prompt_buf="", prompt_cur=0, filter_text=""):
     """Render the full TUI screen."""
     stdscr.erase()
     max_y, max_x = stdscr.getmaxyx()
@@ -1790,8 +2090,15 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
     except curses.error:
         pass
 
-    # Key hints below title
-    hint = " [Q/Esc] Quit  [Space/Enter] Toggle  [Tab] Buttons "
+    # Key hints below the title, or the live filter and its match count
+    vis = visible_indices(rows, filter_text)
+    needle = filter_text.strip()
+    if needle:
+        matches = sum(1 for i in vis if rows[i]["type"] != ROW_HEADER)
+        plural = "" if matches == 1 else "es"
+        hint = f" Filter: {needle}   {matches} match{plural}   [Esc] Clear "
+    else:
+        hint = " [Space/Enter] Toggle  [/] Search  [Q] Quit  [?] Help "
     try:
         stdscr.addnstr(1, 0, hint.center(usable_w), usable_w,
                         curses.color_pair(CP_NORMAL) | curses.A_DIM)
@@ -1810,9 +2117,10 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
 
     # Draw the scrollable feature list
     for vi in range(visible_count):
-        ri = vi + scroll_offset
-        if ri >= len(rows):
+        vpos = vi + scroll_offset
+        if vpos >= len(vis):
             break
+        ri = vis[vpos]
         row = rows[ri]
         y = list_start_y + vi
         if y >= max_y - 3:
@@ -1825,11 +2133,28 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
 
         if row["type"] == ROW_HEADER:
             attr = curses.color_pair(CP_HEADER) | curses.A_BOLD
-            line = f"  {row['text']}"
+            open_glyph, shut_glyph = disclosure_glyphs()
+            # A filtered section is force-shown whatever its fold state,
+            # so draw it open: the marker describes what is on screen.
+            folded = row.get("collapsed", False) and not needle
+            marker = shut_glyph if folded else open_glyph
+            line = f"{marker} {row['text']}"
+            on_count, total = header_counts(rows, ri)
+            if total:
+                counter = f"{on_count}/{total} on"
+                line = line.ljust(max(len(line) + 2,
+                                      usable_w - len(counter) - 2)) + counter
         elif row["type"] == ROW_FEATURE:
             mark = "x" if row["checked"] else " "
             line = f"    [{mark}] {row['text']}"
             if row["checked"]:
+                attr = curses.color_pair(CP_CHECKED)
+            else:
+                attr = curses.color_pair(CP_NORMAL)
+        elif row["type"] == ROW_CHOICE:
+            label = row["choices"][row["selected"]][0]
+            line = f"    {row['text']}: < {label} >"
+            if row["selected"] > 0:
                 attr = curses.color_pair(CP_CHECKED)
             else:
                 attr = curses.color_pair(CP_NORMAL)
@@ -1893,7 +2218,7 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
                             curses.color_pair(CP_NORMAL) | curses.A_DIM)
         except curses.error:
             pass
-    if scroll_offset + visible_count < len(rows):
+    if scroll_offset + visible_count < len(vis):
         try:
             stdscr.addnstr(list_end_y, usable_w - 5, " vvv ", 5,
                             curses.color_pair(CP_NORMAL) | curses.A_DIM)
@@ -1942,16 +2267,68 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
     stdscr.refresh()
 
 
+HELP_LINES = [
+    " SlimBrave Neo - keys",
+    "",
+    "   Up / Down             Move the cursor",
+    "   PageUp / PageDown     Move one screenful",
+    "   Home / End            Jump to the first / last row",
+    "   Space / Enter         Toggle a setting; fold or unfold a section",
+    "   Left / Right          Cycle a selector; fold / unfold a section",
+    "   c                     Fold every section, or unfold them all",
+    "   /                     Filter rows by name",
+    "   Esc                   Clear the filter, else quit",
+    "   ?                     This help",
+    "   Tab                   Jump to the button row",
+    "   Q                     Quit",
+    "",
+    "   Press any key to close.",
+]
+
+
+def draw_help(stdscr):
+    """Paint the key-binding overlay over the whole screen."""
+    stdscr.erase()
+    max_y, max_x = stdscr.getmaxyx()
+    usable_w = max_x - 1
+    for i, text in enumerate(HELP_LINES):
+        if i >= max_y:
+            break
+        if i == 0:
+            attr = curses.color_pair(CP_TITLE) | curses.A_BOLD
+        else:
+            attr = curses.color_pair(CP_NORMAL)
+        try:
+            stdscr.addnstr(i, 0, text.ljust(usable_w), usable_w, attr)
+        except curses.error:
+            pass
+    stdscr.refresh()
+
+
 def prompt_text_input(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
-                      install_method, label, default=""):
-    """Show a status-line text prompt and return (ok, text) on Enter."""
+                      install_method, label, default="", on_change=None):
+    """Show a status-line text prompt and return (ok, text) on Enter.
+
+    `on_change` is the live-filter hook: it is handed the buffer after
+    every edit and returns the (cursor_idx, scroll_offset) to draw the
+    list behind the prompt with, so matches narrow as the query is
+    typed rather than only once it is submitted. Passing it also feeds
+    the buffer to draw() as the active filter.
+    """
     buf = list(default)
     cur = len(buf)
+    shown = None
 
     while True:
+        text = "".join(buf)
+        if on_change is not None and text != shown:
+            cursor_idx, scroll_offset = on_change(text)
+            shown = text
+
         draw(stdscr, rows, cursor_idx, scroll_offset,
              FOCUS_PROMPT, btn_idx, "", True, install_method,
-             prompt_label=label, prompt_buf="".join(buf), prompt_cur=cur)
+             prompt_label=label, prompt_buf=text, prompt_cur=cur,
+             filter_text="" if on_change is None else text)
 
         key = stdscr.getch()
 
@@ -1988,7 +2365,8 @@ PERSIST_DESCRIPTIONS = {
 
 
 def prompt_channel_selection(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
-                             install_method, installations, default_ids):
+                             install_method, installations, default_ids,
+                             filter_text=""):
     """Ask which Brave channels to apply policies to (multi-select).
 
     Renders a two-line prompt overlaid on the buttons row: one line of
@@ -2008,7 +2386,8 @@ def prompt_channel_selection(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
 
     def render():
         draw(stdscr, rows, cursor_idx, scroll_offset,
-             FOCUS_BUTTONS, btn_idx, "", True, install_method)
+             FOCUS_BUTTONS, btn_idx, "", True, install_method,
+             filter_text=filter_text)
         max_y, max_x = stdscr.getmaxyx()
         usable_w = max_x - 1
         parts = ["  Apply to which Brave channels?"]
@@ -2065,7 +2444,7 @@ def prompt_channel_selection(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
 
 
 def prompt_persist_mode(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
-                        install_method, current_mode):
+                        install_method, current_mode, filter_text=""):
     """Ask the user whether to persist the policies across reboots.
 
     Two-line prompt overlaid on the buttons row: the top line cycles
@@ -2083,7 +2462,8 @@ def prompt_persist_mode(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
     while True:
         mode = PERSIST_MODES[idx]
         draw(stdscr, rows, cursor_idx, scroll_offset,
-             FOCUS_BUTTONS, btn_idx, "", True, install_method)
+             FOCUS_BUTTONS, btn_idx, "", True, install_method,
+             filter_text=filter_text)
         max_y, max_x = stdscr.getmaxyx()
         usable_w = max_x - 1
         desc_line = (
@@ -2149,11 +2529,24 @@ def main(stdscr, override_installations=None):
     policy = load_existing_policy(installations)
     sync_rows_with_policy(rows, policy)
 
+    # Fold what is not in use, then re-derive the selectable list: the
+    # cursor must never start on a row the fold just hid.
+    apply_startup_collapse(rows)
+    sel = selectable_indices(rows)
+    if not sel:
+        return
+
     cursor_pos = 0          # index into sel[]
-    cursor_idx = sel[0]     # index into rows[]
+    # Land on the first real setting rather than the header above it, so
+    # launch looks the way it did before headers became selectable.
+    cursor_idx = next((i for i in sel if rows[i]["type"] != ROW_HEADER),
+                      sel[0])
     scroll_offset = 0
     focus = FOCUS_LIST
     btn_idx = 0
+    # The live filter, and the fold state Esc has to put back.
+    filter_text = ""
+    saved_collapse = None
 
     # Show detection warnings on startup, if any
     if brave_info["warnings"]:
@@ -2166,33 +2559,26 @@ def main(stdscr, override_installations=None):
         status_ok = True
 
     while True:
-        # Compute scroll
-        max_y, _ = stdscr.getmaxyx()
-        list_start_y = 2
-        list_end_y = max_y - 4
-        visible_count = max(1, list_end_y - list_start_y)
-
-        if cursor_idx < scroll_offset:
-            scroll_offset = cursor_idx
-        if cursor_idx >= scroll_offset + visible_count:
-            scroll_offset = cursor_idx - visible_count + 1
-        # Keep headers visible: if the row above cursor is a header, include it
-        if cursor_idx > 0 and rows[cursor_idx - 1]["type"] == ROW_HEADER:
-            if cursor_idx - 1 < scroll_offset:
-                scroll_offset = cursor_idx - 1
-        # A grown terminal leaves the offset past the last full page, which
-        # paints one row above a screen of blanks. The clamps above already
-        # put the cursor in view, so this can't hide it.
-        scroll_offset = max(0, min(scroll_offset, len(rows) - visible_count))
+        visible_count = viewport_rows(stdscr)
+        # Recomputed every pass: a fold, a filter keystroke or an import can
+        # change what is on screen between one getch() and the next.
+        vis = visible_indices(rows, filter_text)
+        sel = selectable_indices(rows, filter_text)
+        cursor_pos, cursor_idx = resolve_cursor(sel, cursor_idx)
+        cursor_vpos = vis.index(cursor_idx) if cursor_idx in vis else -1
+        scroll_offset = clamp_scroll(rows, vis, scroll_offset,
+                                     cursor_vpos, visible_count)
 
         draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
-             status_msg, status_ok, install_method)
+             status_msg, status_ok, install_method, filter_text=filter_text)
 
         key = stdscr.getch()
         if key == curses.KEY_RESIZE:
             curses.update_lines_cols()
             continue
-        row = rows[cursor_idx]
+        # A filter matching nothing leaves the cursor on no row at all; NO_ROW
+        # matches no branch below, so every one of them falls through.
+        row = rows[cursor_idx] if 0 <= cursor_idx < len(rows) else NO_ROW
 
         # --- Editing mode for DNS template row ---
         if (focus == FOCUS_LIST
@@ -2256,7 +2642,17 @@ def main(stdscr, override_installations=None):
             # to normal handling below
 
         # --- Global keys ---
-        if key == ord("q") or key == 27:  # q or Escape
+        if key == 27:
+            # Esc is the filter's cancel first and the quit key second.
+            if filter_text:
+                filter_text = ""
+                restore_collapse_state(rows, saved_collapse)
+                saved_collapse = None
+                status_msg = ""
+                continue
+            break
+
+        elif key == ord("q"):
             break
 
         elif key == curses.KEY_UP:
@@ -2267,8 +2663,11 @@ def main(stdscr, override_installations=None):
                     status_msg = ""
             elif focus == FOCUS_BUTTONS:
                 focus = FOCUS_LIST
-                cursor_pos = len(sel) - 1
-                cursor_idx = sel[cursor_pos]
+                # sel is empty when the filter matches nothing, and
+                # sel[-1] would be an IndexError rather than a no-op.
+                if sel:
+                    cursor_pos = len(sel) - 1
+                    cursor_idx = sel[cursor_pos]
                 status_msg = ""
 
         elif key == curses.KEY_DOWN:
@@ -2284,6 +2683,73 @@ def main(stdscr, override_installations=None):
             elif focus == FOCUS_BUTTONS:
                 pass
 
+        elif key in (curses.KEY_PPAGE, curses.KEY_NPAGE):
+            if focus == FOCUS_LIST and sel:
+                step = visible_count
+                if key == curses.KEY_PPAGE:
+                    step = -visible_count
+                cursor_pos = max(0, min(len(sel) - 1, cursor_pos + step))
+                cursor_idx = sel[cursor_pos]
+                status_msg = ""
+
+        elif key == curses.KEY_HOME:
+            if focus == FOCUS_LIST and sel:
+                cursor_pos = 0
+                cursor_idx = sel[0]
+                scroll_offset = 0
+                status_msg = ""
+
+        elif key == curses.KEY_END:
+            if focus == FOCUS_LIST and sel:
+                cursor_pos = len(sel) - 1
+                cursor_idx = sel[cursor_pos]
+                status_msg = ""
+
+        elif key == ord("c"):
+            # Fold every section unless every section is already folded.
+            headers = [r for r in rows if r["type"] == ROW_HEADER]
+            fold = any(not h.get("collapsed", False) for h in headers)
+            for header in headers:
+                header["collapsed"] = fold
+            status_msg = ""
+
+        elif key == ord("?"):
+            while True:
+                draw_help(stdscr)
+                if stdscr.getch() != curses.KEY_RESIZE:
+                    break
+                curses.update_lines_cols()
+            status_msg = ""
+
+        elif key == ord("/"):
+            focus = FOCUS_LIST
+            if not filter_text:
+                # Snapshot on the way in only: reopening the prompt over a
+                # live filter must not overwrite what Esc has to restore.
+                saved_collapse = collapse_state(rows)
+
+            def preview(text):
+                """Re-aim the viewport at the shrinking match set."""
+                new_vis = visible_indices(rows, text)
+                new_sel = selectable_indices(rows, text)
+                _, idx = resolve_cursor(new_sel, cursor_idx)
+                vpos = new_vis.index(idx) if idx in new_vis else -1
+                return idx, clamp_scroll(rows, new_vis, scroll_offset,
+                                         vpos, visible_count)
+
+            ok, text = prompt_text_input(
+                stdscr, rows, cursor_idx, scroll_offset,
+                btn_idx, install_method,
+                "Filter (Esc=clear)",
+                default=filter_text, on_change=preview)
+            if ok:
+                filter_text = text
+            else:
+                filter_text = ""
+                restore_collapse_state(rows, saved_collapse)
+                saved_collapse = None
+            status_msg = ""
+
         elif key == ord("\t"):
             if focus == FOCUS_LIST:
                 focus = FOCUS_BUTTONS
@@ -2297,22 +2763,40 @@ def main(stdscr, override_installations=None):
             if focus == FOCUS_BUTTONS:
                 btn_idx = max(0, btn_idx - 1)
             elif focus == FOCUS_LIST:
-                if row["type"] == ROW_DNS:
+                if row["type"] == ROW_HEADER:
+                    row["collapsed"] = True
+                    status_msg = ""
+                elif row["type"] == ROW_DNS:
                     row["selected"] = (row["selected"] - 1) % len(row["options"])
+                    status_msg = ""
+                elif row["type"] == ROW_CHOICE:
+                    cycle_choice_row(row, -1)
                     status_msg = ""
 
         elif key == curses.KEY_RIGHT:
             if focus == FOCUS_BUTTONS:
                 btn_idx = min(len(BUTTONS) - 1, btn_idx + 1)
             elif focus == FOCUS_LIST:
-                if row["type"] == ROW_DNS:
+                if row["type"] == ROW_HEADER:
+                    row["collapsed"] = False
+                    status_msg = ""
+                elif row["type"] == ROW_DNS:
                     row["selected"] = (row["selected"] + 1) % len(row["options"])
+                    status_msg = ""
+                elif row["type"] == ROW_CHOICE:
+                    cycle_choice_row(row, 1)
                     status_msg = ""
 
         elif key == ord(" "):
             if focus == FOCUS_LIST:
-                if row["type"] == ROW_FEATURE:
+                if row["type"] == ROW_HEADER:
+                    row["collapsed"] = not row.get("collapsed", False)
+                    status_msg = ""
+                elif row["type"] == ROW_FEATURE:
                     toggle_feature_row(rows, row)
+                    status_msg = ""
+                elif row["type"] == ROW_CHOICE:
+                    cycle_choice_row(row, 1)
                     status_msg = ""
                 elif row["type"] == ROW_DNS:
                     row["selected"] = (row["selected"] + 1) % len(row["options"])
@@ -2344,7 +2828,7 @@ def main(stdscr, override_installations=None):
                             ok, selected_ids = prompt_channel_selection(
                                 stdscr, rows, cursor_idx, scroll_offset,
                                 btn_idx, install_method, installations,
-                                default_ids,
+                                default_ids, filter_text=filter_text,
                             )
                             if not ok:
                                 status_msg = "Apply cancelled."
@@ -2353,7 +2837,7 @@ def main(stdscr, override_installations=None):
                         current = detect_persist_mode()
                         ok, persist_mode = prompt_persist_mode(
                             stdscr, rows, cursor_idx, scroll_offset, btn_idx,
-                            install_method, current,
+                            install_method, current, filter_text=filter_text,
                         )
                         if not ok:
                             status_msg = "Apply cancelled."
@@ -2373,7 +2857,7 @@ def main(stdscr, override_installations=None):
                     status_ok = True
                     draw(stdscr, rows, cursor_idx, scroll_offset,
                          focus, btn_idx, status_msg, status_ok,
-                         install_method)
+                         install_method, filter_text=filter_text)
                     confirm = stdscr.getch()
                     if confirm in (curses.KEY_ENTER, 10, 13):
                         status_ok, status_msg = reset_policy(rows, installations)
@@ -2389,8 +2873,6 @@ def main(stdscr, override_installations=None):
                         default="./Presets/")
                     if ok and path:
                         status_ok, status_msg = import_settings(rows, path)
-                        # Rebuild selectable indices (unchanged, but safe)
-                        sel = selectable_indices(rows)
                     else:
                         status_msg = "Import cancelled."
                         status_ok = True
@@ -2412,8 +2894,14 @@ def main(stdscr, override_installations=None):
 
             elif focus == FOCUS_LIST:
                 # Enter on a list item acts like spacebar
-                if row["type"] == ROW_FEATURE:
+                if row["type"] == ROW_HEADER:
+                    row["collapsed"] = not row.get("collapsed", False)
+                    status_msg = ""
+                elif row["type"] == ROW_FEATURE:
                     toggle_feature_row(rows, row)
+                    status_msg = ""
+                elif row["type"] == ROW_CHOICE:
+                    cycle_choice_row(row, 1)
                     status_msg = ""
                 elif row["type"] == ROW_DNS:
                     row["selected"] = (row["selected"] + 1) % len(row["options"])

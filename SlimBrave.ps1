@@ -368,12 +368,92 @@ function Test-ListPolicyIsExactly {
 }
 
 # ---------------------------------------------------------------------------
+# Feature row state
+#
+# A row is either a CheckBox (binary: write Tag.Value or nothing) or, when
+# its feature carries `Choices`, a ComboBox (write the selected choice's
+# value, or nothing when "Not managed" is selected). Everything that reads
+# or writes row state - Apply, Reset, Import, Export, Initialize - goes
+# through these three helpers so neither control type is special-cased at
+# the call sites.
+# ---------------------------------------------------------------------------
+
+function Get-RowValue {
+    <#
+    .SYNOPSIS
+    The policy value this row currently manages, or $null when it manages
+    nothing (unchecked box / "Not managed").
+    #>
+    param ($Control)
+    $feature = $Control.Tag
+    if ($null -ne $feature.Choices) {
+        $index = $Control.SelectedIndex
+        if ($index -lt 0) { return $null }
+        return $feature.Choices[$index].Value
+    }
+    if ($Control.Checked) {
+        # The unary comma keeps a List row's value a list: returning a
+        # one-element array unrolls it to a bare string, which would export
+        # ExtensionInstallBlocklist as "*" instead of ["*"].
+        if ($feature.Value -is [array]) { return ,$feature.Value }
+        return $feature.Value
+    }
+    return $null
+}
+
+function Reset-FeatureRow {
+    # Back to "manages nothing": unchecked, or the first choice, which is
+    # always ("Not managed", $null).
+    param ($Control)
+    if ($null -ne $Control.Tag.Choices) {
+        $Control.SelectedIndex = 0
+    } else {
+        $Control.Checked = $false
+    }
+}
+
+function Select-ChoiceValue {
+    <#
+    .SYNOPSIS
+    Select the entry of a choice row whose value is $Value. Returns $false
+    when the row cannot represent that value (including $null) and leaves it
+    on "Not managed", so callers can report the value they had to drop.
+    #>
+    param ($Control, $Value)
+    $choices = $Control.Tag.Choices
+    # Only a genuine integer can name an enum member. This has to be a type
+    # test, not a cast: [int]$true is 1, so a JSON `true` would otherwise
+    # select "Allow" on the three keys that have one and silently grant every
+    # site the permission the user never asked to grant. A quoted "1" is not
+    # a member either. Both drop to "Not managed" and are reported, matching
+    # the type-strict check in the two Python scripts.
+    $isInteger = ($Value -is [int]) -or ($Value -is [long]) -or
+                 ($Value -is [int16]) -or ($Value -is [byte]) -or ($Value -is [uint32])
+    if ($isInteger) {
+        for ($i = 0; $i -lt $choices.Count; $i++) {
+            $choiceValue = $choices[$i].Value
+            if ($null -eq $choiceValue) { continue }
+            # The registry hands us Int32, imported JSON Int32/Int64, so
+            # compare numerically once both sides are known to be integers.
+            $isMatch = $false
+            try { $isMatch = ([int]$choiceValue -eq [int]$Value) } catch { $isMatch = $false }
+            if ($isMatch) {
+                $Control.SelectedIndex = $i
+                return $true
+            }
+        }
+    }
+    $Control.SelectedIndex = 0
+    return $false
+}
+
+# ---------------------------------------------------------------------------
 # Theme palette
 #
 # The app follows the Windows "apps" light/dark setting. All colors live in
 # this one table so the two modes stay in sync — controls read from $theme
 # instead of hard-coding colors. Checkbox glyphs are custom-painted in
-# Add-FeatureCheckboxes because the stock flat glyph is nearly invisible on
+# Add-FeatureRows because the stock flat glyph is nearly invisible on
 # dark backgrounds and follows the system theme on light ones.
 # ---------------------------------------------------------------------------
 
@@ -521,23 +601,86 @@ function Add-SectionLabel {
     $label.UseMnemonic = $false   # render the & in "Telemetry & Reporting" literally
     $label.Font = $sectionFont
     $label.Location = New-Object System.Drawing.Point(25, $Y)
-    $label.Size = New-Object System.Drawing.Size(300, 20)
+    # Stays clear of the column's vertical scrollbar: a control that reaches
+    # past the panel's usable width makes it grow a horizontal scrollbar too.
+    $label.Size = New-Object System.Drawing.Size(350, 20)
     $label.ForeColor = $theme.Accent
     $Panel.Controls.Add($label)
 }
 
-function Add-FeatureCheckboxes {
-    # Lays out one checkbox per feature starting at $Y and returns the next
-    # free Y. Each feature's Tip becomes a hover tooltip, suffixed with the
-    # exact policy it writes so power users can cross-check brave://policy.
-    # $Step is the per-row vertical advance (tightened in three-column mode).
+function Add-ChoiceRow {
+    # One tri-state (or wider) content setting: a caption plus a dropdown
+    # holding the policy's legal values, "Not managed" first and selected.
+    # The ComboBox is the row's control, so it goes into $allFeatures exactly
+    # where a CheckBox would.
+    param ($Panel, $Feature, [int] $Y)
+
+    $caption = New-Object System.Windows.Forms.Label
+    $caption.Text = $Feature.Name
+    $caption.UseMnemonic = $false
+    $caption.Location = New-Object System.Drawing.Point(28, ($Y + 3))
+    # 252 fits the longest caption ("Multi-Screen (Window Management)
+    # Access": 243px of text at 9pt Segoe UI, plus the Label's own inset)
+    # without ellipsis.
+    $caption.Size = New-Object System.Drawing.Size(252, 18)
+    $caption.ForeColor = $theme.Text
+    $Panel.Controls.Add($caption)
+
+    $combo = New-Object System.Windows.Forms.ComboBox
+    $combo.Tag = $Feature
+    # DropDownList: the value set is closed, and a free-text edit field would
+    # let a typo turn into "no matching choice" on Apply.
+    $combo.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+    # Every dropdown in a column lines up at the same X, clear of the
+    # captions and inside the panel's usable width (see $layoutPanelW).
+    $combo.Location = New-Object System.Drawing.Point(286, $Y)
+    $combo.Size = New-Object System.Drawing.Size(106, 21)
+    $combo.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $combo.BackColor = $theme.InputBack
+    $combo.ForeColor = $theme.InputText
+    foreach ($choice in $Feature.Choices) {
+        [void] $combo.Items.Add($choice.Label)
+    }
+    $combo.SelectedIndex = 0
+    $Panel.Controls.Add($combo)
+
+    if ($Feature.Tip) {
+        # Spell out the enum rather than a single value: which members are
+        # legal differs per key, and that is the thing to cross-check
+        # against brave://policy.
+        $legal = @()
+        foreach ($choice in $Feature.Choices) {
+            if ($null -ne $choice.Value) { $legal += "$($choice.Label)=$($choice.Value)" }
+        }
+        $tip = "$($Feature.Tip)`n`nPolicy: $($Feature.Key) ($($legal -join ', ')). Not managed writes nothing and removes any value SlimBrave wrote."
+        $tooltip.SetToolTip($caption, $tip)
+        $tooltip.SetToolTip($combo, $tip)
+    }
+
+    $script:allFeatures += $combo
+}
+
+function Add-FeatureRows {
+    # Lays out one row per feature starting at $Y and returns the next free
+    # Y. A feature carrying `Choices` becomes a dropdown row, everything else
+    # a checkbox. Each feature's Tip becomes a hover tooltip, suffixed with
+    # the exact policy it writes so power users can cross-check
+    # brave://policy. $Step is the per-row vertical advance.
     param ($Panel, [array] $Features, [int] $Y, [int] $Step = 25)
     foreach ($feature in $Features) {
+        if ($null -ne $feature.Choices) {
+            Add-ChoiceRow $Panel $feature $Y
+            $Y += $Step
+            continue
+        }
         $checkbox = New-Object System.Windows.Forms.CheckBox
         $checkbox.Text = $feature.Name
         $checkbox.Tag = $feature
         $checkbox.Location = New-Object System.Drawing.Point(28, $Y)
-        $checkbox.Size = New-Object System.Drawing.Size(305, 20)
+        # Wide enough for the longest label ("Disable Enhanced Spell Check
+        # (Google Web Service)", 296px including the glyph) and still short
+        # of the column scrollbar.
+        $checkbox.Size = New-Object System.Drawing.Size(365, 20)
         $checkbox.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
         # The stock flat glyph is a thin system-colored check that is nearly
         # invisible on the dark theme, so paint over it: checked = accent
@@ -658,23 +801,75 @@ $privacyFeatures = @(
 # Site permissions and access lockdowns: content-setting defaults plus the
 # escape hatches (guest, incognito, extensions) that would otherwise bypass
 # the rest of the policy set.
+#
+# The first eight rows are tri-state content settings: a row carrying
+# `Choices` is drawn as a dropdown instead of a checkbox, because Chromium
+# accepts more than "block or leave alone" for these keys. Choices is an
+# ordered list of Label/Value pairs; Value $null means "not managed", i.e.
+# write nothing and remove any value we previously wrote. That entry is
+# always first and is the default selection, so an untouched row behaves
+# exactly like the old unchecked checkbox.
+#
+# The legal values differ per key and are NOT uniform - Allow (1) is not a
+# member of the *GuardSetting / LocalFonts / WindowManagement enums, so
+# those rows only offer Ask (3) and Block (2). Do not "tidy" them into a
+# shared list.
+#
+# `Value` stays on a choice row as the value its pre-tri-state checkbox
+# wrote (always Block). It is never written directly; it is what a bare key
+# in a legacy array-format export means on import.
 $accessFeatures = @(
-    @{ Name = "Block Web Notifications"; Key = "DefaultNotificationsSetting"; Value = 2; Type = "DWord"
-       Tip = "Blocks all sites from showing desktop notifications and removes the permission prompt entirely." },
-    @{ Name = "Block Location Access"; Key = "DefaultGeolocationSetting"; Value = 2; Type = "DWord"
-       Tip = "Blocks all sites from reading your physical location and removes the permission prompt. Maps and delivery sites will need the location typed manually." },
-    @{ Name = "Block Motion Sensors"; Key = "DefaultSensorsSetting"; Value = 2; Type = "DWord"
-       Tip = "Blocks all sites from reading motion and orientation sensors, a known fingerprinting vector. Rarely breaks anything on desktop." },
-    @{ Name = "Block WebUSB Access"; Key = "DefaultWebUsbGuardSetting"; Value = 2; Type = "DWord"
-       Tip = "Blocks all sites from talking to USB devices and removes the permission prompt. Breaks web-based hardware wallets (Ledger, Trezor) and in-browser firmware flashers." },
-    @{ Name = "Block Web Serial Access"; Key = "DefaultSerialGuardSetting"; Value = 2; Type = "DWord"
-       Tip = "Blocks all sites from opening serial ports and removes the permission prompt. Breaks in-browser microcontroller and device programming tools." },
-    @{ Name = "Block WebHID Access"; Key = "DefaultWebHidGuardSetting"; Value = 2; Type = "DWord"
-       Tip = "Blocks all sites from talking to human interface devices and removes the permission prompt. May break security keys and gamepad configurators that use WebHID rather than WebAuthn." },
-    @{ Name = "Block Local Font Enumeration"; Key = "DefaultLocalFontsSetting"; Value = 2; Type = "DWord"
-       Tip = "Blocks all sites from asking for the list of fonts installed on your machine - a strong fingerprinting signal that Shields' font protections don't cover. Rarely breaks anything outside web design tools." },
-    @{ Name = "Block Multi-Screen (Window Management) Access"; Key = "DefaultWindowManagementSetting"; Value = 2; Type = "DWord"
-       Tip = "Blocks all sites from reading your monitor layout and placing windows on a chosen screen. Breaks the full-screen presentation mode in some web apps." },
+    @{ Name = "Web Notifications"; Key = "DefaultNotificationsSetting"; Value = 2; Type = "DWord"
+       Choices = @(
+           @{ Label = "Not managed"; Value = $null },
+           @{ Label = "Allow"; Value = 1 },
+           @{ Label = "Ask";   Value = 3 },
+           @{ Label = "Block"; Value = 2 })
+       Tip = "Sets the default for desktop notifications. Block stops every site from asking or showing them, Ask keeps the permission prompt, Allow grants it to every site." },
+    @{ Name = "Location Access"; Key = "DefaultGeolocationSetting"; Value = 2; Type = "DWord"
+       Choices = @(
+           @{ Label = "Not managed"; Value = $null },
+           @{ Label = "Allow"; Value = 1 },
+           @{ Label = "Ask";   Value = 3 },
+           @{ Label = "Block"; Value = 2 })
+       Tip = "Sets the default for reading your physical location. Block removes the prompt entirely, so maps and delivery sites will need the location typed manually; Ask keeps the prompt." },
+    @{ Name = "Motion Sensors"; Key = "DefaultSensorsSetting"; Value = 2; Type = "DWord"
+       Choices = @(
+           @{ Label = "Not managed"; Value = $null },
+           @{ Label = "Allow"; Value = 1 },
+           @{ Label = "Ask";   Value = 3 },
+           @{ Label = "Block"; Value = 2 })
+       Tip = "Sets the default for motion and orientation sensors, a known fingerprinting vector. Blocking rarely breaks anything on desktop." },
+    @{ Name = "WebUSB Access"; Key = "DefaultWebUsbGuardSetting"; Value = 2; Type = "DWord"
+       Choices = @(
+           @{ Label = "Not managed"; Value = $null },
+           @{ Label = "Ask";   Value = 3 },
+           @{ Label = "Block"; Value = 2 })
+       Tip = "Sets the default for sites talking to USB devices. Block removes the prompt and breaks web-based hardware wallets (Ledger, Trezor) and in-browser firmware flashers; Ask keeps the prompt. Chromium has no Allow state for this key." },
+    @{ Name = "Web Serial Access"; Key = "DefaultSerialGuardSetting"; Value = 2; Type = "DWord"
+       Choices = @(
+           @{ Label = "Not managed"; Value = $null },
+           @{ Label = "Ask";   Value = 3 },
+           @{ Label = "Block"; Value = 2 })
+       Tip = "Sets the default for sites opening serial ports. Block removes the prompt and breaks in-browser microcontroller and device programming tools; Ask keeps the prompt. Chromium has no Allow state for this key." },
+    @{ Name = "WebHID Access"; Key = "DefaultWebHidGuardSetting"; Value = 2; Type = "DWord"
+       Choices = @(
+           @{ Label = "Not managed"; Value = $null },
+           @{ Label = "Ask";   Value = 3 },
+           @{ Label = "Block"; Value = 2 })
+       Tip = "Sets the default for sites talking to human interface devices. Block removes the prompt and may break security keys and gamepad configurators that use WebHID rather than WebAuthn. Chromium has no Allow state for this key." },
+    @{ Name = "Local Font Enumeration"; Key = "DefaultLocalFontsSetting"; Value = 2; Type = "DWord"
+       Choices = @(
+           @{ Label = "Not managed"; Value = $null },
+           @{ Label = "Ask";   Value = 3 },
+           @{ Label = "Block"; Value = 2 })
+       Tip = "Sets the default for sites asking which fonts are installed on your machine - a strong fingerprinting signal that Shields' font protections don't cover. Blocking rarely breaks anything outside web design tools. Chromium has no Allow state for this key." },
+    @{ Name = "Multi-Screen (Window Management) Access"; Key = "DefaultWindowManagementSetting"; Value = 2; Type = "DWord"
+       Choices = @(
+           @{ Label = "Not managed"; Value = $null },
+           @{ Label = "Ask";   Value = 3 },
+           @{ Label = "Block"; Value = 2 })
+       Tip = "Sets the default for sites reading your monitor layout and placing windows on a chosen screen. Blocking breaks the full-screen presentation mode in some web apps. Chromium has no Allow state for this key." },
     @{ Name = "Force Google SafeSearch"; Key = "ForceGoogleSafeSearch"; Value = 1; Type = "DWord"
        Tip = "Forces SafeSearch on for all Google searches. Mainly useful for parental controls." },
     @{ Name = "Filter Adult Content (SafeSites)"; Key = "SafeSitesFilterBehavior"; Value = 1; Type = "DWord"
@@ -774,16 +969,225 @@ $perfFeatures = @(
 )
 
 # ---------------------------------------------------------------------------
-# Responsive column layout
+# Embedded presets
 #
-# In a single column the feature set is ~1750px tall, so it is split across
-# columns. On a display whose usable (working-area) height is less than the
-# natural two-column window, the categories reflow into THREE shorter columns
-# so the lower options and the Apply/Reset buttons stay on-screen — the
-# 720p / 768p / 1080p cutoff fix. Taller displays keep the two-column layout.
+# The Windows quick start downloads SlimBrave.ps1 on its own, so there is no
+# Presets/ directory on disk for the Quick Presets row to read. The five
+# preset files are embedded here verbatim instead, and parsed with the same
+# ConvertFrom-Json the Import button uses, so a preset button and an imported
+# file reach the controls by exactly the same route.
 #
-# Force a column count for testing on a normal monitor by setting
-# $env:SLIMBRAVE_COLUMNS to "2" or "3" before launching.
+# These blocks are copies of Presets/*.json - regenerate them from those
+# files rather than editing them here, because a typo is a silently wrong
+# policy. Import still loads a preset (or any other config) from an arbitrary
+# path, so this is additive.
+#
+# A here-string's closing '@ has to sit at column 0, which is why the JSON
+# below is flush left.
+# ---------------------------------------------------------------------------
+
+$script:embeddedPresets = [ordered]@{
+    "Maximum Privacy Preset" = @'
+{
+    "Features": {
+        "MetricsReportingEnabled": false,
+        "SafeBrowsingExtendedReportingEnabled": false,
+        "UrlKeyedAnonymizedDataCollectionEnabled": false,
+        "BraveP3AEnabled": false,
+        "BraveStatsPingEnabled": false,
+        "AutofillAddressEnabled": false,
+        "AutofillCreditCardEnabled": false,
+        "PasswordManagerEnabled": false,
+        "PasswordLeakDetectionEnabled": false,
+        "BrowserSignin": 0,
+        "BraveGlobalPrivacyControlEnabled": true,
+        "BraveDeAmpEnabled": true,
+        "BraveDebouncingEnabled": true,
+        "BraveTrackingQueryParametersFilteringEnabled": true,
+        "BraveReduceLanguageEnabled": true,
+        "WebRtcIPHandling": "disable_non_proxied_udp",
+        "QuicAllowed": false,
+        "NetworkPredictionOptions": 2,
+        "BlockThirdPartyCookies": true,
+        "PaymentMethodQueryEnabled": false,
+        "AlternateErrorPagesEnabled": false,
+        "DefaultNotificationsSetting": 2,
+        "DefaultGeolocationSetting": 2,
+        "DefaultSensorsSetting": 2,
+        "BraveRewardsDisabled": true,
+        "BraveWalletDisabled": true,
+        "BraveVPNDisabled": true,
+        "BraveAIChatEnabled": false,
+        "BraveNewsDisabled": true,
+        "BraveTalkDisabled": true,
+        "BravePlaylistEnabled": false,
+        "BraveWebDiscoveryEnabled": false,
+        "BraveSpeedreaderEnabled": false,
+        "TorDisabled": true,
+        "SyncDisabled": true,
+        "EmailAliasesEnabled": false,
+        "DefaultBraveAdblockSetting": 2,
+        "DefaultBraveFingerprintingV2Setting": 3,
+        "DefaultBraveHttpsUpgradeSetting": 2,
+        "DefaultBraveReferrersSetting": 2,
+        "DefaultBraveRemember1PStorageSetting": 2,
+        "BackgroundModeEnabled": false,
+        "EnableMediaRouter": false,
+        "MediaRecommendationsEnabled": false,
+        "ShoppingListEnabled": false,
+        "AlwaysOpenPdfExternally": true,
+        "TranslateEnabled": false,
+        "SpellcheckEnabled": false,
+        "SearchSuggestEnabled": false,
+        "PrintingEnabled": false,
+        "DefaultBrowserSettingEnabled": false,
+        "DeveloperToolsAvailability": 2,
+        "BraveWaybackMachineEnabled": false
+    }
+}
+'@
+
+    "Balanced Privacy Preset" = @'
+{
+    "Features": {
+        "MetricsReportingEnabled": false,
+        "SafeBrowsingExtendedReportingEnabled": false,
+        "UrlKeyedAnonymizedDataCollectionEnabled": false,
+        "BraveP3AEnabled": false,
+        "BraveStatsPingEnabled": false,
+        "AutofillCreditCardEnabled": false,
+        "BrowserSignin": 0,
+        "BraveGlobalPrivacyControlEnabled": true,
+        "BraveDeAmpEnabled": true,
+        "BraveDebouncingEnabled": true,
+        "BraveTrackingQueryParametersFilteringEnabled": true,
+        "BraveReduceLanguageEnabled": true,
+        "WebRtcIPHandling": "disable_non_proxied_udp",
+        "QuicAllowed": false,
+        "NetworkPredictionOptions": 2,
+        "BlockThirdPartyCookies": true,
+        "PaymentMethodQueryEnabled": false,
+        "AlternateErrorPagesEnabled": false,
+        "BraveRewardsDisabled": true,
+        "BraveWalletDisabled": true,
+        "BraveVPNDisabled": true,
+        "BraveAIChatEnabled": false,
+        "BraveNewsDisabled": true,
+        "BraveTalkDisabled": true,
+        "BraveWebDiscoveryEnabled": false,
+        "TorDisabled": true,
+        "SyncDisabled": true,
+        "BackgroundModeEnabled": false,
+        "MediaRecommendationsEnabled": false,
+        "ShoppingListEnabled": false,
+        "DefaultBrowserSettingEnabled": false
+    },
+    "DnsMode": "automatic"
+}
+'@
+
+    "Performance Focused Preset" = @'
+{
+    "Features": {
+        "MetricsReportingEnabled": false,
+        "BraveP3AEnabled": false,
+        "BraveStatsPingEnabled": false,
+        "BraveDeAmpEnabled": true,
+        "BraveDebouncingEnabled": true,
+        "BraveTrackingQueryParametersFilteringEnabled": true,
+        "BraveRewardsDisabled": true,
+        "BraveWalletDisabled": true,
+        "BraveVPNDisabled": true,
+        "BraveAIChatEnabled": false,
+        "BraveNewsDisabled": true,
+        "BraveTalkDisabled": true,
+        "BravePlaylistEnabled": false,
+        "BraveWebDiscoveryEnabled": false,
+        "BraveSpeedreaderEnabled": false,
+        "BackgroundModeEnabled": false,
+        "HighEfficiencyModeEnabled": true,
+        "HardwareAccelerationModeEnabled": true,
+        "EnableMediaRouter": false,
+        "MediaRecommendationsEnabled": false,
+        "ShoppingListEnabled": false,
+        "DefaultBrowserSettingEnabled": false,
+        "BraveWaybackMachineEnabled": false
+    },
+    "DnsMode": "automatic"
+}
+'@
+
+    "Developer Preset" = @'
+{
+    "Features": {
+        "MetricsReportingEnabled": false,
+        "SafeBrowsingExtendedReportingEnabled": false,
+        "UrlKeyedAnonymizedDataCollectionEnabled": false,
+        "BraveP3AEnabled": false,
+        "BraveStatsPingEnabled": false,
+        "AlternateErrorPagesEnabled": false,
+        "BraveRewardsDisabled": true,
+        "BraveWalletDisabled": true,
+        "BraveVPNDisabled": true,
+        "BraveAIChatEnabled": false,
+        "BraveNewsDisabled": true,
+        "BraveTalkDisabled": true,
+        "BackgroundModeEnabled": false,
+        "MediaRecommendationsEnabled": false,
+        "ShoppingListEnabled": false,
+        "DefaultBrowserSettingEnabled": false
+    },
+    "DnsMode": "automatic"
+}
+'@
+
+    "Strict Parental Controls Preset" = @'
+{
+    "Features": {
+        "BraveP3AEnabled": false,
+        "BraveStatsPingEnabled": false,
+        "IncognitoModeAvailability": 1,
+        "BrowserGuestModeEnabled": false,
+        "ExtensionInstallBlocklist": ["*"],
+        "ForceGoogleSafeSearch": true,
+        "SafeSitesFilterBehavior": 1,
+        "BrowserSignin": 0,
+        "BraveDeAmpEnabled": true,
+        "BraveDebouncingEnabled": true,
+        "BraveTrackingQueryParametersFilteringEnabled": true,
+        "BraveReduceLanguageEnabled": true,
+        "SyncDisabled": true,
+        "BraveRewardsDisabled": true,
+        "BraveWalletDisabled": true,
+        "BraveVPNDisabled": true,
+        "BraveAIChatEnabled": false,
+        "BraveNewsDisabled": true,
+        "BraveTalkDisabled": true,
+        "BraveWebDiscoveryEnabled": false,
+        "TorDisabled": true,
+        "DeveloperToolsAvailability": 2
+    },
+    "DnsMode": "custom",
+    "DnsTemplates": "https://family.cloudflare-dns.com/dns-query"
+}
+'@
+}
+
+# ---------------------------------------------------------------------------
+# Column layout
+#
+# Three fixed columns, always. The window is a fixed size that fits on a
+# 1366x768 display; each column is its own AutoScroll panel, so a column
+# whose categories are taller than the panel scrolls on its own and the DNS
+# row and the button row below never move.
+#
+# This deliberately replaces the old height heuristic (measure the natural
+# two-column window, compare it against the working area, reflow to three
+# columns if it doesn't fit, and cap the form height as a last resort). That
+# constant was wrong by a few pixels in both directions across DPI scales,
+# and its safety net then produced the whole-window scrollbar it existed to
+# prevent. Nothing measures the screen any more, so there is no constant to
+# drift: adding rows makes a column scroll instead of resizing the window.
 # ---------------------------------------------------------------------------
 
 $categories = @(
@@ -797,83 +1201,55 @@ $categories = @(
 $categoryByName = @{}
 foreach ($cat in $categories) { $categoryByName[$cat.Name] = $cat }
 
-# Which categories go in each column when there are two. Named here rather
-# than below because the natural window height is derived from it.
-$twoColumnLayout = @(
-    @("Privacy & Security", "Permissions & Access", "Shields & Content Protection"),
-    @("Telemetry & Reporting", "Brave Features", "Performance & Bloat")
+# The six categories, paired into the three columns. Pairing keeps related
+# categories together; the columns do not have to come out the same length,
+# because each one scrolls on its own.
+$columnLayout = @(
+    @("Privacy & Security", "Telemetry & Reporting"),
+    @("Permissions & Access", "Brave Features"),
+    @("Shields & Content Protection", "Performance & Bloat")
 )
 
-# Natural height of the two-column window. If the screen's usable height is
-# below this, switch to three columns. Derived from the same metrics the
-# builder uses further down, and from the window chrome, so it can't drift as
-# rows are added: the old hard-coded 1140 was meant to sit a little ABOVE the
-# form but the form measures 1144 at 96 DPI and 1152 at 125%, so the margin
-# was inverted and the safety net at the end of the file produced the very
-# scrollbar this check exists to avoid.
-$twoColumnBottom = 0
-foreach ($column in $twoColumnLayout) {
-    # Mirrors the build loop at two-column metrics: $colStartY, then per
-    # category a section-label row, one row per feature, and $rowGap.
-    $columnBottom = 10
-    foreach ($catName in $column) {
-        $columnBottom += (25 * (1 + $categoryByName[$catName].Features.Count)) + 10
-    }
-    if ($columnBottom -gt $twoColumnBottom) { $twoColumnBottom = $columnBottom }
-}
-# Panel padding (5) + panel top margin (20) + DNS row (15 + 75) + button row
-# (32) + bottom margin (18) is the ClientSize the builder arrives at; the
-# window is that plus the non-client chrome, which grows with the DPI scale.
-$twoColumnWindowHeight = $twoColumnBottom + 5 + 20 + 15 + 75 + 32 + 18 +
-    [System.Windows.Forms.SystemInformation]::CaptionHeight +
-    (2 * [System.Windows.Forms.SystemInformation]::FixedFrameBorderSize.Height)
-
-$columnCount = 2
-if ($env:SLIMBRAVE_COLUMNS -eq "2" -or $env:SLIMBRAVE_COLUMNS -eq "3") {
-    $columnCount = [int]$env:SLIMBRAVE_COLUMNS
-} elseif ([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height -lt $twoColumnWindowHeight) {
-    $columnCount = 3
-}
-
-# Three-column mode pairs the six categories so no column runs much past
-# ~545px of content (vs. ~970px in the two-column layout).
-if ($columnCount -eq 3) {
-    $columnLayout = @(
-        @("Privacy & Security", "Telemetry & Reporting"),
-        @("Permissions & Access", "Brave Features"),
-        @("Shields & Content Protection", "Performance & Bloat")
-    )
-} else {
-    $columnLayout = $twoColumnLayout
-}
-
-# Three columns use tighter row spacing so the window fits on the short
-# displays that trigger it; 21px is the floor (the checkbox controls are
-# 20px tall). Two columns keep the original metrics.
-if ($columnCount -eq 3) {
-    $rowHeight = 21; $rowGap = 6;  $colStartY = 6
-} else {
-    $rowHeight = 25; $rowGap = 10; $colStartY = 10
-}
+# Row metrics. 25px comfortably clears both row controls (a 20px checkbox
+# and a 21px dropdown), so one step serves every row type.
+$rowHeight = 25; $rowGap = 10; $colStartY = 10
 
 # ---------------------------------------------------------------------------
 # Build the columns
 # ---------------------------------------------------------------------------
 
-$layoutMargin   = 20
-$layoutPanelW   = 340
-$layoutPanelGap = 20
-$layoutPanelTop = 20
+$layoutMargin   = 14
+# 414 is the narrowest column that fits the widest row - the longest choice
+# caption plus its dropdown - without clipping or a horizontal scrollbar,
+# and still leaves the three-column window ~50px of slack on a 1366px-wide
+# display. Usable width inside a column is 414 - 2 (border) - 17 (its
+# scrollbar) = 395, which every row control stays inside.
+$layoutPanelW   = 414
+$layoutPanelGap = 14
+# The top bar occupies the 28px this used to leave as plain margin, and
+# $layoutPanelH hands the same 28px back, so the columns start lower but end
+# - and the window ends - exactly where they did before.
+$layoutPanelTop = 48
+# Fixed viewport height for every column. With $layoutPanelTop this puts the
+# bottom of the columns at 520; the DNS row, the button row and the margins
+# below that put the whole window at ~700px tall at 96 DPI, which clears the
+# ~728px working area of a 1366x768 display. Anything taller than this
+# inside a column is reached with that column's own scrollbar, so this
+# number is a comfort knob, not a correctness one.
+$layoutPanelH   = 472
 
 $panels = @()
-$maxColumnBottom = 0
 for ($col = 0; $col -lt $columnLayout.Count; $col++) {
     $panelX = $layoutMargin + $col * ($layoutPanelW + $layoutPanelGap)
 
     $panel = New-Object System.Windows.Forms.Panel
     $panel.Location = New-Object System.Drawing.Point($panelX, $layoutPanelTop)
+    $panel.Size = New-Object System.Drawing.Size($layoutPanelW, $layoutPanelH)
     $panel.BackColor = $theme.PanelBack
     $panel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    # Per-column scrolling. The panel is the scroll viewport, so a long
+    # column scrolls without moving anything else on the form.
+    $panel.AutoScroll = $true
     $form.Controls.Add($panel)
     $panels += $panel
 
@@ -882,28 +1258,123 @@ for ($col = 0; $col -lt $columnLayout.Count; $col++) {
         $category = $categoryByName[$catName]
         Add-SectionLabel $panel $category.Name $y
         $y += $rowHeight
-        $y = Add-FeatureCheckboxes $panel $category.Features $y $rowHeight
+        $y = Add-FeatureRows $panel $category.Features $y $rowHeight
         $y += $rowGap
     }
-    if ($y -gt $maxColumnBottom) { $maxColumnBottom = $y }
-}
-
-# Give every column the same height so the boxes line up, then expose the
-# geometry the DNS row, the buttons, and the form size are positioned from.
-$panelHeight = $maxColumnBottom + 5
-foreach ($panel in $panels) {
-    $panel.Size = New-Object System.Drawing.Size($layoutPanelW, $panelHeight)
+    # Bottom padding below the last row, so it isn't flush against the
+    # panel edge when scrolled to the end.
+    $spacer = New-Object System.Windows.Forms.Label
+    $spacer.Location = New-Object System.Drawing.Point(0, $y)
+    $spacer.Size = New-Object System.Drawing.Size(1, 5)
+    $panel.Controls.Add($spacer)
 }
 
 $layoutContentWidth = (2 * $layoutMargin) + ($columnLayout.Count * $layoutPanelW) + (($columnLayout.Count - 1) * $layoutPanelGap)
-$layoutPanelBottom  = $layoutPanelTop + $panelHeight
-# Two-column content is 740px wide; shift the DNS row and buttons right so they
-# sit under the centre of the wider three-column form (0px when two-column).
-$layoutContentOffsetX = [int](($layoutContentWidth - 740) / 2)
+$layoutPanelBottom  = $layoutPanelTop + $layoutPanelH
+# The DNS row and the button row are ~933px wide (five action buttons at
+# 120px, spaced 193 apart, with a 20px margin either side); centre that
+# block under the three columns.
+$layoutContentOffsetX = [int](($layoutContentWidth - 933) / 2)
 $dnsRowTop            = $layoutPanelBottom + 15
 $buttonRowTop         = $dnsRowTop + 75
 
+# Fixed for the life of the window: nothing below reflows, resizes or
+# measures the screen.
 $form.ClientSize = New-Object System.Drawing.Size($layoutContentWidth, ($buttonRowTop + 32 + 18))
+
+# ---------------------------------------------------------------------------
+# Top bar
+#
+# One compact row above the columns: a button per embedded preset, and a
+# status line naming what the last action did. A preset button only fills in
+# the controls - nothing reaches the registry until Apply Settings - and it
+# does that through Import-SettingsObject (defined with the Import button
+# below), so mutual-exclusion groups, tri-state rows and the DNS fields all
+# behave exactly as they do for an imported file.
+#
+# The row has to stay one row tall: the height below it is already spoken
+# for by the three columns, the DNS row and the button row.
+# ---------------------------------------------------------------------------
+
+$topBarTop = 14
+# 176 clears the longest preset name ("Strict Parental Controls Preset", 163px
+# at 9pt Segoe UI) and 130 clears the caption to their left, so the five
+# buttons end at 1034 - leaving the status line the rest of the row.
+$presetButtonW   = 176
+$presetButtonGap = 6
+$presetButtonX   = 130
+
+$presetsLabel = New-Object System.Windows.Forms.Label
+$presetsLabel.Text = "Quick Presets"
+$presetsLabel.UseMnemonic = $false
+$presetsLabel.Font = $sectionFont
+$presetsLabel.ForeColor = $theme.Accent
+$presetsLabel.Location = New-Object System.Drawing.Point($layoutMargin, ($topBarTop + 4))
+$presetsLabel.Size = New-Object System.Drawing.Size(108, 20)
+$form.Controls.Add($presetsLabel)
+
+$presetIndex = 0
+foreach ($presetName in $script:embeddedPresets.Keys) {
+    $presetButton = New-Object System.Windows.Forms.Button
+    $presetButton.Text = $presetName
+    # The click handler runs long after this loop has finished, and a
+    # scriptblock closes over the variable rather than over the value it held
+    # when the handler was attached - so the name travels on the button.
+    $presetButton.Tag = $presetName
+    $presetButton.Location = New-Object System.Drawing.Point(($presetButtonX + $presetIndex * ($presetButtonW + $presetButtonGap)), $topBarTop)
+    $presetButton.Size = New-Object System.Drawing.Size($presetButtonW, 26)
+    $presetButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $presetButton.FlatAppearance.BorderSize = 1
+    $presetButton.FlatAppearance.BorderColor = $theme.ButtonBorder
+    $presetButton.FlatAppearance.MouseOverBackColor = $theme.ButtonHover
+    $presetButton.BackColor = $theme.ButtonBack
+    # Import's blue: like Import, these buttons only load selections.
+    $presetButton.ForeColor = $theme.ImportText
+    $tooltip.SetToolTip($presetButton, "Load the $presetName selections into the controls below. Nothing is written until you click Apply Settings, so you can untick anything you don't want first.")
+    $presetButton.Add_Click({
+        $name = $this.Tag
+        try {
+            $note = Import-SettingsObject ($script:embeddedPresets[$name] | ConvertFrom-Json)
+        } catch {
+            # Out of reach short of a corrupted script file, but a handler
+            # that throws puts an unhandled-exception dialog on screen.
+            $statusLabel.Text = "$name failed to load"
+            return
+        }
+        $statusLabel.Text = "$name loaded"
+        # Only when a row could not be represented - none of the five bundled
+        # presets does that today, so this normally stays silent.
+        if ($note) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "$name loaded.$note",
+                "Preset Loaded",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+        }
+    })
+    $form.Controls.Add($presetButton)
+    $presetIndex++
+}
+
+# Right-aligned so it reads as the row's trailing status rather than a label
+# for the button beside it.
+$statusLabel = New-Object System.Windows.Forms.Label
+$statusLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
+$statusLabel.ForeColor = $theme.Text
+$statusLabel.Location = New-Object System.Drawing.Point(($layoutContentWidth - 254), ($topBarTop + 4))
+$statusLabel.Size = New-Object System.Drawing.Size(240, 20)
+$form.Controls.Add($statusLabel)
+$tooltip.SetToolTip($statusLabel, "What the last action did. Loading a preset, importing a file and re-syncing only change the controls on screen - Apply Settings and Reset All Settings are the two that touch the registry.")
+
+# Open every column at its first row. A scrollable container will scroll
+# itself to reveal whichever child control it decides is active, which can
+# otherwise show a column mid-list on launch.
+$form.Add_Shown({
+    foreach ($panel in $script:panels) {
+        $panel.AutoScrollPosition = New-Object System.Drawing.Point(0, 0)
+    }
+})
 
 # ---------------------------------------------------------------------------
 # Mutual-exclusion groups
@@ -920,6 +1391,9 @@ $form.ClientSize = New-Object System.Drawing.Size($layoutContentWidth, ($buttonR
 
 $script:groupSuppress = $false
 foreach ($cb in $allFeatures) {
+    # Choice rows can't collide: each owns its key outright and holds one
+    # value at a time. They also have no CheckedChanged to hook.
+    if ($null -ne $cb.Tag.Choices) { continue }
     if ($null -ne $cb.Tag.Group) {
         $cb.Add_CheckedChanged({
             if ($script:groupSuppress) { return }
@@ -1024,9 +1498,12 @@ $exportButton = New-ActionButton "Export Settings" 20 $theme.ExportText `
     "Save the current selections to a JSON file. The format is shared with the Linux and macOS versions."
 $importButton = New-ActionButton "Import Settings" 213 $theme.ImportText `
     "Load selections from a JSON file or one of the bundled presets. Nothing is written until you click Apply Settings."
-$saveButton = New-ActionButton "Apply Settings" 407 $theme.ApplyText `
+# Import's blue again: Re-sync only reads.
+$resyncButton = New-ActionButton "Re-sync Registry" 407 $theme.ImportText `
+    "Read the policy currently in the registry back into the controls, discarding any selections on screen you have not applied. Nothing is written."
+$saveButton = New-ActionButton "Apply Settings" 600 $theme.ApplyText `
     "Write every checked policy to the registry and remove unchecked ones. Restart Brave (close all brave.exe processes) for changes to take effect."
-$resetButton = New-ActionButton "Reset All Settings" 600 $theme.ResetText `
+$resetButton = New-ActionButton "Reset All Settings" 793 $theme.ResetText `
     "Remove every policy SlimBrave Neo manages from machine and user scope - policies set by group policy or another tool are left alone - and scrub leaked Shields entries from your Brave profiles."
 
 # ---------------------------------------------------------------------------
@@ -1056,14 +1533,24 @@ $saveButton.Add_Click({
         New-Item -Path $registryPath -Force | Out-Null
     }
 
-    # Build a hashtable of selected features keyed by policy key name.
+    # Build a hashtable of the values to write, keyed by policy key name.
     # Group exclusivity (above) ensures at most one entry per key, so this
-    # is just a key lookup.
+    # is just a key lookup. A row that manages nothing - unchecked box, or a
+    # choice row left on "Not managed" - contributes no entry and so falls
+    # into the removal branch below.
+    #
+    # The value is carried explicitly rather than by handing on the feature:
+    # on a choice row the feature's own Value is the legacy checkbox value,
+    # not the user's selection.
     $selectedFeatures = @{}
-    foreach ($checkbox in $allFeatures) {
-        if ($checkbox.Checked) {
-            $feature = $checkbox.Tag
-            $selectedFeatures[$feature.Key] = $feature
+    foreach ($control in $allFeatures) {
+        $rowValue = Get-RowValue $control
+        if ($null -eq $rowValue) { continue }
+        $feature = $control.Tag
+        $selectedFeatures[$feature.Key] = @{
+            Key   = $feature.Key
+            Type  = $feature.Type
+            Value = $rowValue
         }
     }
 
@@ -1164,6 +1651,8 @@ $saveButton.Add_Click({
         $msg += "`n`nLeft alone because the list on disk is not the one SlimBrave writes: $(($skippedListKeys | Select-Object -Unique) -join ', ')."
     }
 
+    $statusLabel.Text = "Changes applied"
+
     [System.Windows.Forms.MessageBox]::Show(
         $msg,
         "SlimBrave Neo",
@@ -1236,13 +1725,14 @@ function Reset-AllSettings {
 
 $resetButton.Add_Click({
     if (Reset-AllSettings) {
-        # Uncheck all boxes and reset DNS controls
-        foreach ($checkbox in $allFeatures) {
-            $checkbox.Checked = $false
+        # Clear every row (unchecked / "Not managed") and reset DNS controls
+        foreach ($control in $allFeatures) {
+            Reset-FeatureRow $control
         }
         $dnsDropdown.SelectedItem = "unmanaged"
         $dnsTemplateBox.Text = ""
         $dnsTemplateBox.Enabled = $false
+        $statusLabel.Text = "All policies reset"
     }
 })
 
@@ -1260,10 +1750,14 @@ $exportButton.Add_Click({
     if ($saveFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         # New key-value map format so multi-value policies (e.g.
         # IncognitoModeAvailability: 1 vs 2) survive a round-trip.
+        # A choice row exports the value it is set to and is omitted entirely
+        # on "Not managed", so the file shape is unchanged: keys present are
+        # keys that get written.
         $featureMap = [ordered]@{}
-        foreach ($checkbox in $allFeatures) {
-            if ($checkbox.Checked) {
-                $featureMap[$checkbox.Tag.Key] = $checkbox.Tag.Value
+        foreach ($control in $allFeatures) {
+            $rowValue = Get-RowValue $control
+            if ($null -ne $rowValue) {
+                $featureMap[$control.Tag.Key] = $rowValue
             }
         }
 
@@ -1292,6 +1786,7 @@ $exportButton.Add_Click({
                 $saveFileDialog.FileName,
                 ($settingsToExport | ConvertTo-Json -Depth 5),
                 (New-Object System.Text.UTF8Encoding $false))
+            $statusLabel.Text = "Settings exported"
             [System.Windows.Forms.MessageBox]::Show(
                 "Settings exported successfully to:`n$($saveFileDialog.FileName)",
                 "Export Successful",
@@ -1310,6 +1805,130 @@ $exportButton.Add_Click({
 })
 
 # ---------------------------------------------------------------------------
+# Loading a settings object into the UI
+#
+# The Import button and every Quick Presets button hand a parsed settings
+# object to this one function, so a preset and an imported file take exactly
+# the same path: every row cleared first, mutual-exclusion groups resolved by
+# the CheckedChanged handlers above, tri-state rows placed by
+# Select-ChoiceValue, DNS mode resolved to the canonical dropdown item.
+#
+# Nothing here touches the registry - the user still clicks Apply Settings.
+# ---------------------------------------------------------------------------
+
+function Import-SettingsObject {
+    <#
+    .SYNOPSIS
+    Load one parsed settings object - an imported file or an embedded preset
+    - into the form's controls.
+
+    .DESCRIPTION
+    Returns a note describing everything the UI could not represent (an
+    unrecognised DNS mode, a list that is not the one SlimBrave writes, a
+    tri-state value outside the key's enum), ready to append to the caller's
+    own success message, or an empty string when everything loaded cleanly.
+    #>
+    param ($Settings)
+
+    # Clear every row first, so a key the object omits ends up unmanaged
+    # rather than keeping whatever was on screen.
+    foreach ($control in $allFeatures) {
+        Reset-FeatureRow $control
+    }
+
+    $ignoredLists   = @()
+    $ignoredChoices = @()
+    $features = $Settings.Features
+    if ($features -is [array]) {
+        # Legacy pre-2026 array format. Only the first row per key wins to
+        # preserve intent for multi-value keys (avoids silently
+        # force-incognitoing users whose old export listed
+        # IncognitoModeAvailability).
+        $handled = @{}
+        foreach ($featureKey in $features) {
+            if ($handled.ContainsKey($featureKey)) { continue }
+            foreach ($control in $allFeatures) {
+                if ($control.Tag.Key -eq $featureKey) {
+                    if ($null -ne $control.Tag.Choices) {
+                        # A bare key in the legacy format means the box was
+                        # ticked, and a ticked box wrote the row's Value
+                        # (Block).
+                        [void] (Select-ChoiceValue $control $control.Tag.Value)
+                    } else {
+                        $control.Checked = $true
+                    }
+                    $handled[$featureKey] = $true
+                    break
+                }
+            }
+        }
+    } elseif ($null -ne $features) {
+        # New dict format - PSCustomObject with key-value pairs.
+        foreach ($prop in $features.PSObject.Properties) {
+            foreach ($control in $allFeatures) {
+                if ($control.Tag.Key -ne $prop.Name) { continue }
+                if ($null -ne $control.Tag.Choices) {
+                    # Which enum members are legal differs per key, so a
+                    # value this row cannot represent is dropped to "Not
+                    # managed" and reported rather than written blindly.
+                    if (-not (Select-ChoiceValue $control $prop.Value)) {
+                        $ignoredChoices += $prop.Name
+                    }
+                    continue
+                }
+                if (Test-FeatureValueMatches $control.Tag $prop.Value) {
+                    $control.Checked = $true
+                } elseif ($control.Tag.Type -eq "List") {
+                    # A list we can't reproduce: applying the row would
+                    # substitute our own wildcards for it.
+                    $ignoredLists += $prop.Name
+                }
+            }
+        }
+    }
+
+    # DNS: an object with no DnsMode means DNS is unmanaged (a bare
+    # DnsTemplates is treated as custom for legacy exports). Assigning a
+    # value the ComboBox doesn't hold is a silent no-op that leaves the
+    # previous mode selected, and -contains can't pre-check it: it matches
+    # case-insensitively while SelectedItem resolution is case-sensitive, so
+    # "Automatic" would pass the guard and then no-op. Resolve to the
+    # canonical item instead.
+    $unknownDns = $null
+    if ($Settings.DnsMode) {
+        $mode = [string]$Settings.DnsMode
+        $canonical = @($dnsDropdown.Items) | Where-Object { $_ -eq $mode } | Select-Object -First 1
+        if ($canonical) {
+            $dnsDropdown.SelectedItem = $canonical
+        } else {
+            $dnsDropdown.SelectedItem = "unmanaged"
+            $unknownDns = $mode
+        }
+    } elseif ($Settings.DnsTemplates) {
+        $dnsDropdown.SelectedItem = "custom"
+    } else {
+        $dnsDropdown.SelectedItem = "unmanaged"
+    }
+    $dnsTemplateBox.Text = if ($Settings.DnsTemplates) {
+        $Settings.DnsTemplates
+    } else {
+        ""
+    }
+
+    $note = ""
+    if ($unknownDns) {
+        $note += "`n`nDNS mode '$unknownDns' is not recognised; DNS was left unmanaged."
+    }
+    if ($ignoredLists.Count -gt 0) {
+        $note += "`n`nIgnored, because the imported list is not the one SlimBrave writes: $(($ignoredLists | Select-Object -Unique) -join ', ')."
+    }
+    if ($ignoredChoices.Count -gt 0) {
+        $note += "`n`nLeft unmanaged, because the imported value is not one this policy accepts: $(($ignoredChoices | Select-Object -Unique) -join ', ')."
+    }
+    return $note
+}
+
+# ---------------------------------------------------------------------------
 # Import
 # ---------------------------------------------------------------------------
 
@@ -1325,84 +1944,11 @@ $importButton.Add_Click({
             # still honors a byte-order mark, so UTF-16 files written by
             # older versions keep importing correctly.
             $importedSettings = Get-Content -Path $openFileDialog.FileName -Raw -Encoding UTF8 | ConvertFrom-Json
-
-            # Uncheck everything first
-            foreach ($checkbox in $allFeatures) {
-                $checkbox.Checked = $false
-            }
-
-            $ignoredLists = @()
-            $features = $importedSettings.Features
-            if ($features -is [array]) {
-                # Legacy pre-2026 array format. Only the first row per key
-                # wins to preserve intent for multi-value keys (avoids
-                # silently force-incognitoing users whose old export
-                # listed IncognitoModeAvailability).
-                $handled = @{}
-                foreach ($featureKey in $features) {
-                    if ($handled.ContainsKey($featureKey)) { continue }
-                    foreach ($checkbox in $allFeatures) {
-                        if ($checkbox.Tag.Key -eq $featureKey) {
-                            $checkbox.Checked = $true
-                            $handled[$featureKey] = $true
-                            break
-                        }
-                    }
-                }
-            } elseif ($null -ne $features) {
-                # New dict format — PSCustomObject with key-value pairs.
-                foreach ($prop in $features.PSObject.Properties) {
-                    foreach ($checkbox in $allFeatures) {
-                        if ($checkbox.Tag.Key -ne $prop.Name) { continue }
-                        if (Test-FeatureValueMatches $checkbox.Tag $prop.Value) {
-                            $checkbox.Checked = $true
-                        } elseif ($checkbox.Tag.Type -eq "List") {
-                            # A list we can't reproduce: applying the row
-                            # would substitute our own wildcards for it.
-                            $ignoredLists += $prop.Name
-                        }
-                    }
-                }
-            }
-
-            # DNS: a file with no DnsMode means DNS is unmanaged (a bare
-            # DnsTemplates is treated as custom for legacy exports).
-            # Assigning a value the ComboBox doesn't hold is a silent no-op
-            # that leaves the previous mode selected, and -contains can't
-            # pre-check it: it matches case-insensitively while SelectedItem
-            # resolution is case-sensitive, so "Automatic" would pass the
-            # guard and then no-op. Resolve to the canonical item instead.
-            $unknownDns = $null
-            if ($importedSettings.DnsMode) {
-                $mode = [string]$importedSettings.DnsMode
-                $canonical = @($dnsDropdown.Items) | Where-Object { $_ -eq $mode } | Select-Object -First 1
-                if ($canonical) {
-                    $dnsDropdown.SelectedItem = $canonical
-                } else {
-                    $dnsDropdown.SelectedItem = "unmanaged"
-                    $unknownDns = $mode
-                }
-            } elseif ($importedSettings.DnsTemplates) {
-                $dnsDropdown.SelectedItem = "custom"
-            } else {
-                $dnsDropdown.SelectedItem = "unmanaged"
-            }
-            $dnsTemplateBox.Text = if ($importedSettings.DnsTemplates) {
-                $importedSettings.DnsTemplates
-            } else {
-                ""
-            }
-
-            $importMsg = "Settings imported successfully from:`n$($openFileDialog.FileName)"
-            if ($unknownDns) {
-                $importMsg += "`n`nDNS mode '$unknownDns' is not recognised; DNS was left unmanaged."
-            }
-            if ($ignoredLists.Count -gt 0) {
-                $importMsg += "`n`nIgnored, because the imported list is not the one SlimBrave writes: $(($ignoredLists | Select-Object -Unique) -join ', ')."
-            }
+            $note = Import-SettingsObject $importedSettings
+            $statusLabel.Text = "Settings imported"
 
             [System.Windows.Forms.MessageBox]::Show(
-                $importMsg,
+                "Settings imported successfully from:`n$($openFileDialog.FileName)$note",
                 "Import Successful",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Information
@@ -1419,6 +1965,18 @@ $importButton.Add_Click({
 })
 
 # ---------------------------------------------------------------------------
+# Re-sync
+#
+# Throws the on-screen selections away and reads the registry again through
+# Initialize-CurrentSettings, the same function that fills the form at
+# startup - one reader, so a re-sync can never disagree with a fresh launch.
+# ---------------------------------------------------------------------------
+
+$resyncButton.Add_Click({
+    Initialize-CurrentSettings
+})
+
+# ---------------------------------------------------------------------------
 # Initialize - read current registry and pre-check matching features on startup
 # ---------------------------------------------------------------------------
 
@@ -1428,10 +1986,10 @@ function Initialize-CurrentSettings {
     $machineSettings = Get-ItemProperty -Path $registryPath -ErrorAction SilentlyContinue
     $userSettings    = Get-ItemProperty -Path $userRegistryPath -ErrorAction SilentlyContinue
 
-    foreach ($checkbox in $allFeatures) {
-        $feature = $checkbox.Tag
+    foreach ($control in $allFeatures) {
+        $feature = $control.Tag
         if ($feature.Type -eq "List") {
-            $checkbox.Checked =
+            $control.Checked =
                 (Test-ListPolicyMatches -RegistryPath $registryPath     -Name $feature.Key -Expected $feature.Value) -or
                 (Test-ListPolicyMatches -RegistryPath $userRegistryPath -Name $feature.Key -Expected $feature.Value)
             continue
@@ -1443,14 +2001,21 @@ function Initialize-CurrentSettings {
             $currentValue = $userSettings.$($feature.Key)
         }
 
+        if ($null -ne $feature.Choices) {
+            # A value outside this key's enum (or none at all) shows as
+            # "Not managed" - the row won't claim a state it can't write.
+            [void] (Select-ChoiceValue $control $currentValue)
+            continue
+        }
+
         if ($null -ne $currentValue) {
             if ($feature.Type -eq "DWord") {
-                $checkbox.Checked = ([int]$currentValue -eq [int]$feature.Value)
+                $control.Checked = ([int]$currentValue -eq [int]$feature.Value)
             } else {
-                $checkbox.Checked = ($currentValue.ToString() -eq $feature.Value.ToString())
+                $control.Checked = ($currentValue.ToString() -eq $feature.Value.ToString())
             }
         } else {
-            $checkbox.Checked = $false
+            $control.Checked = $false
         }
     }
 
@@ -1490,19 +2055,16 @@ function Initialize-CurrentSettings {
     }
 
     $dnsTemplateBox.Enabled = ($dnsDropdown.SelectedItem -in @("custom", "secure"))
+
+    # Both callers - the startup fill and the Re-sync button - land here, so
+    # the status line always names what the controls are showing.
+    $statusLabel.Text = "Policy read from registry"
 }
 
 Initialize-CurrentSettings
 
-# Safety net: on a display so short that even the three-column layout is a
-# little taller than the working area, cap the height and enable scrolling so
-# the buttons stay reachable. A no-op whenever the form already fits (the
-# common case), so normal displays never get a scrollbar.
-$form.AutoScroll = $true
-$workingAreaHeight = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height
-if ($form.Height -gt $workingAreaHeight) {
-    $form.Height = $workingAreaHeight
-    $form.Width  = $form.Width + [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth
-}
+# No height cap, no form-level scrollbar and no post-hoc resize: the window
+# is a fixed size that fits the displays this app targets, and anything that
+# doesn't fit a column is reached with that column's own scrollbar.
 
 [void] $form.ShowDialog()

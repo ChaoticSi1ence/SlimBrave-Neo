@@ -18,15 +18,9 @@ SlimBrave Neo uses Chromium enterprise managed policies to disable telemetry, bl
 </div>
 
 > [!NOTE]
-> **Provenance and AI use.**
+> **Provenance and AI use.** SlimBrave Neo is a fork of [SlimBrave](https://github.com/ltx0101/SlimBrave) by [@ltx0101](https://github.com/ltx0101), extended to Linux and macOS and released under the same GPL-3.0 license.
 >
-> SlimBrave Neo started from [SlimBrave](https://github.com/ltx0101/SlimBrave) by [@ltx0101](https://github.com/ltx0101) — a Windows-only PowerShell script — and is released under the same GPL-3.0 license. Everything past that starting point is this project's own work: the Linux and macOS ports, the zero-dependency Python curses TUI, the CLI, multi-channel and DNS-over-HTTPS support, the preset system, the Shields and content-protection policy set, the macOS Configuration Profile path, and the leaked-Shields-exception repair logic.
->
-> **AI is how this project is maintained, not how it was written.** Brave and Chromium ship new milestones constantly, and policy keys get deprecated, renamed, or silently dropped between releases. Claude is used to re-audit every key against upstream source on a schedule, catch drift between the three implementations, and help with refactoring, tests, and docs. Design decisions, review, and what actually ships stay human calls.
->
-> This is stated up front because the tool runs as **root / Administrator** and rewrites enterprise policy for your browser — you should know how it is built and kept current. Keys are verified against the [brave-core](https://github.com/brave/brave-core/tree/master/components/policy/resources/templates/policy_definitions/BraveSoftware) and [Chromium](https://chromium.googlesource.com/chromium/src/+/main/components/policy/resources/templates/policy_definitions/) policy definitions — the source, which outranks any support article or guide. The receipts are in [`AUDIT.md`](AUDIT.md), it ships source-only so you can read every line first, and CI lints and tests every change.
->
-> Found something wrong? Open an issue. Scrutiny is the point.
+> AI maintains this project; it did not write it. Claude re-audits every policy key against brave-core and Chromium source, catches drift between the three implementations, and helps with tests and docs. What ships is a human call. The receipts are in [`AUDIT.md`](AUDIT.md).
 
 > [!IMPORTANT]
 > **The only official source of SlimBrave Neo is this repository:**
@@ -48,7 +42,7 @@ SlimBrave Neo uses Chromium enterprise managed policies to disable telemetry, bl
 
 <img src="assets/tui-screenshot.png" width="620" alt="SlimBrave Neo Linux TUI">
 
-*Interactive curses TUI with the Maximum Privacy preset imported. Zero dependencies, runs in any terminal.*
+*The Linux/macOS TUI: collapsible categories with a live count of what each one is managing, `/` to search, `?` for keys. Zero dependencies, runs in any terminal.*
 
 </div>
 
@@ -65,6 +59,33 @@ sudo python3 slimbrave-linux.py
 ```
 
 That's it. No `pip install`, no `jq`, no external dependencies. Just Python 3 and root.
+
+#### The TUI
+
+With no flags the script opens a curses interface: six collapsible categories — Telemetry & Reporting, Privacy & Security, Permissions & Access, Brave Features, Shields & Content Protection, Performance & Bloat — followed by a DNS Over HTTPS section, with an Import / Export / Apply / Reset / Quit button row underneath.
+
+Each category header carries a disclosure marker and a live `n/m on` count of the settings under it that are actually managed — a ticked checkbox, or a selector sitting off *Not managed*. The count updates as you toggle, so a folded section still tells you whether anything inside it is set. Left folds a header, Right unfolds it, Space or Enter does either, and `c` folds every section at once — or unfolds them all when they are already folded. On launch the folds reflect what is already applied: a section holding a managed setting opens, the rest stay folded — so a clean machine opens on a short overview and a configured one opens on what it is enforcing.
+
+`/` filters the list by row name. Matches narrow as you type, the hint line reports how many rows matched, and only matching rows and the headers owning them stay on screen. Folded sections are searched too, so a fold cannot hide a match. Esc clears the filter and puts the fold states back as they were before the search.
+
+The eight tri-state permission rows render as `Web Notifications: < Block >` and are cycled with Left/Right, the same way the DNS mode selector has always worked; Space or Enter steps forward through the same states. A row sitting off *Not managed* is highlighted and counts toward the header above it.
+
+`?` opens a key overlay over the list.
+
+| Key | Action |
+|-----|--------|
+| Up / Down | Move the cursor; Down past the last row jumps to the button row |
+| PageUp / PageDown | Move one screenful |
+| Home / End | Jump to the first / last row |
+| Left / Right | Cycle a selector, fold / unfold a header, or move along the button row |
+| Space | Toggle a checkbox, cycle a selector, fold or unfold a header |
+| Enter | The same, and presses the focused button |
+| `c` | Fold every section, or unfold them all |
+| `/` | Filter rows by name |
+| Esc | Clear the filter; quit when no filter is active |
+| `?` | Show the key overlay |
+| Tab | Move between the list and the button row |
+| `q` | Quit |
 
 **CLI mode (non-interactive):**
 
@@ -87,6 +108,8 @@ sudo python3 slimbrave-mac.py
 ```
 
 Requires root. Policies are written to `/Library/Managed Preferences/com.brave.Browser.plist` by default; with `--persist on` an Apple Configuration Profile is installed instead.
+
+The TUI is the same one [described under Linux](#the-tui) — same categories and live counts, same collapsing, `/` search, paging and `?` overlay, same Left/Right selectors — plus the two Apply-time prompts below.
 
 **Persistence on macOS (Apple Silicon / macOS 13+).** On modern macOS, `cfprefsd` and `mdmclient` may clear directly-written `/Library/Managed Preferences/*.plist` files at reboot when no Configuration Profile backs them, so policies don't always survive a restart. SlimBrave Neo offers two modes:
 
@@ -127,6 +150,14 @@ cd SlimBrave-Neo
 powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1
 ```
 
+<div align="center">
+
+<img src="assets/gui-screenshot.png" width="820" alt="SlimBrave Neo Windows GUI">
+
+*The Windows GUI: one-click presets across the top, three independently scrolling columns, and three-state dropdowns for the permission settings.*
+
+</div>
+
 **No git?** One line:
 
 ```powershell
@@ -135,7 +166,15 @@ iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/main/SlimBra
 
 This pulls the current `main`. If you'd rather pin an exact, unchanging version and check it against a published checksum before running, [`SECURITY.md`](SECURITY.md) covers tagged releases and SHA-256 sums.
 
-Requires Administrator privileges; the script re-launches itself elevated. Hover over any option in the app for a plain-English description of what it does and the exact policy it writes. The app follows your Windows light/dark theme, and on low-resolution displays (e.g. 720p/768p) automatically reflows from two columns into three shorter ones so no options or buttons run off the bottom of the screen.
+Requires Administrator privileges; the script re-launches itself elevated. Hover over any option in the app for a plain-English description of what it does and the exact policy it writes. The app follows your Windows light/dark theme.
+
+The window is a **fixed size chosen to fit a 1366x768 display**, and it never resizes or reflows. The options sit in three side-by-side columns — Privacy & Security with Telemetry & Reporting, Permissions & Access with Brave Features, Shields & Content Protection with Performance & Bloat — and each column scrolls on its own, so a long category scrolls inside its own panel while the DNS row and the buttons underneath stay exactly where they are.
+
+A **Quick Presets** row sits above the columns, with one button per bundled preset: Maximum Privacy, Balanced Privacy, Performance Focused, Developer, Strict Parental Controls. A preset button only fills in the controls below — nothing reaches the registry until you click Apply Settings, so you can untick whatever you don't want first. The presets are embedded in `SlimBrave.ps1` itself, so the buttons work for the one-liner download above too, with no `Presets/` directory on disk. A status line at the right of the same row names what the last action did.
+
+The button row underneath is Export Settings, Import Settings, **Re-sync Registry**, Apply Settings and Reset All Settings. Re-sync reads the policy currently in the registry back into the controls, discarding any on-screen selections you have not applied. It writes nothing, and it goes through the same reader that fills the form at startup, so a re-sync can never disagree with a fresh launch.
+
+The first eight rows of Permissions & Access are dropdowns rather than checkboxes: **Not managed / Ask / Block**, plus **Allow** on the keys where Chromium accepts it. Not managed is the default and writes nothing at all. The Permissions & Access section below covers what each state does and which keys offer Allow.
 
 ---
 
@@ -172,15 +211,30 @@ Requires Administrator privileges; the script re-launches itself elevated. Hover
 - Require HTTPS for Basic Auth (breaks logins on legacy HTTP-only routers, printers and appliances)
 
 ### Permissions & Access
-Site-permission defaults plus the escape hatches (guest, incognito, extensions) that would otherwise bypass the rest of the policy set:
-- Block Web Notifications
-- Block Location Access
-- Block Motion Sensors (a fingerprinting vector)
-- Block WebUSB Access (breaks Ledger/Trezor web wallets and in-browser firmware flashers)
-- Block Web Serial Access (breaks in-browser microcontroller programming tools)
-- Block WebHID Access (may break security keys and gamepad configurators that use WebHID rather than WebAuthn)
-- Block Local Font Enumeration (`queryLocalFonts()` hands over your installed font list — a strong fingerprint that Shields' font protections don't cover)
-- Block Multi-Screen (Window Management) Access (your monitor layout, plus placing windows on a chosen screen)
+Site-permission defaults plus the escape hatches (guest, incognito, extensions) that would otherwise bypass the rest of the policy set.
+
+The first eight rows are **not checkboxes** — Chromium models these keys as an enum rather than a boolean, so the tool now exposes the enum instead of hardcoding "block". Each is a dropdown in the Windows GUI and a `< Block >`-style selector in the TUI, with the same states everywhere:
+
+- **Not managed** — the default. Writes nothing at all, so Brave's own default and your per-site choices stand. An untouched row behaves exactly like the unticked checkbox it replaced.
+- **Ask** — pins the permission prompt as managed policy: no site is silently granted, and the setting can't be weakened from `brave://settings` or per-site.
+- **Block** — what ticking the box used to do. No prompt, no access, for any site.
+- **Allow** — grants the permission to every site, and is offered **only on the keys where Chromium actually accepts it**.
+
+**That last point is not uniform, and it isn't assumed to be.** Web Notifications, Location Access and Motion Sensors have an allow member (`1`) in their enum. WebUSB, Web Serial, WebHID, Local Font Enumeration and Window Management do **not** — `DefaultWebUsbGuardSetting`, `DefaultSerialGuardSetting`, `DefaultWebHidGuardSetting`, `DefaultLocalFontsSetting` and `DefaultWindowManagementSetting` are **Ask-or-Block only**, value `1` is not a member at all, and Brave rejects a policy file that names one. Those five rows never show an Allow entry. Checked key by key against Chromium `main`; the per-key legal enum is recorded in [`AUDIT.md`](AUDIT.md).
+
+- Web Notifications — *Allow / Ask / Block*
+- Location Access — *Allow / Ask / Block*; Block removes the prompt outright, so maps and delivery sites need an address typed by hand, and Ask is the middle ground
+- Motion Sensors — *Allow / Ask / Block*; a fingerprinting vector, and blocking rarely breaks anything on desktop
+- WebUSB Access — *Ask / Block*; Block breaks Ledger/Trezor web wallets and in-browser firmware flashers
+- Web Serial Access — *Ask / Block*; Block breaks in-browser microcontroller programming tools
+- WebHID Access — *Ask / Block*; Block may break security keys and gamepad configurators that use WebHID rather than WebAuthn
+- Local Font Enumeration — *Ask / Block*; `queryLocalFonts()` hands over your installed font list, a strong fingerprint that Shields' font protections don't cover
+- Multi-Screen (Window Management) Access — *Ask / Block*; your monitor layout, plus placing windows on a chosen screen
+
+Older configs keep working unchanged: a v1.9.5 export or preset naming one of these keys carries the value `2`, so it imports as **Block**, and a key the config doesn't name comes back as **Not managed**. A value outside a key's legal set is left unmanaged rather than written out, and the import result names the key it skipped.
+
+The remaining rows in this section are ordinary toggles:
+
 - Force Google SafeSearch
 - Filter Adult Content (SafeSites) — **this is a remote lookup, not a local filter.** Every URL you navigate to, including URLs loaded inside frames, is sent to Google's Safe Search API to be classified, and anything rated adult is blocked. Worth knowing in a tool whose other rows exist to keep Google out of your browsing; enable it only if the parental-control value is worth that trade.
 - Disable Guest Mode (guest windows bypass profile restrictions)
@@ -266,7 +320,7 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 ### Maximum Privacy Preset
 - **Telemetry:** Turns off every reporting channel — metrics, extended Safe Browsing reports, URL-keyed data collection, P3A analytics, and the daily stats ping.
 - **Safe Browsing:** Left **on**. Only the extended *reports* are disabled. Brave routes Safe Browsing lookups through its own servers rather than Google's, so switching the protection off would cost you phishing and malware interstitials for essentially no privacy gain — the "Disable Safe Browsing (security downgrade)" toggle is there if you disagree, but no preset sets it.
-- **Privacy:** Disables autofill (addresses and cards), the password manager, leak detection, browser sign-in, WebRTC IP exposure, QUIC, network prediction and alternate error pages; blocks third-party cookies, payment-method probing, web notifications, location access, and motion sensors; enables Global Privacy Control, De-AMP, debouncing, tracking-parameter stripping, and reduced language fingerprinting. (Location is fully blocked, not "ask" — maps and delivery sites need addresses typed manually; uncheck "Block Location Access" if that is too strict.)
+- **Privacy:** Disables autofill (addresses and cards), the password manager, leak detection, browser sign-in, WebRTC IP exposure, QUIC, network prediction and alternate error pages; blocks third-party cookies, payment-method probing, web notifications, location access, and motion sensors; enables Global Privacy Control, De-AMP, debouncing, tracking-parameter stripping, and reduced language fingerprinting. (Location Access is set to Block, not Ask — maps and delivery sites need addresses typed manually; drop the "Location Access" row to Ask, or to Not managed, if that is too strict.)
 - **Brave Features:** Kills Rewards, Wallet, VPN, AI Chat, News, Talk, Playlist, Speedreader, Web Discovery, Tor, Sync, and Email Aliases.
 - **Shields:** Pins ad blocking, fingerprinting protection, strict HTTPS, capped referrers, and forget-on-close storage as managed policy.
 - **Performance and bloat — read this one before applying.** It goes well past "background processes": background mode, Cast device discovery, media recommendations, and the shopping list are off, and so are **developer tools, printing, the built-in PDF viewer** (PDFs download and open in your system viewer instead), **translation, spellcheck, search suggestions, and the default-browser prompt**. If you need devtools or printing, use the Developer preset, or untick those rows in the Performance & Bloat section before Apply.
@@ -383,6 +437,9 @@ Set-ExecutionPolicy -ExecutionPolicy Undefined   -Scope CurrentUser   # undo
 - [x] CLI mode for scripting and automation
 - [x] macOS support via managed plist policies
 - [x] Multi-channel support on macOS (Stable / Beta / Nightly)
+- [x] Three-state permission settings (Allow / Ask / Block), not just block-or-nothing
+- [x] Collapsible, searchable TUI
+- [x] One-click presets in the Windows GUI
 
 ---
 
