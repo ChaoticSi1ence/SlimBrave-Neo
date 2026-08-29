@@ -448,6 +448,7 @@ Set-ExecutionPolicy -ExecutionPolicy Undefined   -Scope CurrentUser   # undo
 - **[@ltx0101](https://github.com/ltx0101)** — [SlimBrave](https://github.com/ltx0101/SlimBrave), the upstream Windows PowerShell script this project grew out of (GPL-3.0)
 - **[@alsyundawy](https://github.com/alsyundawy)** — macOS version
 - **[@zhaoJianNet](https://github.com/zhaoJianNet)** — macOS refinements
+- **[@cococool13](https://github.com/cococool13)** — the Permissions & Access category and 14 source-verified policies, shipped in v1.9.0
 
 ---
 
