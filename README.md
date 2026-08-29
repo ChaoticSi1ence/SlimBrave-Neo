@@ -247,7 +247,7 @@ The remaining rows in this section are ordinary toggles:
 - Disable Brave Wallet
 - Disable Brave VPN (no effect on Linux builds — Brave doesn't compile the VPN there, though `brave://policy` still reports the key as applied)
 - Disable Brave AI Chat
-- Disable Local AI (On-Device Models, Brave 1.94+) — stops the on-device model download and the AI index built from your history. Separate from AI Chat: turning Leo off does not cover it. Forward-looking, so older Brave ignores it; needs a restart.
+- Disable Local AI (On-Device Models, Brave 1.94+) — stops the on-device model download and the AI index built from your history. Separate from AI Chat: turning Leo off does not cover it. Needs Brave 1.94 or newer (current stable); older versions ignore the key. Needs a restart.
 - Disable Brave Shields / Force Shields On for all sites (mutually exclusive)
 - Disable Brave News
 - Disable Brave Talk

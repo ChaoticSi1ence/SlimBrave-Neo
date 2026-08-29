@@ -3,15 +3,16 @@
 Verification of every policy key SlimBrave Neo manages, against the two
 authoritative sources:
 
-- **Brave-specific keys:** [brave-core policy definitions](https://github.com/brave/brave-core/tree/master/components/policy/resources/templates/policy_definitions/BraveSoftware) (per-policy YAML: `deprecated`, `supported_on`, `features`, schema) — read at master tree `855ca5b` on 2026-08-13; 30 policies
-- **Chromium-inherited keys:** [Chromium policy definitions](https://chromium.googlesource.com/chromium/src/+/main/components/policy/resources/templates/policy_definitions/) (same YAML format) — read at `chromium/main` on 2026-08-13; the index holds 1,522 YAML files, 66 of them `.group.details.yaml` group metadata, so **1,456 policies**
+- **Brave-specific keys:** [brave-core policy definitions](https://github.com/brave/brave-core/tree/master/components/policy/resources/templates/policy_definitions/BraveSoftware) (per-policy YAML: `deprecated`, `supported_on`, `features`, schema) — read at master tree `5f1127a` on 2026-08-29; 30 policies
+- **Chromium-inherited keys:** [Chromium policy definitions](https://chromium.googlesource.com/chromium/src/+/main/components/policy/resources/templates/policy_definitions/) (same YAML format) — read at `chromium/main` `3477903` (policy_definitions tree `f4b77f4`) on 2026-08-29; the index holds 1,522 YAML files, 67 of them `.group.details.yaml` group metadata, so **1,455 policies**
 
 `supported_on` counts Chromium milestones, so this document records milestones
 (`cr138`) and not Brave versions. Rough alignment at the time of writing:
 cr138 ≈ 1.80, cr139 ≈ 1.81, cr140 ≈ 1.82, cr141 ≈ 1.83, cr142 ≈ 1.84,
-cr147 ≈ 1.89, cr148 ≈ 1.90, cr149 ≈ 1.91, cr150 ≈ 1.92, cr151 ≈ 1.93.
-Current stable is Brave 1.93.134 on Chromium 151.0.7922.108, released
-2026-08-07.
+cr147 ≈ 1.89, cr148 ≈ 1.90, cr149 ≈ 1.91, cr150 ≈ 1.92, cr151 ≈ 1.93,
+cr152 ≈ 1.94.
+Current stable is Brave 1.94.117 on Chromium 152.0.7977.64, released
+2026-08-27.
 
 **Do not turn `supported_on` into a Brave version.** The milestone says where
 the policy landed in the tree, not where Brave shipped it, and the two drift by
@@ -23,6 +24,28 @@ release branches directly —
 `raw.githubusercontent.com/brave/brave-core/<branch>/components/policy/resources/templates/policy_definitions/BraveSoftware/<Key>.yaml`,
 walking `1.9N.x` branches until it stops 404ing. Any version number in a toggle
 label comes from that probe, never from the mapping above.
+
+## Re-audit log
+
+Every pass records the upstream revisions it read, so the next one can diff
+against them instead of re-verifying 75 keys from scratch. A row marked
+**stale as of `<date>`** below has been superseded by a later pass: the
+original wording is kept because the *reasoning* is the audit trail, and
+knowing why a decision was made — and what changed under it — is the point.
+
+### 2026-08-29 — all 75 keys re-verified, no change required
+
+- **Read at:** `chromium/main` `3477903` (policy_definitions tree `f4b77f4`; 1,522 YAML, 67 group metadata, **1,455 policies**) and `brave-core` master `5f1127a` (**30 policies**, name-for-name unchanged).
+- **Verdict:** every key fetched 200. Zero `deprecated:`, zero `deprecated_in_favor_of:`, zero upper-bounded `supported_on:`. Every value still a legal schema member meaning what its label claims. All three implementations still in lockstep. No script, preset or test changed.
+- **Chromium moved 1,456 → 1,455**, fully accounted for, and none of it a key this project writes: `6a766cf` created the `Relaunch/` group and moved 6 policies out of `Miscellaneous/` (+1 group file, 0 policies); `7809ff5` reverted three ChromeOS device-level LNA policies (−3); `1b1aa2f` added `RendererAccessibilityEnabled` (+1); `a98c395` added `DeviceOsMigrationTargetDate` (+1).
+- **Only in-inventory change across all 59 commits in the window:** `RemoteDebuggingAllowed` flipped `dynamic_refresh` false → true on 2026-08-27 (`80ad0b9`). That landed in M154 territory and Brave stable is on cr152, so the restart note stays correct until Brave rebases past it. Do not drop the note early.
+- **Brave stable advanced** 1.93.134 / cr151 → **1.94.117 / cr152** (2026-08-27). Nothing SlimBrave manages was removed or sunset between 1.92.134 and 1.94.117; the diff on `brave_simple_policy_map.h` across master / 1.94.x / 1.93.x is additions only.
+- **Superseded by this pass:** the `BraveVPNDisabled`, `BraveLocalAIEnabled` and `PsstEnabled` rows, each marked inline below.
+
+### 2026-08-13 — initial full audit
+
+- Read at `brave-core` master tree `855ca5b` (30 policies) and `chromium/main` (1,522 YAML, 66 group metadata, 1,456 policies).
+- Established the tables below: every key verified against source, `EnableDoNotTrack` removed as non-existent, the branch-probing method adopted over `supported_on` arithmetic, and the Brave-version column dropped because one milestone had been mapped to three different Brave releases.
 
 ## Brave-specific keys
 
@@ -37,9 +60,9 @@ label comes from that probe, never from the mapping above.
 | BraveReduceLanguageEnabled | ✅ active | cr140 | bool | dynamic refresh |
 | BraveRewardsDisabled | ✅ active | cr105 | bool | true = disable |
 | BraveWalletDisabled | ✅ active | cr106 | bool | also disables web3 + decentralized DNS |
-| BraveVPNDisabled | ✅ active | cr112 | bool | Windows/macOS/Android/iOS only — `enable_brave_vpn` omits `is_linux`, so the `brave_simple_policy_map.h` entry is compiled out of Linux builds and the key is a silent no-op there; `brave://policy` still renders it as cleanly applied. The Linux row is labelled accordingly rather than removed — `enable_brave_vpn_v2_apps` already names `is_linux` for a future rollout |
+| BraveVPNDisabled | ✅ active | cr112 | bool | Windows/macOS/Android/iOS only — `enable_brave_vpn` omits `is_linux`, so the `brave_simple_policy_map.h` entry is compiled out of Linux builds and the key is a silent no-op there; `brave://policy` still renders it as cleanly applied. The Linux row is labelled accordingly rather than removed — `enable_brave_vpn_v2_apps` already names `is_linux` for a future rollout. **Stale as of 2026-08-29:** only `slimbrave-linux.py` carries the caveat; `slimbrave-mac.py` also runs on Linux and labels the row plainly. Cosmetic — the written value is correct on every platform |
 | BraveAIChatEnabled | ✅ active | cr121 | bool | false = disable Leo; does **not** cover on-device models — see BraveLocalAIEnabled |
-| BraveLocalAIEnabled | ✅ active | cr149 | bool | **added August 2026**; false = skip registering the on-device model component (EmbeddingGemma, `ejhejjmaoaohpghnblcdcjilndkangfe`), delete its directory, and stop history vector-indexing. Separate buildflag (`ENABLE_LOCAL_AI`) and prefs from AI Chat. Forward-looking: first release branch carrying the YAML is **1.94.x**, older Brave ignores it. `dynamic_refresh: false` — needs browser restart; browser-wide (`per_profile: false`). Deliberately in no preset |
+| BraveLocalAIEnabled | ✅ active | cr149 | bool | **added August 2026**; false = skip registering the on-device model component (EmbeddingGemma, `ejhejjmaoaohpghnblcdcjilndkangfe`), delete its directory, and stop history vector-indexing. Separate buildflag (`ENABLE_LOCAL_AI`) and prefs from AI Chat. ~~Forward-looking: first release branch carrying the YAML is **1.94.x**, older Brave ignores it.~~ **Stale as of 2026-08-29:** 1.94 went stable on 2026-08-27, so this is live in the shipping browser. Its absence from every preset now needs a product reason, not a version one. `dynamic_refresh: false` — needs browser restart; browser-wide (`per_profile: false`). Deliberately in no preset |
 | BraveShieldsDisabledForUrls | ✅ active | cr107 | list | see pattern note below; `dynamic_refresh: false` / `per_profile: false` — needs browser restart |
 | BraveShieldsEnabledForUrls | ✅ active | cr107 | list | **added June 2026**; counterpart to the row above; `dynamic_refresh: false` / `per_profile: false` — needs browser restart |
 | BraveNewsDisabled | ✅ active | cr138 | bool | |
@@ -56,7 +79,7 @@ label comes from that probe, never from the mapping above.
 | DefaultBraveReferrersSetting | ✅ active | cr142 | int enum | 1 = permissive, 2 = cap to strict origin; both values exposed as mutually exclusive toggles (issue #9); never put value 1 in a preset |
 | DefaultBraveRemember1PStorageSetting | ✅ active | cr142 | int enum | **added June 2026**; 1 = remember, 2 = forget on close |
 | BraveSyncUrl | ✅ active | cr129 (+ `android:142-`) | string | **deliberately not exposed** — it's a custom-sync-server URL, not a debloat toggle; use a hand-written policy file if you self-host sync |
-| PsstEnabled | 🕓 master only | — | bool | **deliberately not exposed** — a no-op twice over today: `kEnablePsst` is `FEATURE_DISABLED_BY_DEFAULT`, and the YAML is on **no** release branch (1.92.x / 1.93.x / 1.94.x all 404), so nothing dispatches the key. Worth re-checking: PSST downloads per-site scripts, injects them into logged-in origins to detect sign-in, then drives your authenticated account through settings URLs flipping switches (`enable_psst = !is_android && !is_ios`). Revisit once it reaches a release branch |
+| PsstEnabled | 🕓 master only | — | bool | **deliberately not exposed** — a no-op twice over today: `kEnablePsst` is `FEATURE_DISABLED_BY_DEFAULT`, ~~and the YAML is on **no** release branch (1.92.x / 1.93.x / 1.94.x all 404)~~, so nothing dispatches the key. **Stale as of 2026-08-29:** the YAML now ships on **1.95.x**, so the branch half of this rationale has lapsed — it is a no-op once over, not twice. Still correctly unexposed: `kEnablePsst` remains `FEATURE_DISABLED_BY_DEFAULT` on master, and that flag — not the branch — is now the trigger to re-check. Worth re-checking: PSST downloads per-site scripts, injects them into logged-in origins to detect sign-in, then drives your authenticated account through settings URLs flipping switches (`enable_psst = !is_android && !is_ios`). Revisit once it reaches a release branch |
 | IPFSEnabled | ⛔ `deprecated: true` | — | bool | IPFS feature removed from Brave 1.69.153 (Aug 2024); not exposed by SlimBrave Neo. **Do not re-add** — this key has bounced in/out of this project before; the brave-core YAML is the tiebreaker |
 
 ## Chromium-inherited keys
