@@ -90,6 +90,9 @@ public static void EnableDpiAwareness() {
         try { SetProcessDPIAware(); } catch {}
     }
 }
+
+[DllImport("dwmapi.dll")]
+public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
 '@
     [SlimBrave.DpiHelper]::EnableDpiAwareness()
 } catch {}
@@ -536,15 +539,11 @@ $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 # Windows builds that don't support the attribute.
 if (-not $appsUseLightTheme) {
     try {
-        Add-Type -Namespace SlimBrave -Name Native -MemberDefinition @'
-[DllImport("dwmapi.dll")]
-public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
-'@
         $form.Add_HandleCreated({
             $darkMode = 1
             # 20 = DWMWA_USE_IMMERSIVE_DARK_MODE; pre-20H1 Windows 10 used 19
-            if ([SlimBrave.Native]::DwmSetWindowAttribute($this.Handle, 20, [ref]$darkMode, 4) -ne 0) {
-                [void] [SlimBrave.Native]::DwmSetWindowAttribute($this.Handle, 19, [ref]$darkMode, 4)
+            if ([SlimBrave.DpiHelper]::DwmSetWindowAttribute($this.Handle, 20, [ref]$darkMode, 4) -ne 0) {
+                [void] [SlimBrave.DpiHelper]::DwmSetWindowAttribute($this.Handle, 19, [ref]$darkMode, 4)
             }
         })
     } catch {}

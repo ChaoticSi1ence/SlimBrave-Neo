@@ -743,6 +743,23 @@ def cycle_choice_row(row, step=1):
     row["selected"] = (row["selected"] + step) % len(row["choices"])
 
 
+def activate_row(rows, row):
+    """Space/Enter action for a list row: header fold, feature toggle,
+    choice/DNS advance. Returns True when the row type has one, so the
+    caller clears the status line; False otherwise (e.g. NO_ROW)."""
+    if row["type"] == ROW_HEADER:
+        row["collapsed"] = not row.get("collapsed", False)
+    elif row["type"] == ROW_FEATURE:
+        toggle_feature_row(rows, row)
+    elif row["type"] == ROW_CHOICE:
+        cycle_choice_row(row, 1)
+    elif row["type"] == ROW_DNS:
+        row["selected"] = (row["selected"] + 1) % len(row["options"])
+    else:
+        return False
+    return True
+
+
 def _enforce_groups(rows, features_map):
     """Collapse every group down to at most one checked row.
 
@@ -1196,15 +1213,14 @@ def _install_profile_from_policy(policy_by_bundle):
     macOS 11+ disallows CLI install of configuration profiles (see
     `man profiles`), so the only path is `open <file.mobileconfig>`
     which lets macOS route the file to System Settings > General >
-    Device Management for user approval. Any prior version is removed
-    first so the user sees a single fresh entry.
+    Device Management for user approval. The caller (apply_policy) has
+    already torn down any prior version via _clear_persistence_artifacts,
+    so the user sees a single fresh entry.
 
     `open` is run as the invoking user (SUDO_USER) so LaunchServices
     targets that user's GUI session — running it as root produces
     inconsistent behaviour when the console user differs.
     """
-    if _is_profile_installed():
-        _remove_profile()
     mc = _build_mobileconfig(policy_by_bundle)
     # mkdtemp, not a fixed /tmp name: any local user can pre-create that
     # path, and a *directory* there makes os.replace fail for good. The
@@ -2364,6 +2380,29 @@ PERSIST_DESCRIPTIONS = {
 }
 
 
+def _draw_prompt_overlay(stdscr, desc_line, keys_line):
+    """Paint an Apply-time prompt's two-line overlay and refresh.
+
+    Bottom two screen rows: `desc_line` (title colour, bold) above
+    `keys_line` (status colour). Shared by the channel-selection and
+    persist-mode prompts.
+    """
+    max_y, max_x = stdscr.getmaxyx()
+    usable_w = max_x - 1
+    try:
+        stdscr.addnstr(
+            max_y - 2, 0, desc_line.ljust(usable_w)[:usable_w],
+            usable_w, curses.color_pair(CP_TITLE) | curses.A_BOLD,
+        )
+        stdscr.addnstr(
+            max_y - 1, 0, keys_line.ljust(usable_w)[:usable_w],
+            usable_w, curses.color_pair(CP_STATUS_OK),
+        )
+    except curses.error:
+        pass
+    stdscr.refresh()
+
+
 def prompt_channel_selection(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
                              install_method, installations, default_ids,
                              filter_text=""):
@@ -2388,8 +2427,6 @@ def prompt_channel_selection(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
         draw(stdscr, rows, cursor_idx, scroll_offset,
              FOCUS_BUTTONS, btn_idx, "", True, install_method,
              filter_text=filter_text)
-        max_y, max_x = stdscr.getmaxyx()
-        usable_w = max_x - 1
         parts = ["  Apply to which Brave channels?"]
         for i, inst in enumerate(channels):
             mark = "x" if inst["channel"] in selected else " "
@@ -2400,18 +2437,7 @@ def prompt_channel_selection(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
             "  ←/→ move   Space toggle   Y/N toggle   "
             "Enter=confirm   Esc=cancel"
         )
-        try:
-            stdscr.addnstr(
-                max_y - 2, 0, desc_line.ljust(usable_w)[:usable_w],
-                usable_w, curses.color_pair(CP_TITLE) | curses.A_BOLD,
-            )
-            stdscr.addnstr(
-                max_y - 1, 0, keys_line.ljust(usable_w)[:usable_w],
-                usable_w, curses.color_pair(CP_STATUS_OK),
-            )
-        except curses.error:
-            pass
-        stdscr.refresh()
+        _draw_prompt_overlay(stdscr, desc_line, keys_line)
 
     def toggle(i):
         cid = channels[i]["channel"]
@@ -2464,8 +2490,6 @@ def prompt_persist_mode(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
         draw(stdscr, rows, cursor_idx, scroll_offset,
              FOCUS_BUTTONS, btn_idx, "", True, install_method,
              filter_text=filter_text)
-        max_y, max_x = stdscr.getmaxyx()
-        usable_w = max_x - 1
         desc_line = (
             f"  Persist across reboots: < {mode} >    "
             f"↳ {PERSIST_DESCRIPTIONS[mode]}"
@@ -2474,18 +2498,7 @@ def prompt_persist_mode(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
             "  ←/→ select   Y/N quick-pick   "
             "Enter=confirm   Esc=cancel"
         )
-        try:
-            stdscr.addnstr(
-                max_y - 2, 0, desc_line.ljust(usable_w)[:usable_w],
-                usable_w, curses.color_pair(CP_TITLE) | curses.A_BOLD,
-            )
-            stdscr.addnstr(
-                max_y - 1, 0, keys_line.ljust(usable_w)[:usable_w],
-                usable_w, curses.color_pair(CP_STATUS_OK),
-            )
-        except curses.error:
-            pass
-        stdscr.refresh()
+        _draw_prompt_overlay(stdscr, desc_line, keys_line)
 
         key = stdscr.getch()
         if key == 27:
@@ -2788,19 +2801,8 @@ def main(stdscr, override_installations=None):
                     status_msg = ""
 
         elif key == ord(" "):
-            if focus == FOCUS_LIST:
-                if row["type"] == ROW_HEADER:
-                    row["collapsed"] = not row.get("collapsed", False)
-                    status_msg = ""
-                elif row["type"] == ROW_FEATURE:
-                    toggle_feature_row(rows, row)
-                    status_msg = ""
-                elif row["type"] == ROW_CHOICE:
-                    cycle_choice_row(row, 1)
-                    status_msg = ""
-                elif row["type"] == ROW_DNS:
-                    row["selected"] = (row["selected"] + 1) % len(row["options"])
-                    status_msg = ""
+            if focus == FOCUS_LIST and activate_row(rows, row):
+                status_msg = ""
 
         elif key in (curses.KEY_ENTER, 10, 13):
             if focus == FOCUS_BUTTONS:
@@ -2894,17 +2896,7 @@ def main(stdscr, override_installations=None):
 
             elif focus == FOCUS_LIST:
                 # Enter on a list item acts like spacebar
-                if row["type"] == ROW_HEADER:
-                    row["collapsed"] = not row.get("collapsed", False)
-                    status_msg = ""
-                elif row["type"] == ROW_FEATURE:
-                    toggle_feature_row(rows, row)
-                    status_msg = ""
-                elif row["type"] == ROW_CHOICE:
-                    cycle_choice_row(row, 1)
-                    status_msg = ""
-                elif row["type"] == ROW_DNS:
-                    row["selected"] = (row["selected"] + 1) % len(row["options"])
+                if activate_row(rows, row):
                     status_msg = ""
 
 # ---------------------------------------------------------------------------

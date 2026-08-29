@@ -590,6 +590,23 @@ def cycle_choice_row(row, step=1):
     row["selected"] = (row["selected"] + step) % len(row["choices"])
 
 
+def activate_row(rows, row):
+    """Space/Enter action for a list row: header fold, feature toggle,
+    choice/DNS advance. Returns True when the row type has one, so the
+    caller clears the status line; False otherwise (e.g. NO_ROW)."""
+    if row["type"] == ROW_HEADER:
+        row["collapsed"] = not row.get("collapsed", False)
+    elif row["type"] == ROW_FEATURE:
+        toggle_feature_row(rows, row)
+    elif row["type"] == ROW_CHOICE:
+        cycle_choice_row(row, 1)
+    elif row["type"] == ROW_DNS:
+        row["selected"] = (row["selected"] + 1) % len(row["options"])
+    else:
+        return False
+    return True
+
+
 def _enforce_groups(rows, features_map):
     """Collapse every group down to at most one checked row.
 
@@ -2027,19 +2044,8 @@ def main(stdscr, override_installations=None):
                     status_msg = ""
 
         elif key == ord(" "):
-            if focus == FOCUS_LIST:
-                if row["type"] == ROW_HEADER:
-                    row["collapsed"] = not row.get("collapsed", False)
-                    status_msg = ""
-                elif row["type"] == ROW_FEATURE:
-                    toggle_feature_row(rows, row)
-                    status_msg = ""
-                elif row["type"] == ROW_CHOICE:
-                    cycle_choice_row(row, 1)
-                    status_msg = ""
-                elif row["type"] == ROW_DNS:
-                    row["selected"] = (row["selected"] + 1) % len(row["options"])
-                    status_msg = ""
+            if focus == FOCUS_LIST and activate_row(rows, row):
+                status_msg = ""
 
         elif key in (curses.KEY_ENTER, 10, 13):
             if focus == FOCUS_BUTTONS:
@@ -2096,17 +2102,7 @@ def main(stdscr, override_installations=None):
                     break
 
             elif focus == FOCUS_LIST:
-                if row["type"] == ROW_HEADER:
-                    row["collapsed"] = not row.get("collapsed", False)
-                    status_msg = ""
-                elif row["type"] == ROW_FEATURE:
-                    toggle_feature_row(rows, row)
-                    status_msg = ""
-                elif row["type"] == ROW_CHOICE:
-                    cycle_choice_row(row, 1)
-                    status_msg = ""
-                elif row["type"] == ROW_DNS:
-                    row["selected"] = (row["selected"] + 1) % len(row["options"])
+                if activate_row(rows, row):
                     status_msg = ""
 
 # ---------------------------------------------------------------------------

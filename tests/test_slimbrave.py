@@ -72,21 +72,19 @@ def mod(request):
     return request.param
 
 
-def _check_feature(mod, rows, name):
-    """Check the feature row with the given display name (via toggle logic)."""
-    for row in rows:
-        if row["type"] == mod.ROW_FEATURE and row["text"] == name:
-            if not row["checked"]:
-                mod.toggle_feature_row(rows, row)
-            return row
-    raise AssertionError(f"feature not found: {name}")
-
-
 def _get_feature(mod, rows, name):
     for row in rows:
         if row["type"] == mod.ROW_FEATURE and row["text"] == name:
             return row
     raise AssertionError(f"feature not found: {name}")
+
+
+def _check_feature(mod, rows, name):
+    """Check the feature row with the given display name (via toggle logic)."""
+    row = _get_feature(mod, rows, name)
+    if not row["checked"]:
+        mod.toggle_feature_row(rows, row)
+    return row
 
 
 def _set_dns(mod, rows, mode, template=""):
@@ -104,6 +102,12 @@ def _checked_policy_pairs(mod, rows):
         for row in rows
         if row["type"] == mod.ROW_FEATURE and row["checked"]
     }
+
+
+def _write_config(tmp_path, name, features):
+    path = tmp_path / name
+    path.write_text(json.dumps({"Features": features}))
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -252,10 +256,8 @@ def test_export_omits_dns_when_unmanaged(mod, tmp_path):
 
 
 def test_import_legacy_array_first_match_wins(mod, tmp_path):
-    cfg = tmp_path / "legacy.json"
-    cfg.write_text(json.dumps(
-        {"Features": ["IncognitoModeAvailability", "BraveRewardsDisabled"]}
-    ))
+    cfg = _write_config(tmp_path, "legacy.json",
+                        ["IncognitoModeAvailability", "BraveRewardsDisabled"])
     rows = mod.build_rows()
     ok, _ = mod.import_settings(rows, str(cfg))
     assert ok
@@ -278,10 +280,8 @@ SHIELDS_WILDCARDS = ["https://*", "http://*"]
 ], ids=["off-then-on", "on-then-off"])
 def test_import_collapses_conflicting_shields_rows(mod, tmp_path, order, winner):
     """Last key listed wins, matching the PS1 CheckedChanged handler."""
-    cfg = tmp_path / "both.json"
-    cfg.write_text(json.dumps(
-        {"Features": {key: SHIELDS_WILDCARDS for _, key in order}}
-    ))
+    cfg = _write_config(tmp_path, "both.json",
+                        {key: SHIELDS_WILDCARDS for _, key in order})
     rows = mod.build_rows()
     ok, _ = mod.import_settings(rows, str(cfg))
     assert ok
@@ -295,10 +295,8 @@ def test_import_collapses_conflicting_shields_rows(mod, tmp_path, order, winner)
 
 
 def test_import_legacy_array_collapses_shields_group(mod, tmp_path):
-    cfg = tmp_path / "legacy-both.json"
-    cfg.write_text(json.dumps(
-        {"Features": [SHIELDS_OFF[1], SHIELDS_ON[1]]}
-    ))
+    cfg = _write_config(tmp_path, "legacy-both.json",
+                        [SHIELDS_OFF[1], SHIELDS_ON[1]])
     rows = mod.build_rows()
     ok, _ = mod.import_settings(rows, str(cfg))
     assert ok
@@ -824,12 +822,6 @@ def _selected_label(row):
     return row["choices"][row["selected"]][0]
 
 
-def _write_config(tmp_path, name, features):
-    path = tmp_path / name
-    path.write_text(json.dumps({"Features": features}))
-    return path
-
-
 def test_choice_rows_are_exactly_the_documented_keys(mod):
     """A ninth choice row, or one of the eight demoted back to a checkbox,
     fails here rather than silently changing what the GUI offers."""
@@ -994,8 +986,7 @@ def test_illegal_choice_value_in_existing_policy_is_ignored(mod):
 def test_legacy_array_config_selects_block(mod, tmp_path):
     """A v1.9.5 array-format export carries keys without values; naming one
     used to tick a checkbox that wrote 2, so it has to land on Block."""
-    cfg = tmp_path / "legacy.json"
-    cfg.write_text(json.dumps({"Features": sorted(EXPECTED_CHOICES)}))
+    cfg = _write_config(tmp_path, "legacy.json", sorted(EXPECTED_CHOICES))
     rows = mod.build_rows()
     ok, msg = mod.import_settings(rows, str(cfg))
     assert ok, msg
