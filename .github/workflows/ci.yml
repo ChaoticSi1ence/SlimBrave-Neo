@@ -26,8 +26,8 @@ jobs:
         # only ever tested against the wrong data.
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.x"
       # Dev/CI-only tools; the scripts themselves stay stdlib-only. Pinned so a
@@ -53,7 +53,7 @@ jobs:
       run:
         shell: powershell
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Must run before the analyzer: Invoke-ScriptAnalyzer only emits
       # ParseError records when ParseError is in -Severity, and otherwise
       # analyses a partial AST — a syntax error would ship green.
