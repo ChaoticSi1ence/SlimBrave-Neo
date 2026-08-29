@@ -2218,3 +2218,29 @@ def test_startup_collapse_leaves_every_selectable_row_visible(mod):
     selectable = mod.selectable_indices(rows)
     assert selectable
     assert all(idx in visible for idx in selectable)
+
+
+# ---------------------------------------------------------------------------
+# Windows GUI: panel content must fit beside the vertical scrollbar
+# ---------------------------------------------------------------------------
+
+
+def test_ps1_rows_fit_inside_scrolled_panel_width():
+    """No control's right edge may cross 389px.
+
+    Each column panel is 414px wide and its client area measures 391px once
+    the vertical scrollbar appears. A row reaching past that grows a 2px
+    horizontal scrollbar on every column, which also eats 21px of column
+    height. Regression: shipped in v2.0.0-v2.0.2 as 28+365=393.
+    """
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    budget = 389
+    pairs = re.findall(
+        r"Location = New-Object System\.Drawing\.Point\((\d+), [^)]*\)\s*\n"
+        r"(?:[^\n]*\n)?\s*\$\w+\.Size = New-Object System\.Drawing\.Size\((\d+), \d+\)",
+        text,
+    )
+    assert pairs, "no Location/Size pairs parsed from SlimBrave.ps1"
+    offenders = [(int(x), int(w)) for x, w in pairs
+                 if int(x) < 400 and int(x) + int(w) > budget]
+    assert not offenders, f"rows exceed the {budget}px right-edge budget: {offenders}"

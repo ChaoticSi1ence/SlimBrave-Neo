@@ -633,7 +633,8 @@ function Add-ChoiceRow {
     # Every dropdown in a column lines up at the same X, clear of the
     # captions and inside the panel's usable width (see $layoutPanelW).
     $combo.Location = New-Object System.Drawing.Point(286, $Y)
-    $combo.Size = New-Object System.Drawing.Size(106, 21)
+    # 286 + 103 = 389: same right-edge budget as the checkbox rows.
+    $combo.Size = New-Object System.Drawing.Size(103, 21)
     $combo.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $combo.BackColor = $theme.InputBack
     $combo.ForeColor = $theme.InputText
@@ -677,9 +678,11 @@ function Add-FeatureRows {
         $checkbox.Tag = $feature
         $checkbox.Location = New-Object System.Drawing.Point(28, $Y)
         # Wide enough for the longest label ("Disable Enhanced Spell Check
-        # (Google Web Service)", 296px including the glyph) and still short
-        # of the column scrollbar.
-        $checkbox.Size = New-Object System.Drawing.Size(365, 20)
+        # (Google Web Service)", 296px including the glyph). Right edge must
+        # stay under 391 - the panel's client width once its vertical
+        # scrollbar appears - or every column grows a 2px horizontal
+        # scrollbar. 28 + 361 = 389.
+        $checkbox.Size = New-Object System.Drawing.Size(361, 20)
         $checkbox.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
         # The stock flat glyph is a thin system-colored check that is nearly
         # invisible on the dark theme, so paint over it: checked = accent
