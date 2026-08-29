@@ -383,10 +383,10 @@ CATEGORIES = [
         ],
     },
     {
-        # Site permissions and access lockdowns: content-setting defaults
-        # plus the escape hatches (guest, incognito, extensions) that would
-        # otherwise bypass the rest of the policy set.
-        "name": "Permissions & Access",
+        # Content-setting defaults sites are granted: every row here is a
+        # selector (Not managed / Ask / Block, plus Allow where Chromium
+        # has one), never a checkbox.
+        "name": "Site Permissions",
         "features": [
             {"name": "Web Notifications", "key": "DefaultNotificationsSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK},
             {"name": "Location Access", "key": "DefaultGeolocationSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK},
@@ -395,7 +395,14 @@ CATEGORIES = [
             {"name": "Web Serial Access", "key": "DefaultSerialGuardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK},
             {"name": "WebHID Access", "key": "DefaultWebHidGuardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK},
             {"name": "Local Font Enumeration", "key": "DefaultLocalFontsSetting", "value": 2, "choices": CHOICES_ASK_BLOCK},
-            {"name": "Multi-Screen (Window Management) Access", "key": "DefaultWindowManagementSetting", "value": 2, "choices": CHOICES_ASK_BLOCK},
+            {"name": "Multi-Screen Access", "key": "DefaultWindowManagementSetting", "value": 2, "choices": CHOICES_ASK_BLOCK},
+        ],
+    },
+    {
+        # Lockdowns and the escape hatches (guest, incognito, extensions)
+        # that would otherwise bypass the rest of the policy set.
+        "name": "Access Controls",
+        "features": [
             {"name": "Force Google SafeSearch", "key": "ForceGoogleSafeSearch", "value": True},
             {"name": "Filter Adult Content (SafeSites)", "key": "SafeSitesFilterBehavior", "value": 1},
             {"name": "Disable Guest Mode", "key": "BrowserGuestModeEnabled", "value": False},

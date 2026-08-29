@@ -617,11 +617,11 @@ function Add-ChoiceRow {
     $caption = New-Object System.Windows.Forms.Label
     $caption.Text = $Feature.Name
     $caption.UseMnemonic = $false
-    $caption.Location = New-Object System.Drawing.Point(28, ($Y + 3))
-    # 252 fits the longest caption ("Multi-Screen (Window Management)
-    # Access": 243px of text at 9pt Segoe UI, plus the Label's own inset)
-    # without ellipsis.
-    $caption.Size = New-Object System.Drawing.Size(252, 18)
+    $caption.Location = New-Object System.Drawing.Point(28, ($Y + 5))
+    # 190 clears the longest caption ("Local Font Enumeration", ~130px at
+    # 9pt Segoe UI) with room to spare, and hands the rest of the row to
+    # the dropdown.
+    $caption.Size = New-Object System.Drawing.Size(190, 18)
     $caption.ForeColor = $theme.Text
     $Panel.Controls.Add($caption)
 
@@ -632,9 +632,10 @@ function Add-ChoiceRow {
     $combo.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
     # Every dropdown in a column lines up at the same X, clear of the
     # captions and inside the panel's usable width (see $layoutPanelW).
-    $combo.Location = New-Object System.Drawing.Point(286, $Y)
-    # 286 + 103 = 389: same right-edge budget as the checkbox rows.
-    $combo.Size = New-Object System.Drawing.Size(103, 21)
+    $combo.Location = New-Object System.Drawing.Point(224, ($Y + 2))
+    # 224 + 157 = 381: deliberately 8px short of the 389 budget so the
+    # dropdown edge doesn't ride against the panel's vertical scrollbar.
+    $combo.Size = New-Object System.Drawing.Size(157, 21)
     $combo.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $combo.BackColor = $theme.InputBack
     $combo.ForeColor = $theme.InputText
@@ -670,19 +671,22 @@ function Add-FeatureRows {
     foreach ($feature in $Features) {
         if ($null -ne $feature.Choices) {
             Add-ChoiceRow $Panel $feature $Y
-            $Y += $Step
+            # Taller pitch than a checkbox row: the dropdown is a ~24px box,
+            # and eight of them at the checkbox step read as one solid block.
+            $Y += ($Step + 5)
             continue
         }
         $checkbox = New-Object System.Windows.Forms.CheckBox
         $checkbox.Text = $feature.Name
         $checkbox.Tag = $feature
-        $checkbox.Location = New-Object System.Drawing.Point(28, $Y)
+        $checkbox.Location = New-Object System.Drawing.Point(28, ($Y + 4))
         # Wide enough for the longest label ("Disable Enhanced Spell Check
         # (Google Web Service)", 296px including the glyph). Right edge must
         # stay under 391 - the panel's client width once its vertical
         # scrollbar appears - or every column grows a 2px horizontal
         # scrollbar. 28 + 361 = 389.
         $checkbox.Size = New-Object System.Drawing.Size(361, 20)
+        $checkbox.AutoEllipsis = $true
         $checkbox.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
         # The stock flat glyph is a thin system-colored check that is nearly
         # invisible on the dark theme, so paint over it: checked = accent
@@ -820,7 +824,7 @@ $privacyFeatures = @(
 # `Value` stays on a choice row as the value its pre-tri-state checkbox
 # wrote (always Block). It is never written directly; it is what a bare key
 # in a legacy array-format export means on import.
-$accessFeatures = @(
+$sitePermissionFeatures = @(
     @{ Name = "Web Notifications"; Key = "DefaultNotificationsSetting"; Value = 2; Type = "DWord"
        Choices = @(
            @{ Label = "Not managed"; Value = $null },
@@ -866,12 +870,17 @@ $accessFeatures = @(
            @{ Label = "Ask";   Value = 3 },
            @{ Label = "Block"; Value = 2 })
        Tip = "Sets the default for sites asking which fonts are installed on your machine - a strong fingerprinting signal that Shields' font protections don't cover. Blocking rarely breaks anything outside web design tools. Chromium has no Allow state for this key." },
-    @{ Name = "Multi-Screen (Window Management) Access"; Key = "DefaultWindowManagementSetting"; Value = 2; Type = "DWord"
+    @{ Name = "Multi-Screen Access"; Key = "DefaultWindowManagementSetting"; Value = 2; Type = "DWord"
        Choices = @(
            @{ Label = "Not managed"; Value = $null },
            @{ Label = "Ask";   Value = 3 },
            @{ Label = "Block"; Value = 2 })
-       Tip = "Sets the default for sites reading your monitor layout and placing windows on a chosen screen. Blocking breaks the full-screen presentation mode in some web apps. Chromium has no Allow state for this key." },
+       Tip = "Sets the default for sites reading your monitor layout and placing windows on a chosen screen. Blocking breaks the full-screen presentation mode in some web apps. Chromium has no Allow state for this key." }
+)
+
+# Lockdowns and the escape hatches (guest, incognito, extensions) that
+# would otherwise bypass the rest of the policy set.
+$accessControlFeatures = @(
     @{ Name = "Force Google SafeSearch"; Key = "ForceGoogleSafeSearch"; Value = 1; Type = "DWord"
        Tip = "Forces SafeSearch on for all Google searches. Mainly useful for parental controls." },
     @{ Name = "Filter Adult Content (SafeSites)"; Key = "SafeSitesFilterBehavior"; Value = 1; Type = "DWord"
@@ -1195,7 +1204,8 @@ $script:embeddedPresets = [ordered]@{
 $categories = @(
     @{ Name = "Telemetry & Reporting";        Features = $telemetryFeatures },
     @{ Name = "Privacy & Security";           Features = $privacyFeatures },
-    @{ Name = "Permissions & Access";         Features = $accessFeatures },
+    @{ Name = "Site Permissions";             Features = $sitePermissionFeatures },
+    @{ Name = "Access Controls";              Features = $accessControlFeatures },
     @{ Name = "Shields & Content Protection"; Features = $shieldsContentFeatures },
     @{ Name = "Brave Features";               Features = $braveFeatures },
     @{ Name = "Performance & Bloat";          Features = $perfFeatures }
@@ -1208,13 +1218,13 @@ foreach ($cat in $categories) { $categoryByName[$cat.Name] = $cat }
 # because each one scrolls on its own.
 $columnLayout = @(
     @("Privacy & Security", "Telemetry & Reporting"),
-    @("Permissions & Access", "Brave Features"),
+    @("Site Permissions", "Access Controls", "Brave Features"),
     @("Shields & Content Protection", "Performance & Bloat")
 )
 
 # Row metrics. 25px comfortably clears both row controls (a 20px checkbox
 # and a 21px dropdown), so one step serves every row type.
-$rowHeight = 25; $rowGap = 10; $colStartY = 10
+$rowHeight = 28; $rowGap = 12; $colStartY = 10
 
 # ---------------------------------------------------------------------------
 # Build the columns
@@ -1274,8 +1284,8 @@ for ($col = 0; $col -lt $columnLayout.Count; $col++) {
 $layoutContentWidth = (2 * $layoutMargin) + ($columnLayout.Count * $layoutPanelW) + (($columnLayout.Count - 1) * $layoutPanelGap)
 $layoutPanelBottom  = $layoutPanelTop + $layoutPanelH
 # The DNS row and the button row are ~933px wide (five action buttons at
-# 120px, spaced 193 apart, with a 20px margin either side); centre that
-# block under the three columns.
+# min 120px each, sized up to their text, spaced 193 apart from fixed
+# offsets); centre that block under the three columns.
 $layoutContentOffsetX = [int](($layoutContentWidth - 933) / 2)
 $dnsRowTop            = $layoutPanelBottom + 15
 $buttonRowTop         = $dnsRowTop + 75
@@ -1299,12 +1309,12 @@ $form.ClientSize = New-Object System.Drawing.Size($layoutContentWidth, ($buttonR
 # ---------------------------------------------------------------------------
 
 $topBarTop = 14
-# 176 clears the longest preset name ("Strict Parental Controls Preset", 163px
-# at 9pt Segoe UI) and 130 clears the caption to their left, so the five
-# buttons end at 1034 - leaving the status line the rest of the row.
-$presetButtonW   = 176
-$presetButtonGap = 6
-$presetButtonX   = 130
+# Button widths are measured from the rendered text at runtime, so a DPI
+# scale that rounds fonts differently can never clip a name again. The
+# " Preset" suffix is dropped from the display - the row is already
+# captioned "Quick Presets" - which keeps all five short of the status line.
+$presetButtonGap = 8
+$presetButtonX   = 140
 
 $presetsLabel = New-Object System.Windows.Forms.Label
 $presetsLabel.Text = "Quick Presets"
@@ -1312,18 +1322,18 @@ $presetsLabel.UseMnemonic = $false
 $presetsLabel.Font = $sectionFont
 $presetsLabel.ForeColor = $theme.Accent
 $presetsLabel.Location = New-Object System.Drawing.Point($layoutMargin, ($topBarTop + 4))
-$presetsLabel.Size = New-Object System.Drawing.Size(108, 20)
+$presetsLabel.AutoSize = $true
 $form.Controls.Add($presetsLabel)
 
-$presetIndex = 0
 foreach ($presetName in $script:embeddedPresets.Keys) {
     $presetButton = New-Object System.Windows.Forms.Button
-    $presetButton.Text = $presetName
+    $presetButton.Text = ($presetName -replace ' Preset$', '')
     # The click handler runs long after this loop has finished, and a
     # scriptblock closes over the variable rather than over the value it held
     # when the handler was attached - so the name travels on the button.
     $presetButton.Tag = $presetName
-    $presetButton.Location = New-Object System.Drawing.Point(($presetButtonX + $presetIndex * ($presetButtonW + $presetButtonGap)), $topBarTop)
+    $presetButtonW = [System.Windows.Forms.TextRenderer]::MeasureText($presetButton.Text, $form.Font).Width + 26
+    $presetButton.Location = New-Object System.Drawing.Point($presetButtonX, $topBarTop)
     $presetButton.Size = New-Object System.Drawing.Size($presetButtonW, 26)
     $presetButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $presetButton.FlatAppearance.BorderSize = 1
@@ -1356,7 +1366,7 @@ foreach ($presetName in $script:embeddedPresets.Keys) {
         }
     })
     $form.Controls.Add($presetButton)
-    $presetIndex++
+    $presetButtonX += $presetButtonW + $presetButtonGap
 }
 
 # Right-aligned so it reads as the row's trailing status rather than a label
@@ -1421,14 +1431,21 @@ foreach ($cb in $allFeatures) {
 # DNS controls
 # ---------------------------------------------------------------------------
 
+# Both DNS fields sit in one column that starts past the wider of the two
+# measured labels - AutoSize labels and fixed field offsets cannot coexist,
+# as the v2.0.3 polish pass proved by parking a label under this dropdown.
+$dnsFieldX = $layoutContentOffsetX + 20 + 12 + [Math]::Max(
+    [System.Windows.Forms.TextRenderer]::MeasureText("DNS Over HTTPS Mode:", $form.Font).Width,
+    [System.Windows.Forms.TextRenderer]::MeasureText("Custom DoH template URL:", $form.Font).Width)
+
 $dnsLabel = New-Object System.Windows.Forms.Label
 $dnsLabel.Text = "DNS Over HTTPS Mode:"
 $dnsLabel.Location = New-Object System.Drawing.Point(($layoutContentOffsetX + 20), ($dnsRowTop + 5))
-$dnsLabel.Size = New-Object System.Drawing.Size(150, 20)
+$dnsLabel.AutoSize = $true
 $form.Controls.Add($dnsLabel)
 
 $dnsDropdown = New-Object System.Windows.Forms.ComboBox
-$dnsDropdown.Location = New-Object System.Drawing.Point(($layoutContentOffsetX + 180), $dnsRowTop)
+$dnsDropdown.Location = New-Object System.Drawing.Point($dnsFieldX, $dnsRowTop)
 $dnsDropdown.Size = New-Object System.Drawing.Size(150, 20)
 # "unmanaged" (the default) writes no DNS policy at all, leaving Brave's
 # DNS settings user-controlled. The other four are managed-policy values —
@@ -1452,11 +1469,11 @@ $form.Controls.Add($hoverHint)
 $dnsTemplateLabel = New-Object System.Windows.Forms.Label
 $dnsTemplateLabel.Text = "Custom DoH template URL:"
 $dnsTemplateLabel.Location = New-Object System.Drawing.Point(($layoutContentOffsetX + 20), ($dnsRowTop + 35))
-$dnsTemplateLabel.Size = New-Object System.Drawing.Size(170, 20)
+$dnsTemplateLabel.AutoSize = $true
 $form.Controls.Add($dnsTemplateLabel)
 
 $dnsTemplateBox = New-Object System.Windows.Forms.TextBox
-$dnsTemplateBox.Location = New-Object System.Drawing.Point(($layoutContentOffsetX + 210), ($dnsRowTop + 35))
+$dnsTemplateBox.Location = New-Object System.Drawing.Point($dnsFieldX, ($dnsRowTop + 35))
 $dnsTemplateBox.Size = New-Object System.Drawing.Size(510, 20)
 $dnsTemplateBox.BackColor = $theme.InputBack
 $dnsTemplateBox.ForeColor = $theme.InputText
@@ -1484,7 +1501,10 @@ function New-ActionButton {
     $button = New-Object System.Windows.Forms.Button
     $button.Text = $Text
     $button.Location = New-Object System.Drawing.Point(($script:layoutContentOffsetX + $X), $script:buttonRowTop)
-    $button.Size = New-Object System.Drawing.Size(120, 32)
+    # Width follows the rendered text so no DPI scale can clip a caption;
+    # 120 stays the floor so the five buttons read as one family.
+    $buttonW = [Math]::Max(120, [System.Windows.Forms.TextRenderer]::MeasureText($Text, $form.Font).Width + 24)
+    $button.Size = New-Object System.Drawing.Size($buttonW, 32)
     $button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $button.FlatAppearance.BorderSize = 1
     $button.FlatAppearance.BorderColor = $theme.ButtonBorder

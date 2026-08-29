@@ -1566,7 +1566,7 @@ def test_collapse_excludes_its_rows_from_selectable(mod):
     """The cursor cannot land on a row the list is not painting."""
     rows = mod.build_rows()
     before_sel = mod.selectable_indices(rows)
-    header_idx = _header_index(mod, rows, "Permissions & Access")
+    header_idx = _header_index(mod, rows, "Site Permissions")
     start, end = mod.header_span(rows, header_idx)
     owned = set(range(start, end))
     assert owned <= set(before_sel)
@@ -1596,16 +1596,20 @@ def test_header_counts_track_checkboxes_and_choice_rows(mod):
             _expected_counts(mod, rows, header_idx)
         assert mod.header_counts(rows, header_idx)[0] == 0
 
-    permissions = _header_index(mod, rows, "Permissions & Access")
-    _, total = mod.header_counts(rows, permissions)
+    controls = _header_index(mod, rows, "Access Controls")
+    _, ctl_total = mod.header_counts(rows, controls)
     _check_feature(mod, rows, "Block All Extensions")
-    assert mod.header_counts(rows, permissions) == (1, total)
-    # Selecting "Ask" counts, exactly like ticking the checkbox it replaced.
+    assert mod.header_counts(rows, controls) == (1, ctl_total)
+    # Selecting "Ask" counts, exactly like ticking a checkbox - under its
+    # own Site Permissions header, not the Access Controls one next door.
+    site = _header_index(mod, rows, "Site Permissions")
+    _, site_total = mod.header_counts(rows, site)
     notifications = _set_choice(mod, rows, "Web Notifications", "Ask")
-    assert mod.header_counts(rows, permissions) == (2, total)
+    assert mod.header_counts(rows, site) == (1, site_total)
+    assert mod.header_counts(rows, controls) == (1, ctl_total)
     # Cycling back to "Not managed" takes the count away again.
     notifications["selected"] = 0
-    assert mod.header_counts(rows, permissions) == (1, total)
+    assert mod.header_counts(rows, site) == (0, site_total)
 
     for header_idx in _header_indices(mod, rows):
         assert mod.header_counts(rows, header_idx) == \
@@ -1739,7 +1743,7 @@ FILTER_EXPECTED = [
     "Block Third Party Cookies",
     "Block Payment Method Probing",
     "Block Remote Debugging",
-    "Permissions & Access",
+    "Access Controls",
     "Block All Extensions",
     "Block Sideloaded (External) Extensions",
     "Shields & Content Protection",
@@ -1853,7 +1857,7 @@ def test_cycling_a_choice_row_while_filtered_keeps_the_filter(mod):
     rows = mod.build_rows()
     filter_text = "notification"
     vis = mod.visible_indices(rows, filter_text)
-    assert _texts(rows, vis) == ["Permissions & Access", "Web Notifications"]
+    assert _texts(rows, vis) == ["Site Permissions", "Web Notifications"]
 
     row = _choice_rows(mod, rows)["DefaultNotificationsSetting"]
     mod.cycle_choice_row(row, 1)
@@ -2198,7 +2202,7 @@ def test_startup_collapse_counts_managed_choice_rows(mod):
     choice = next(row for row in rows if row["type"] == mod.ROW_CHOICE)
     choice["selected"] = 2
     mod.apply_startup_collapse(rows)
-    assert _open_sections(mod, rows) == ["Permissions & Access"]
+    assert _open_sections(mod, rows) == ["Site Permissions"]
 
 
 def test_startup_collapse_judges_dns_by_mode(mod):

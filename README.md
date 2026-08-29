@@ -62,7 +62,7 @@ That's it. No `pip install`, no `jq`, no external dependencies. Just Python 3 an
 
 #### The TUI
 
-With no flags the script opens a curses interface: six collapsible categories — Telemetry & Reporting, Privacy & Security, Permissions & Access, Brave Features, Shields & Content Protection, Performance & Bloat — followed by a DNS Over HTTPS section, with an Import / Export / Apply / Reset / Quit button row underneath.
+With no flags the script opens a curses interface: seven collapsible categories — Telemetry & Reporting, Privacy & Security, Site Permissions, Access Controls, Brave Features, Shields & Content Protection, Performance & Bloat — followed by a DNS Over HTTPS section, with an Import / Export / Apply / Reset / Quit button row underneath.
 
 Each category header carries a disclosure marker and a live `n/m on` count of the settings under it that are actually managed — a ticked checkbox, or a selector sitting off *Not managed*. The count updates as you toggle, so a folded section still tells you whether anything inside it is set. Left folds a header, Right unfolds it, Space or Enter does either, and `c` folds every section at once — or unfolds them all when they are already folded. On launch the folds reflect what is already applied: a section holding a managed setting opens, the rest stay folded — so a clean machine opens on a short overview and a configured one opens on what it is enforcing.
 
@@ -168,13 +168,13 @@ This pulls the current `main`. If you'd rather pin an exact, unchanging version 
 
 Requires Administrator privileges; the script re-launches itself elevated. Hover over any option in the app for a plain-English description of what it does and the exact policy it writes. The app follows your Windows light/dark theme.
 
-The window is a **fixed size chosen to fit a 1366x768 display**, and it never resizes or reflows. The options sit in three side-by-side columns — Privacy & Security with Telemetry & Reporting, Permissions & Access with Brave Features, Shields & Content Protection with Performance & Bloat — and each column scrolls on its own, so a long category scrolls inside its own panel while the DNS row and the buttons underneath stay exactly where they are.
+The window is a **fixed size chosen to fit a 1366x768 display**, and it never resizes or reflows. The options sit in three side-by-side columns — Privacy & Security with Telemetry & Reporting, Site Permissions and Access Controls with Brave Features, Shields & Content Protection with Performance & Bloat — and each column scrolls on its own, so a long category scrolls inside its own panel while the DNS row and the buttons underneath stay exactly where they are.
 
 A **Quick Presets** row sits above the columns, with one button per bundled preset: Maximum Privacy, Balanced Privacy, Performance Focused, Developer, Strict Parental Controls. A preset button only fills in the controls below — nothing reaches the registry until you click Apply Settings, so you can untick whatever you don't want first. The presets are embedded in `SlimBrave.ps1` itself, so the buttons work for the one-liner download above too, with no `Presets/` directory on disk. A status line at the right of the same row names what the last action did.
 
 The button row underneath is Export Settings, Import Settings, **Re-sync Registry**, Apply Settings and Reset All Settings. Re-sync reads the policy currently in the registry back into the controls, discarding any on-screen selections you have not applied. It writes nothing, and it goes through the same reader that fills the form at startup, so a re-sync can never disagree with a fresh launch.
 
-The first eight rows of Permissions & Access are dropdowns rather than checkboxes: **Not managed / Ask / Block**, plus **Allow** on the keys where Chromium accepts it. Not managed is the default and writes nothing at all. The Permissions & Access section below covers what each state does and which keys offer Allow.
+Every row of Site Permissions is a dropdown rather than a checkbox: **Not managed / Ask / Block**, plus **Allow** on the keys where Chromium accepts it. Not managed is the default and writes nothing at all. The Permissions & Access section below covers what each state does and which keys offer Allow.
 
 ---
 
@@ -210,10 +210,8 @@ The first eight rows of Permissions & Access are dropdowns rather than checkboxe
 - Disable DNS Interception Probes (three random hostnames resolved at every launch and network change, visible to your ISP or DoH resolver)
 - Require HTTPS for Basic Auth (breaks logins on legacy HTTP-only routers, printers and appliances)
 
-### Permissions & Access
-Site-permission defaults plus the escape hatches (guest, incognito, extensions) that would otherwise bypass the rest of the policy set.
-
-The first eight rows are **not checkboxes** — Chromium models these keys as an enum rather than a boolean, so the tool now exposes the enum instead of hardcoding "block". Each is a dropdown in the Windows GUI and a `< Block >`-style selector in the TUI, with the same states everywhere:
+### Site Permissions
+Content-setting defaults sites are granted. These rows are **not checkboxes** — Chromium models these keys as an enum rather than a boolean, so the tool now exposes the enum instead of hardcoding "block". Each is a dropdown in the Windows GUI and a `< Block >`-style selector in the TUI, with the same states everywhere:
 
 - **Not managed** — the default. Writes nothing at all, so Brave's own default and your per-site choices stand. An untouched row behaves exactly like the unticked checkbox it replaced.
 - **Ask** — pins the permission prompt as managed policy: no site is silently granted, and the setting can't be weakened from `brave://settings` or per-site.
@@ -229,11 +227,12 @@ The first eight rows are **not checkboxes** — Chromium models these keys as an
 - Web Serial Access — *Ask / Block*; Block breaks in-browser microcontroller programming tools
 - WebHID Access — *Ask / Block*; Block may break security keys and gamepad configurators that use WebHID rather than WebAuthn
 - Local Font Enumeration — *Ask / Block*; `queryLocalFonts()` hands over your installed font list, a strong fingerprint that Shields' font protections don't cover
-- Multi-Screen (Window Management) Access — *Ask / Block*; your monitor layout, plus placing windows on a chosen screen
+- Multi-Screen Access — *Ask / Block*; the window-management permission: your monitor layout, plus placing windows on a chosen screen
 
 Older configs keep working unchanged: a v1.9.5 export or preset naming one of these keys carries the value `2`, so it imports as **Block**, and a key the config doesn't name comes back as **Not managed**. A value outside a key's legal set is left unmanaged rather than written out, and the import result names the key it skipped.
 
-The remaining rows in this section are ordinary toggles:
+### Access Controls
+Lockdowns, and the escape hatches (guest, incognito, extensions) that would otherwise bypass the rest of the policy set — ordinary toggles:
 
 - Force Google SafeSearch
 - Filter Adult Content (SafeSites) — **this is a remote lookup, not a local filter.** Every URL you navigate to, including URLs loaded inside frames, is sent to Google's Safe Search API to be classified, and anything rated adult is blocked. Worth knowing in a tool whose other rows exist to keep Google out of your browsing; enable it only if the parental-control value is worth that trade.
