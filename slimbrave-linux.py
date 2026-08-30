@@ -354,7 +354,7 @@ CATEGORIES = [
             {"name": "Disable Stats Ping", "key": "BraveStatsPingEnabled", "value": False},
             {"name": "Limit Variations to Critical Fixes", "key": "ChromeVariations", "value": 1, "group": "variations"},
             {"name": "Disable Variations / Griffin Experiments", "key": "ChromeVariations", "value": 2, "group": "variations"},
-            {"name": "Disable Enhanced Spell Check (Google Web Service)", "key": "SpellCheckServiceEnabled", "value": False, "group": "spellcheck"},
+            {"name": "Disable Enhanced Spell Check", "key": "SpellCheckServiceEnabled", "value": False, "group": "spellcheck"},
         ],
     },
     {

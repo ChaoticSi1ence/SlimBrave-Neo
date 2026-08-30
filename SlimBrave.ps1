@@ -680,13 +680,14 @@ function Add-FeatureRows {
         $checkbox.Text = $feature.Name
         $checkbox.Tag = $feature
         $checkbox.Location = New-Object System.Drawing.Point(28, ($Y + 4))
-        # Wide enough for the longest label ("Disable Enhanced Spell Check
-        # (Google Web Service)", 296px including the glyph). Right edge must
-        # stay under 391 - the panel's client width once its vertical
-        # scrollbar appears - or every column grows a 2px horizontal
-        # scrollbar. 28 + 361 = 389.
+        # Right edge must stay under 391 - the panel's client width once
+        # its vertical scrollbar appears - or every column grows a 2px
+        # horizontal scrollbar. 28 + 361 = 389. Never add AutoEllipsis
+        # here: on a Flat checkbox whose text overflows it paints NO text
+        # at all (v2.0.3 shipped an invisible row that way) - the layout
+        # probe measures PreferredSize on every checkbox instead, so an
+        # overlong label fails loudly before it ships.
         $checkbox.Size = New-Object System.Drawing.Size(361, 20)
-        $checkbox.AutoEllipsis = $true
         $checkbox.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
         # The stock flat glyph is a thin system-colored check that is nearly
         # invisible on the dark theme, so paint over it: checked = accent
@@ -757,7 +758,7 @@ $telemetryFeatures = @(
        Tip = "Restricts Brave's remote experiment seed (Griffin) to critical security and stability fixes, instead of the full set of A/B experiments. The safe choice of the two. Mutually exclusive with Disable Variations." },
     @{ Name = "Disable Variations / Griffin Experiments"; Key = "ChromeVariations"; Value = 2; Type = "DWord"; Group = "variations"
        Tip = "Blocks the remote experiment seed entirely, so Brave can no longer flip features in your installed browser from its servers. This also blocks the emergency killswitches Brave uses to turn off a broken or unsafe feature - pick Limit Variations to Critical Fixes unless you accept that. Mutually exclusive with Limit Variations to Critical Fixes." },
-    @{ Name = "Disable Enhanced Spell Check (Google Web Service)"; Key = "SpellCheckServiceEnabled"; Value = 0; Type = "DWord"; Group = "spellcheck"
+    @{ Name = "Disable Enhanced Spell Check"; Key = "SpellCheckServiceEnabled"; Value = 0; Type = "DWord"; Group = "spellcheck"
        Tip = "Stops enhanced spell check, which sends the text you type in web forms to Google's servers to be checked. Offline spell checking keeps working. Mutually exclusive with Disable Spellcheck, which turns spell checking off altogether and makes this row do nothing." }
 )
 
@@ -1182,6 +1183,27 @@ $script:embeddedPresets = [ordered]@{
     "DnsTemplates": "https://family.cloudflare-dns.com/dns-query"
 }
 '@
+    "Brave Origin Preset" = @'
+{
+    "Features": {
+        "BraveP3AEnabled": false,
+        "BraveStatsPingEnabled": false,
+        "BraveRewardsDisabled": true,
+        "BraveWalletDisabled": true,
+        "BraveVPNDisabled": true,
+        "BraveAIChatEnabled": false,
+        "BraveLocalAIEnabled": false,
+        "BraveNewsDisabled": true,
+        "BraveTalkDisabled": true,
+        "BravePlaylistEnabled": false,
+        "BraveWebDiscoveryEnabled": false,
+        "BraveSpeedreaderEnabled": false,
+        "BraveWaybackMachineEnabled": false,
+        "TorDisabled": true,
+        "EmailAliasesEnabled": false
+    }
+}
+'@
 }
 
 # ---------------------------------------------------------------------------
@@ -1350,10 +1372,10 @@ foreach ($presetName in $script:embeddedPresets.Keys) {
         } catch {
             # Out of reach short of a corrupted script file, but a handler
             # that throws puts an unhandled-exception dialog on screen.
-            $statusLabel.Text = "$name failed to load"
+            $statusLabel.Text = "$($this.Text) failed to load"
             return
         }
-        $statusLabel.Text = "$name loaded"
+        $statusLabel.Text = "$($this.Text) loaded"
         # Only when a row could not be represented - none of the five bundled
         # presets does that today, so this normally stays silent.
         if ($note) {
@@ -1374,8 +1396,8 @@ foreach ($presetName in $script:embeddedPresets.Keys) {
 $statusLabel = New-Object System.Windows.Forms.Label
 $statusLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
 $statusLabel.ForeColor = $theme.Text
-$statusLabel.Location = New-Object System.Drawing.Point(($layoutContentWidth - 254), ($topBarTop + 4))
-$statusLabel.Size = New-Object System.Drawing.Size(240, 20)
+$statusLabel.Location = New-Object System.Drawing.Point(($layoutContentWidth - 214), ($topBarTop + 4))
+$statusLabel.Size = New-Object System.Drawing.Size(200, 20)
 $form.Controls.Add($statusLabel)
 $tooltip.SetToolTip($statusLabel, "What the last action did. Loading a preset, importing a file and re-syncing only change the controls on screen - Apply Settings and Reset All Settings are the two that touch the registry.")
 

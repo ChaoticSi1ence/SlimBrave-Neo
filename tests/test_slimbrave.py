@@ -1405,6 +1405,29 @@ V195_PRESET_POLICIES = {
         "SyncDisabled": True,
         "TorDisabled": True,
     },
+    # Pinned at introduction (v2.1.0), not captured from v1.9.5 - the preset
+    # did not exist then. Same contract as the five above: the policy a
+    # shipped preset produces must never drift silently. The 15 keys are the
+    # policy-mapped half of Brave Origin's enforced set, source-verified
+    # against brave_origin_service_factory.cc; PsstEnabled is the 16th and
+    # is deliberately not exposed (see AUDIT.md).
+    "Brave Origin Preset": {
+        "BraveAIChatEnabled": False,
+        "BraveLocalAIEnabled": False,
+        "BraveNewsDisabled": True,
+        "BraveP3AEnabled": False,
+        "BravePlaylistEnabled": False,
+        "BraveRewardsDisabled": True,
+        "BraveSpeedreaderEnabled": False,
+        "BraveStatsPingEnabled": False,
+        "BraveTalkDisabled": True,
+        "BraveVPNDisabled": True,
+        "BraveWalletDisabled": True,
+        "BraveWaybackMachineEnabled": False,
+        "BraveWebDiscoveryEnabled": False,
+        "EmailAliasesEnabled": False,
+        "TorDisabled": True,
+    },
 }
 
 

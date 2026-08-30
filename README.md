@@ -187,7 +187,7 @@ Every row of Site Permissions is a dropdown rather than a checkbox: **Not manage
 - Disable P3A Analytics
 - Disable Stats Ping
 - Limit Variations to Critical Fixes, or Disable Variations / Griffin Experiments outright (mutually exclusive). Griffin is the remote seed Brave fetches to flip features in a browser that is already installed; "Limit" keeps the emergency security killswitches working, "Disable" blocks those too.
-- Disable Enhanced Spell Check (Google Web Service) — mutually exclusive with Disable Spellcheck below; this row keeps offline checking and only drops the Google lookup
+- Disable Enhanced Spell Check — mutually exclusive with Disable Spellcheck below; this row keeps offline checking and only drops the Google lookup
 
 ### Privacy & Security
 - Disable Safe Browsing (security downgrade — Brave proxies these lookups through its own servers, so Google never sees them either way; excluded from every preset)
@@ -361,6 +361,15 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 - **Brave Features:** Disables Rewards, Wallet, VPN, AI Chat, News, Talk, Web Discovery, Tor, and developer tools.
 - **DNS — no plaintext fallback.** The preset sets a custom DoH template of `https://family.cloudflare-dns.com/dns-query` (Cloudflare for Families). Custom mode is Chromium's **secure** DoH mode: Brave sends DNS-over-HTTPS queries *only*, and a lookup that fails is not retried against your system resolver. If that endpoint is blocked or unreachable — captive-portal Wi-Fi, some corporate and school networks — **nothing resolves at all** until you change the DNS mode back to `unmanaged` and re-Apply, or reset the policy entirely. Point it at a resolver you know works on the networks the machine will be used on.
 - **Best for:** Parents, schools, or workplaces that need restricted browsing.
+
+### Brave Origin Preset
+Applies the policy half of what [Brave Origin](https://brave.com/origin/) upgrade mode enforces to a standard Brave install — the same feature kill-switches, through the same policy keys Origin itself sets.
+
+- **The set is derived from source, not guessed:** the 15 keys and their exact values come from `brave_origin_service_factory.cc` in brave-core, the file where Origin defines what it enforces. Rewards, Wallet, VPN, AI Chat, Local AI, News, Talk, Playlist, Web Discovery, Speedreader, Wayback Machine, Email Aliases and Tor go off; P3A and the stats ping stop reporting.
+- **Origin's 16th policy is deliberately absent.** `PsstEnabled` is not dispatched by any stable Brave and its feature flag is off everywhere, so SlimBrave Neo doesn't expose it — a switch that does nothing is worse than no switch. It gets added the release Brave makes it real (tracked in [`AUDIT.md`](AUDIT.md)).
+- **What this can't give you:** Origin also compiles features out of the binary, ships with metrics removed, and adjusts a few defaults that have no policy equivalent. Policies can't shrink a binary. For the closest match, also tick "Disable Metrics Reporting" — Origin builds don't report metrics at all.
+- **DNS:** Left unmanaged, matching Origin.
+- **Best for:** Anyone who wants Origin's defaults on the Brave they already run — or on Windows and macOS, where Origin is a paid upgrade.
 
 </details>
 
