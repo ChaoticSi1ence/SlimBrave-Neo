@@ -1054,11 +1054,16 @@ $script:embeddedPresets = [ordered]@{
         "PrintingEnabled": false,
         "DefaultBrowserSettingEnabled": false,
         "DeveloperToolsAvailability": 2,
-        "BraveWaybackMachineEnabled": false
+        "BraveWaybackMachineEnabled": false,
+        "BraveLocalAIEnabled": false,
+        "DNSInterceptionChecksEnabled": false,
+        "RemoteDebuggingAllowed": false,
+        "BasicAuthOverHttpEnabled": false,
+        "BlockExternalExtensions": true,
+        "ChromeVariations": 1
     }
 }
 '@
-
     "Balanced Privacy Preset" = @'
 {
     "Features": {
@@ -1092,12 +1097,18 @@ $script:embeddedPresets = [ordered]@{
         "BackgroundModeEnabled": false,
         "MediaRecommendationsEnabled": false,
         "ShoppingListEnabled": false,
-        "DefaultBrowserSettingEnabled": false
+        "DefaultBrowserSettingEnabled": false,
+        "BraveLocalAIEnabled": false,
+        "DNSInterceptionChecksEnabled": false,
+        "RemoteDebuggingAllowed": false,
+        "BasicAuthOverHttpEnabled": false,
+        "BlockExternalExtensions": true,
+        "ChromeVariations": 1,
+        "SpellCheckServiceEnabled": false
     },
     "DnsMode": "automatic"
 }
 '@
-
     "Performance Focused Preset" = @'
 {
     "Features": {
@@ -1123,12 +1134,12 @@ $script:embeddedPresets = [ordered]@{
         "MediaRecommendationsEnabled": false,
         "ShoppingListEnabled": false,
         "DefaultBrowserSettingEnabled": false,
-        "BraveWaybackMachineEnabled": false
+        "BraveWaybackMachineEnabled": false,
+        "BraveLocalAIEnabled": false
     },
     "DnsMode": "automatic"
 }
 '@
-
     "Developer Preset" = @'
 {
     "Features": {
@@ -1147,12 +1158,15 @@ $script:embeddedPresets = [ordered]@{
         "BackgroundModeEnabled": false,
         "MediaRecommendationsEnabled": false,
         "ShoppingListEnabled": false,
-        "DefaultBrowserSettingEnabled": false
+        "DefaultBrowserSettingEnabled": false,
+        "BraveLocalAIEnabled": false,
+        "DNSInterceptionChecksEnabled": false,
+        "ChromeVariations": 1,
+        "SpellCheckServiceEnabled": false
     },
     "DnsMode": "automatic"
 }
 '@
-
     "Strict Parental Controls Preset" = @'
 {
     "Features": {
@@ -1160,7 +1174,9 @@ $script:embeddedPresets = [ordered]@{
         "BraveStatsPingEnabled": false,
         "IncognitoModeAvailability": 1,
         "BrowserGuestModeEnabled": false,
-        "ExtensionInstallBlocklist": ["*"],
+        "ExtensionInstallBlocklist": [
+            "*"
+        ],
         "ForceGoogleSafeSearch": true,
         "SafeSitesFilterBehavior": 1,
         "BrowserSignin": 0,
@@ -1177,7 +1193,8 @@ $script:embeddedPresets = [ordered]@{
         "BraveTalkDisabled": true,
         "BraveWebDiscoveryEnabled": false,
         "TorDisabled": true,
-        "DeveloperToolsAvailability": 2
+        "DeveloperToolsAvailability": 2,
+        "RemoteDebuggingAllowed": false
     },
     "DnsMode": "custom",
     "DnsTemplates": "https://family.cloudflare-dns.com/dns-query"

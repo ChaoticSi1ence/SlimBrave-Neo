@@ -4,7 +4,9 @@
         "BraveStatsPingEnabled": false,
         "IncognitoModeAvailability": 1,
         "BrowserGuestModeEnabled": false,
-        "ExtensionInstallBlocklist": ["*"],
+        "ExtensionInstallBlocklist": [
+            "*"
+        ],
         "ForceGoogleSafeSearch": true,
         "SafeSitesFilterBehavior": 1,
         "BrowserSignin": 0,
@@ -21,7 +23,8 @@
         "BraveTalkDisabled": true,
         "BraveWebDiscoveryEnabled": false,
         "TorDisabled": true,
-        "DeveloperToolsAvailability": 2
+        "DeveloperToolsAvailability": 2,
+        "RemoteDebuggingAllowed": false
     },
     "DnsMode": "custom",
     "DnsTemplates": "https://family.cloudflare-dns.com/dns-query"

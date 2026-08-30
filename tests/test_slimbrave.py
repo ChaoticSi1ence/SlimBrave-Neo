@@ -1238,6 +1238,11 @@ def test_ps1_embedded_preset_names_match_files():
 # somebody's managed machine, so the policy every preset produces is pinned
 # here rather than derived from the preset file.
 #
+# Revised deliberately in the v2.1.0 preset curation: the post-v1.9.5
+# toggles were folded into the presets whose promises they fit, and each
+# pin below was updated in the same commit. A pin change outside such a
+# deliberate curation is the drift this table exists to catch.
+#
 # Captured by loading the v1.9.5 scripts (git tag v1.9.5) and running
 # import_settings + _build_policy over the presets as they ship. The values
 # below are the Linux module's output; the mac module omits exactly the
@@ -1249,11 +1254,14 @@ V195_PRESET_POLICIES = {
         "AlternateErrorPagesEnabled": False,
         "AutofillCreditCardEnabled": False,
         "BackgroundModeEnabled": False,
+        "BasicAuthOverHttpEnabled": False,
+        "BlockExternalExtensions": True,
         "BlockThirdPartyCookies": True,
         "BraveAIChatEnabled": False,
         "BraveDeAmpEnabled": True,
         "BraveDebouncingEnabled": True,
         "BraveGlobalPrivacyControlEnabled": True,
+        "BraveLocalAIEnabled": False,
         "BraveNewsDisabled": True,
         "BraveP3AEnabled": False,
         "BraveReduceLanguageEnabled": True,
@@ -1265,6 +1273,8 @@ V195_PRESET_POLICIES = {
         "BraveWalletDisabled": True,
         "BraveWebDiscoveryEnabled": False,
         "BrowserSignin": 0,
+        "ChromeVariations": 1,
+        "DNSInterceptionChecksEnabled": False,
         "DefaultBrowserSettingEnabled": False,
         "DnsOverHttpsMode": "automatic",
         "MediaRecommendationsEnabled": False,
@@ -1272,8 +1282,10 @@ V195_PRESET_POLICIES = {
         "NetworkPredictionOptions": 2,
         "PaymentMethodQueryEnabled": False,
         "QuicAllowed": False,
+        "RemoteDebuggingAllowed": False,
         "SafeBrowsingExtendedReportingEnabled": False,
         "ShoppingListEnabled": False,
+        "SpellCheckServiceEnabled": False,
         "SyncDisabled": True,
         "TorDisabled": True,
         "UrlKeyedAnonymizedDataCollectionEnabled": False,
@@ -1283,6 +1295,7 @@ V195_PRESET_POLICIES = {
         "AlternateErrorPagesEnabled": False,
         "BackgroundModeEnabled": False,
         "BraveAIChatEnabled": False,
+        "BraveLocalAIEnabled": False,
         "BraveNewsDisabled": True,
         "BraveP3AEnabled": False,
         "BraveRewardsDisabled": True,
@@ -1290,12 +1303,15 @@ V195_PRESET_POLICIES = {
         "BraveTalkDisabled": True,
         "BraveVPNDisabled": True,
         "BraveWalletDisabled": True,
+        "ChromeVariations": 1,
+        "DNSInterceptionChecksEnabled": False,
         "DefaultBrowserSettingEnabled": False,
         "DnsOverHttpsMode": "automatic",
         "MediaRecommendationsEnabled": False,
         "MetricsReportingEnabled": False,
         "SafeBrowsingExtendedReportingEnabled": False,
         "ShoppingListEnabled": False,
+        "SpellCheckServiceEnabled": False,
         "UrlKeyedAnonymizedDataCollectionEnabled": False,
     },
     "Maximum Privacy Preset": {
@@ -1304,11 +1320,14 @@ V195_PRESET_POLICIES = {
         "AutofillAddressEnabled": False,
         "AutofillCreditCardEnabled": False,
         "BackgroundModeEnabled": False,
+        "BasicAuthOverHttpEnabled": False,
+        "BlockExternalExtensions": True,
         "BlockThirdPartyCookies": True,
         "BraveAIChatEnabled": False,
         "BraveDeAmpEnabled": True,
         "BraveDebouncingEnabled": True,
         "BraveGlobalPrivacyControlEnabled": True,
+        "BraveLocalAIEnabled": False,
         "BraveNewsDisabled": True,
         "BraveP3AEnabled": False,
         "BravePlaylistEnabled": False,
@@ -1323,6 +1342,8 @@ V195_PRESET_POLICIES = {
         "BraveWaybackMachineEnabled": False,
         "BraveWebDiscoveryEnabled": False,
         "BrowserSignin": 0,
+        "ChromeVariations": 1,
+        "DNSInterceptionChecksEnabled": False,
         "DefaultBraveAdblockSetting": 2,
         "DefaultBraveFingerprintingV2Setting": 3,
         "DefaultBraveHttpsUpgradeSetting": 2,
@@ -1343,6 +1364,7 @@ V195_PRESET_POLICIES = {
         "PaymentMethodQueryEnabled": False,
         "PrintingEnabled": False,
         "QuicAllowed": False,
+        "RemoteDebuggingAllowed": False,
         "SafeBrowsingExtendedReportingEnabled": False,
         "SearchSuggestEnabled": False,
         "ShoppingListEnabled": False,
@@ -1358,6 +1380,7 @@ V195_PRESET_POLICIES = {
         "BraveAIChatEnabled": False,
         "BraveDeAmpEnabled": True,
         "BraveDebouncingEnabled": True,
+        "BraveLocalAIEnabled": False,
         "BraveNewsDisabled": True,
         "BraveP3AEnabled": False,
         "BravePlaylistEnabled": False,
@@ -1401,6 +1424,7 @@ V195_PRESET_POLICIES = {
         "ExtensionInstallBlocklist": ['*'],
         "ForceGoogleSafeSearch": True,
         "IncognitoModeAvailability": 1,
+        "RemoteDebuggingAllowed": False,
         "SafeSitesFilterBehavior": 1,
         "SyncDisabled": True,
         "TorDisabled": True,

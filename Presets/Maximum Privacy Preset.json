@@ -52,6 +52,12 @@
         "PrintingEnabled": false,
         "DefaultBrowserSettingEnabled": false,
         "DeveloperToolsAvailability": 2,
-        "BraveWaybackMachineEnabled": false
+        "BraveWaybackMachineEnabled": false,
+        "BraveLocalAIEnabled": false,
+        "DNSInterceptionChecksEnabled": false,
+        "RemoteDebuggingAllowed": false,
+        "BasicAuthOverHttpEnabled": false,
+        "BlockExternalExtensions": true,
+        "ChromeVariations": 1
     }
 }

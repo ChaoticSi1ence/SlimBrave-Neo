@@ -15,7 +15,11 @@
         "BackgroundModeEnabled": false,
         "MediaRecommendationsEnabled": false,
         "ShoppingListEnabled": false,
-        "DefaultBrowserSettingEnabled": false
+        "DefaultBrowserSettingEnabled": false,
+        "BraveLocalAIEnabled": false,
+        "DNSInterceptionChecksEnabled": false,
+        "ChromeVariations": 1,
+        "SpellCheckServiceEnabled": false
     },
     "DnsMode": "automatic"
 }

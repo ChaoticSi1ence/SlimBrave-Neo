@@ -22,7 +22,8 @@
         "MediaRecommendationsEnabled": false,
         "ShoppingListEnabled": false,
         "DefaultBrowserSettingEnabled": false,
-        "BraveWaybackMachineEnabled": false
+        "BraveWaybackMachineEnabled": false,
+        "BraveLocalAIEnabled": false
     },
     "DnsMode": "automatic"
 }
