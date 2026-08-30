@@ -325,6 +325,8 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 - **Performance and bloat — read this one before applying.** It goes well past "background processes": background mode, Cast device discovery, media recommendations, and the shopping list are off, and so are **developer tools, printing, the built-in PDF viewer** (PDFs download and open in your system viewer instead), **translation, spellcheck, search suggestions, and the default-browser prompt**. If you need devtools or printing, use the Developer preset, or untick those rows in the Performance & Bloat section before Apply.
 - **DNS:** Left unmanaged. Forcing DoH off would hand every DNS query to your ISP in cleartext, while forcing DoH on concentrates that visibility at the DoH provider — which trade-off is right depends on who you distrust more, so the preset leaves the choice to you (set it manually in the DNS section if you have a preference).
 - **Note:** No longer forces incognito-only browsing (earlier versions set `IncognitoModeAvailability: 2`, which silently disabled history, persistent logins, and most extensions). Forget-on-close storage covers the privacy goal; the Force Incognito toggle is still available manually.
+- **New in 2.1:** on-device AI off, Chromium's per-launch DNS interception probes off, remote debugging blocked (the `--remote-debugging-port` cookie-theft vector `DeveloperToolsAvailability` never covered), Basic Auth refused over cleartext HTTP, the silent sideload-extension channel closed, and variations pinned to critical fixes only — Brave's A/B seed stops flipping features, security killswitches still arrive.
+- **Deliberately not set:** the WebUSB / Web Serial / WebHID / Local Fonts / Multi-Screen dropdowns stay *Not managed* — blocking them breaks hardware wallets, flashers and some security keys. Flip them to Block yourself for the full lockdown.
 - **Best for:** Paranoid users, journalists, activists, or anyone who wants Brave as private as possible — provided they read the performance bullet first.
 
 ### Balanced Privacy Preset
@@ -334,6 +336,7 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 - **Brave Features:** Disables Rewards, Wallet, VPN, AI Chat, News, Talk, Web Discovery, and **Tor** (the "New private window with Tor" option disappears).
 - **Performance:** Turns off background mode, media recommendations, the shopping list, and the default-browser prompt.
 - **DNS:** Uses automatic DoH (lets Brave choose the fastest secure DNS).
+- **New in 2.1:** kills the enhanced-spellcheck web service while keeping offline spellcheck working — the exact balanced trade — plus on-device AI off, DNS interception probes off, remote debugging blocked, cleartext Basic Auth refused, sideloaded extensions blocked (your own extensions keep working), and variations limited to critical fixes.
 - **Best for:** Most users who want privacy but still need convenience features — the password manager, address autofill, and Shields left at Brave's own defaults.
 
 ### Performance Focused Preset
@@ -342,6 +345,7 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 - **Brave Features:** Disables Rewards, Wallet, VPN, AI Chat, News, Talk, Playlist, Speedreader, Web Discovery, and the Wayback Machine prompt to declutter the browser.
 - **Performance:** Forces Memory Saver and hardware acceleration on; kills background mode, Cast device discovery, media recommendations, the shopping list, and the default-browser prompt. Network prediction is deliberately left on — prefetch makes browsing faster at a small privacy cost, which is the right trade for this preset.
 - **DNS:** Automatic DoH for a balance of speed and security.
+- **New in 2.1:** on-device AI off — Brave 1.94+ downloads and runs a local model and builds an AI index of your history; this preset's job is exactly that kind of background weight.
 - **Best for:** Users who want a faster, cleaner Brave without extreme privacy tweaks.
 
 ### Developer Preset
@@ -351,6 +355,8 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 - **Kept on purpose:** developer tools, printing, spellcheck, the built-in PDF viewer, QUIC, and Sync — the things the other presets take away and a developer needs back.
 - **Performance:** Turns off background mode, media recommendations, the shopping list, and the default-browser prompt.
 - **DNS:** Automatic DoH (default secure DNS).
+- **New in 2.1:** variations pinned to critical fixes (a browser that doesn't reshuffle its features under your tests), on-device AI off, DNS interception probes off (three fewer phantom lookups in your network logs), and the enhanced-spellcheck web service off while offline spellcheck stays.
+- **Remote debugging deliberately stays available.** Blocking it would break Puppeteer, Playwright and `brave://inspect` — the tools this preset exists to keep working.
 - **Best for:** Developers who need dev tools and a working network stack but still want telemetry and Brave's monetised features out of the way.
 
 ### Strict Parental Controls Preset
@@ -360,6 +366,7 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 - **Extensions:** Blocks all extension installs and disables existing ones — a proxy or VPN extension would bypass the DNS filter.
 - **Brave Features:** Disables Rewards, Wallet, VPN, AI Chat, News, Talk, Web Discovery, Tor, and developer tools.
 - **DNS — no plaintext fallback.** The preset sets a custom DoH template of `https://family.cloudflare-dns.com/dns-query` (Cloudflare for Families). Custom mode is Chromium's **secure** DoH mode: Brave sends DNS-over-HTTPS queries *only*, and a lookup that fails is not retried against your system resolver. If that endpoint is blocked or unreachable — captive-portal Wi-Fi, some corporate and school networks — **nothing resolves at all** until you change the DNS mode back to `unmanaged` and re-Apply, or reset the policy entirely. Point it at a resolver you know works on the networks the machine will be used on.
+- **New in 2.1:** remote debugging blocked — a debugging port is a scriptable side door past every filter this preset sets up.
 - **Best for:** Parents, schools, or workplaces that need restricted browsing.
 
 ### Brave Origin Preset
