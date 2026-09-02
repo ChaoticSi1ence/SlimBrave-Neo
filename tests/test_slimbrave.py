@@ -2276,22 +2276,34 @@ def test_startup_collapse_leaves_every_selectable_row_visible(mod):
 # ---------------------------------------------------------------------------
 
 
-def test_ps1_rows_fit_inside_scrolled_panel_width():
-    """No control's right edge may cross 389px.
+def test_ps1_row_control_columns_do_not_collide():
+    """The interface's row geometry must stay internally consistent.
 
-    Each column panel is 414px wide and its client area measures 391px once
-    the vertical scrollbar appears. A row reaching past that grows a 2px
-    horizontal scrollbar on every column, which also eats 21px of column
-    height. Regression: shipped in v2.0.0-v2.0.2 as 28+365=393.
+    Every control in a settings row is placed from a script-scope constant.
+    They are independent numbers, so nothing but this stops an edit to one
+    from overlapping another - which is how the expander chevron ended up
+    under the "Not managed" hint during development. Bounds are checked
+    against the row width rather than eyeballed, because a collision is
+    invisible in a diff and obvious only on screen.
     """
     text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
-    budget = 389
-    pairs = re.findall(
-        r"Location = New-Object System\.Drawing\.Point\((\d+), [^)]*\)\s*\n"
-        r"(?:[^\n]*\n)?\s*\$\w+\.Size = New-Object System\.Drawing\.Size\((\d+), \d+\)",
-        text,
-    )
-    assert pairs, "no Location/Size pairs parsed from SlimBrave.ps1"
-    offenders = [(int(x), int(w)) for x, w in pairs
-                 if int(x) < 400 and int(x) + int(w) > budget]
-    assert not offenders, f"rows exceed the {budget}px right-edge budget: {offenders}"
+
+    def const(name):
+        m = re.search(r"^\$script:" + name + r"\s*=\s*(\d+)", text, re.MULTILINE)
+        assert m, f"layout constant {name} is missing from SlimBrave.ps1"
+        return int(m.group(1))
+
+    m = re.search(r"\$p\.Size=New-Object System\.Drawing\.Size (\d+),\$script:COLLAPSED", text)
+    assert m, "the settings-row width is no longer declared where this test looks"
+    row_w = int(m.group(1))
+
+    exp_x, exp_choice = const("EXP_X"), const("EXP_X_CHOICE")
+    dd_x, dd_w = const("DD_X"), const("DD_W")
+    tg_x, tg_w = const("TG_X"), const("TG_W")
+    chevron_w = 26
+
+    assert dd_x + dd_w <= row_w, "the dropdown runs past the row"
+    assert tg_x + tg_w <= row_w, "the toggle runs past the row"
+    # a chevron must clear the control to its right on its own row type
+    assert exp_choice + chevron_w <= dd_x, "the expander overlaps the dropdown"
+    assert exp_x + chevron_w <= tg_x, "the expander overlaps the toggle"

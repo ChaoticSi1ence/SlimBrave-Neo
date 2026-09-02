@@ -154,7 +154,7 @@ powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1
 
 <img src="assets/gui-screenshot.png" width="820" alt="SlimBrave Neo Windows GUI">
 
-*The Windows GUI: one-click presets across the top, three independently scrolling columns, and three-state dropdowns for the permission settings.*
+*The Windows GUI: a sidebar of categories, presets as cards, and a search that reads the descriptions as well as the names.*
 
 </div>
 
@@ -166,13 +166,19 @@ iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/main/SlimBra
 
 This pulls the current `main`. If you'd rather pin an exact, unchanging version and check it against a published checksum before running, [`SECURITY.md`](SECURITY.md) covers tagged releases and SHA-256 sums.
 
-Requires Administrator privileges; the script re-launches itself elevated. Hover over any option in the app for a plain-English description of what it does and the exact policy it writes. The app follows your Windows light/dark theme.
+Requires Administrator privileges; the script re-launches itself elevated. It opens showing the policy already on the machine.
 
-The window is a **fixed size chosen to fit a 1366x768 display**, and it never resizes or reflows. The options sit in three side-by-side columns — Privacy & Security with Telemetry & Reporting, Site Permissions and Access Controls with Brave Features, Shields & Content Protection with Performance & Bloat — and each column scrolls on its own, so a long category scrolls inside its own panel while the DNS row and the buttons underneath stay exactly where they are.
+**Every policy explains itself.** Each row carries a plain-English description under its title — *"Stops the daily usage ping that counts this install in Brave's active-user statistics"* — rather than hiding it in a tooltip. Where the text is longer than the row, a chevron expands it in place.
 
-A **Quick Presets** row sits above the columns, with one button per bundled preset: Maximum Privacy, Balanced Privacy, Performance Focused, Developer, Strict Parental Controls. A preset button only fills in the controls below — nothing reaches the registry until you click Apply Settings, so you can untick whatever you don't want first. The presets are embedded in `SlimBrave.ps1` itself, so the buttons work for the one-liner download above too, with no `Presets/` directory on disk. A status line at the right of the same row names what the last action did.
+**Search reads the descriptions, not just the names.** The box in the header matches titles, policy keys, category names *and* the description text, so typing `passwords` surfaces "Require HTTPS for Basic Auth" even though its title never says the word, and `telemetry` returns the whole reporting section. Several words narrow the results, plurals match singulars, and title matches rank above prose matches.
 
-The button row underneath is Export Settings, Import Settings, **Re-sync Registry**, Apply Settings and Reset All Settings. Re-sync reads the policy currently in the registry back into the controls, discarding any on-screen selections you have not applied. It writes nothing, and it goes through the same reader that fills the form at startup, so a re-sync can never disagree with a fresh launch.
+**A sidebar splits the policies into seven categories** — or skip it entirely: **All Options** lists all 78 in one scroll with section headers, for anyone who would rather not navigate.
+
+**Presets are cards.** Each shows what it is, who it is for, and how many policies it sets. Loading one only fills in the controls; nothing reaches the registry until you press Apply Settings, so you can change your mind first. The presets are embedded in `SlimBrave.ps1` itself, so they work for the one-liner download above with no `Presets/` directory on disk.
+
+**Clicking a label does nothing.** Only the toggle and the dropdown respond, each within its own bounds. Opening a menu is reversible; flipping a machine-wide policy is not.
+
+The button row is Export, Import, **Re-sync**, Reset and Apply Settings. Re-sync reads the policy currently in the registry back into the interface, discarding on-screen selections you have not applied. It writes nothing, and goes through the same reader that fills the form at startup, so a re-sync can never disagree with a fresh launch.
 
 Every row of Site Permissions is a dropdown rather than a checkbox: **Not managed / Ask / Block**, plus **Allow** on the keys where Chromium accepts it. Not managed is the default and writes nothing at all. The Permissions & Access section below covers what each state does and which keys offer Allow.
 
