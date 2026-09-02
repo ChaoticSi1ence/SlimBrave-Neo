@@ -23,7 +23,9 @@ SlimBrave Neo uses Chromium enterprise managed policies to disable telemetry, bl
 > search across policy descriptions, and expandable help text. It writes real policy
 > and passes the full test suite, but it has had far less real-world use than `main`.
 >
-> Everything below describes **this branch**. For the released version, switch to
+> Everything below describes **this branch**, published as pre-release
+> [`v2.2.0-beta.1`](https://github.com/ChaoticSi1ence/SlimBrave-Neo/releases/tag/v2.2.0-beta.1).
+> For the stable version, switch to
 > [`main`](https://github.com/ChaoticSi1ence/SlimBrave-Neo). Linux and macOS are
 > identical on both — only `SlimBrave.ps1` differs.
 
@@ -174,10 +176,11 @@ powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1
 iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/experiment/fluent-gui/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; .\SlimBrave.ps1
 ```
 
-This pulls this branch's head, which moves. There is no tag or published checksum for
-a branch — swap `experiment/fluent-gui` for `main` in that URL to get the released
-version instead, and see [`SECURITY.md`](SECURITY.md) for its tagged releases and
-SHA-256 sums.
+That URL tracks the branch head, which moves. To pin a copy you can actually verify,
+swap `experiment/fluent-gui` for the pre-release tag `v2.2.0-beta.1` — its SHA-256 sums are
+published in the [release notes](https://github.com/ChaoticSi1ence/SlimBrave-Neo/releases/tag/v2.2.0-beta.1)
+and attached as `SHA256SUMS`. Swap in `main` instead for the stable version;
+[`SECURITY.md`](SECURITY.md) covers how to check either.
 
 Requires Administrator privileges; the script re-launches itself elevated. It opens showing the policy already on the machine.
 
