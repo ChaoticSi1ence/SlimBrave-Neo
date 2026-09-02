@@ -1,0 +1,1029 @@
+{
+ "categories": [
+  {
+   "name": "Telemetry & Reporting",
+   "rows": [
+    {
+     "name": "Disable Metrics Reporting",
+     "key": "MetricsReportingEnabled",
+     "full": "Stops Brave from sending anonymous usage statistics and crash reports to Brave's servers.",
+     "short": "Stops Brave from sending anonymous usage statistics and crash reports to Brave's servers.",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Safe Browsing Reporting",
+     "key": "SafeBrowsingExtendedReportingEnabled",
+     "full": "Stops extended Safe Browsing reports (details about suspicious pages and downloads) from being sent to Google. Safe Browsing protection itself stays on.",
+     "short": "Stops extended Safe Browsing reports (details about suspicious pages and downloads) from being sent to Google",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable URL Data Collection",
+     "key": "UrlKeyedAnonymizedDataCollectionEnabled",
+     "full": "Stops URL-keyed anonymized data collection, which reports the URLs you visit to improve suggestion and safety features.",
+     "short": "Stops URL-keyed anonymized data collection, which reports the URLs you visit to improve suggestion and safety features.",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable P3A Analytics",
+     "key": "BraveP3AEnabled",
+     "full": "Disables P3A (Privacy-Preserving Product Analytics), Brave's anonymized product usage telemetry.",
+     "short": "Disables P3A (Privacy-Preserving Product Analytics), Brave's anonymized product usage telemetry.",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Stats Ping",
+     "key": "BraveStatsPingEnabled",
+     "full": "Stops the daily usage ping that counts this install in Brave's active-user statistics.",
+     "short": "Stops the daily usage ping that counts this install in Brave's active-user statistics.",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Limit Variations to Critical Fixes",
+     "key": "ChromeVariations",
+     "full": "Restricts Brave's remote experiment seed (Griffin) to critical security and stability fixes, instead of the full set of A/B experiments. The safe choice of the two. Mutually exclusive with Disable Variations.",
+     "short": "Restricts Brave's remote experiment seed (Griffin) to critical security and stability fixes, instead of the full set of A/B experiments",
+     "group": "variations",
+     "value": 1
+    },
+    {
+     "name": "Disable Variations / Griffin Experiments",
+     "key": "ChromeVariations",
+     "full": "Blocks the remote experiment seed entirely, so Brave can no longer flip features in your installed browser from its servers. This also blocks the emergency killswitches Brave uses to turn off a broken or unsafe feature - pick Limit Variations to Critical Fixes unless you accept that. Mutually exclusive with Limit Variations to Critical Fixes.",
+     "short": "Blocks the remote experiment seed entirely, so Brave can no longer flip features in your installed browser from its servers",
+     "group": "variations",
+     "value": 2
+    },
+    {
+     "name": "Disable Enhanced Spell Check",
+     "key": "SpellCheckServiceEnabled",
+     "full": "Stops enhanced spell check, which sends the text you type in web forms to Google's servers to be checked. Offline spell checking keeps working. Mutually exclusive with Disable Spellcheck, which turns spell checking off altogether and makes this row do nothing.",
+     "short": "Stops enhanced spell check, which sends the text you type in web forms to Google's servers to be checked",
+     "group": "spellcheck",
+     "value": false
+    }
+   ]
+  },
+  {
+   "name": "Privacy & Security",
+   "rows": [
+    {
+     "name": "Disable Safe Browsing (security downgrade)",
+     "key": "SafeBrowsingProtectionLevel",
+     "full": "Turns Safe Browsing fully off. Brave already routes these lookups through its own servers, so Google never sees the sites you visit even with Safe Browsing on - turning it off buys almost no privacy and costs you the phishing and malware warning pages. Excluded from every preset for that reason.",
+     "short": "Turns Safe Browsing fully off",
+     "group": "",
+     "value": 0
+    },
+    {
+     "name": "Disable Autofill (Addresses)",
+     "key": "AutofillAddressEnabled",
+     "full": "Stops Brave from saving and auto-filling street addresses in web forms.",
+     "short": "Stops Brave from saving and auto-filling street addresses in web forms.",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Autofill (Credit Cards)",
+     "key": "AutofillCreditCardEnabled",
+     "full": "Stops Brave from saving and auto-filling credit card numbers in web forms.",
+     "short": "Stops Brave from saving and auto-filling credit card numbers in web forms.",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Password Manager",
+     "key": "PasswordManagerEnabled",
+     "full": "Disables the built-in password manager (no save prompts, no autofill). Recommended if you use a dedicated password manager.",
+     "short": "Disables the built-in password manager (no save prompts, no autofill)",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Password Leak Detection",
+     "key": "PasswordLeakDetectionEnabled",
+     "full": "Stops the online check that compares your saved credentials against known breach lists. Defense in depth if you audit passwords with your own manager instead.",
+     "short": "Stops the online check that compares your saved credentials against known breach lists",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Browser Sign-in",
+     "key": "BrowserSignin",
+     "full": "Prevents signing in to the browser itself with an account.",
+     "short": "Prevents signing in to the browser itself with an account.",
+     "group": "",
+     "value": 0
+    },
+    {
+     "name": "Enable Global Privacy Control",
+     "key": "BraveGlobalPrivacyControlEnabled",
+     "full": "Sends the GPC signal with every request, telling sites not to sell or share your data. Legally binding in some regions (e.g. under CCPA).",
+     "short": "Sends the GPC signal with every request, telling sites not to sell or share your data",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Enable De-AMP",
+     "key": "BraveDeAmpEnabled",
+     "full": "Skips Google AMP pages and loads the publisher's original page instead.",
+     "short": "Skips Google AMP pages and loads the publisher's original page instead.",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Enable Debouncing",
+     "key": "BraveDebouncingEnabled",
+     "full": "Skips known tracking redirects and navigates straight to the final destination URL.",
+     "short": "Skips known tracking redirects and navigates straight to the final destination URL.",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Strip Tracking URL Parameters",
+     "key": "BraveTrackingQueryParametersFilteringEnabled",
+     "full": "Removes known tracking parameters (fbclid, gclid, mc_eid, ...) from URLs before they load.",
+     "short": "Removes known tracking parameters (fbclid, gclid, mc_eid, ...) from URLs before they load.",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Reduce Language Fingerprinting",
+     "key": "BraveReduceLanguageEnabled",
+     "full": "Reports a generic language configuration to sites, making your browser harder to fingerprint.",
+     "short": "Reports a generic language configuration to sites, making your browser harder to fingerprint.",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Disable WebRTC IP Leak",
+     "key": "WebRtcIPHandling",
+     "full": "Restricts WebRTC to proxied connections so video/voice calls can't expose your real IP address behind a VPN or proxy.",
+     "short": "Restricts WebRTC to proxied connections so video/voice calls can't expose your real IP address behind a VPN or proxy.",
+     "group": "",
+     "value": "disable_non_proxied_udp"
+    },
+    {
+     "name": "Disable QUIC Protocol",
+     "key": "QuicAllowed",
+     "full": "Disables the QUIC (HTTP/3) transport so all traffic uses TCP. Useful when a firewall or filter can't inspect QUIC; may slightly slow some Google sites.",
+     "short": "Disables the QUIC (HTTP/3) transport so all traffic uses TCP",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Network Prediction (Prefetch)",
+     "key": "NetworkPredictionOptions",
+     "full": "Stops Brave from pre-resolving DNS and pre-connecting to links it guesses you might click, so no network requests are made for pages you never visit.",
+     "short": "Stops Brave from pre-resolving DNS and pre-connecting to links it guesses you might click, so no network requests are made for pages you never visit.",
+     "group": "",
+     "value": 2
+    },
+    {
+     "name": "Block Third Party Cookies",
+     "key": "BlockThirdPartyCookies",
+     "full": "Blocks cookies set by domains other than the site you are visiting. Can break some embedded logins.",
+     "short": "Blocks cookies set by domains other than the site you are visiting",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Block Payment Method Probing",
+     "key": "PaymentMethodQueryEnabled",
+     "full": "Stops sites from querying whether you have payment methods saved (canMakePayment) - they are always told none are available.",
+     "short": "Stops sites from querying whether you have payment methods saved (canMakePayment) - they are always told none are available.",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Alternate Error Pages",
+     "key": "AlternateErrorPagesEnabled",
+     "full": "Uses plain local error pages for navigation errors instead of a web-service-assisted suggestion page. Belt-and-braces: Brave already ships this off.",
+     "short": "Uses plain local error pages for navigation errors instead of a web-service-assisted suggestion page",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Block Remote Debugging",
+     "key": "RemoteDebuggingAllowed",
+     "full": "Blocks the remote debugging port and pipe, the interface automation tools use to drive the browser and read your cookies and logged-in sessions. Disable Developer Tools does not cover this. Breaks Puppeteer, Playwright and brave://inspect.",
+     "short": "Blocks the remote debugging port and pipe, the interface automation tools use to drive the browser and read your cookies and logged-in sessions",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable DNS Interception Probes",
+     "key": "DNSInterceptionChecksEnabled",
+     "full": "Stops Brave from resolving three random hostnames at startup and again on every network change to detect a hijacking DNS provider. Those lookups are visible to your ISP or DoH resolver and mark each launch.",
+     "short": "Stops Brave from resolving three random hostnames at startup and again on every network change to detect a hijacking DNS provider",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Require HTTPS for Basic Auth",
+     "key": "BasicAuthOverHttpEnabled",
+     "full": "Refuses HTTP Basic authentication over plain HTTP so your username and password are never sent in the clear. Breaks logins on legacy routers, printers and other appliances that only serve HTTP.",
+     "short": "Refuses HTTP Basic authentication over plain HTTP so your username and password are never sent in the clear",
+     "group": "",
+     "value": false
+    }
+   ]
+  },
+  {
+   "name": "Site Permissions",
+   "rows": [
+    {
+     "name": "Web Notifications",
+     "key": "DefaultNotificationsSetting",
+     "full": "Sets the default for desktop notifications. Block stops every site from asking or showing them, Ask keeps the permission prompt, Allow grants it to every site.",
+     "short": "Sets the default for desktop notifications",
+     "group": "",
+     "choices": [
+      [
+       "Not managed",
+       null
+      ],
+      [
+       "Allow",
+       1
+      ],
+      [
+       "Ask",
+       3
+      ],
+      [
+       "Block",
+       2
+      ]
+     ]
+    },
+    {
+     "name": "Location Access",
+     "key": "DefaultGeolocationSetting",
+     "full": "Sets the default for reading your physical location. Block removes the prompt entirely, so maps and delivery sites will need the location typed manually; Ask keeps the prompt.",
+     "short": "Sets the default for reading your physical location",
+     "group": "",
+     "choices": [
+      [
+       "Not managed",
+       null
+      ],
+      [
+       "Allow",
+       1
+      ],
+      [
+       "Ask",
+       3
+      ],
+      [
+       "Block",
+       2
+      ]
+     ]
+    },
+    {
+     "name": "Motion Sensors",
+     "key": "DefaultSensorsSetting",
+     "full": "Sets the default for motion and orientation sensors, a known fingerprinting vector. Blocking rarely breaks anything on desktop.",
+     "short": "Sets the default for motion and orientation sensors, a known fingerprinting vector",
+     "group": "",
+     "choices": [
+      [
+       "Not managed",
+       null
+      ],
+      [
+       "Allow",
+       1
+      ],
+      [
+       "Ask",
+       3
+      ],
+      [
+       "Block",
+       2
+      ]
+     ]
+    },
+    {
+     "name": "WebUSB Access",
+     "key": "DefaultWebUsbGuardSetting",
+     "full": "Sets the default for sites talking to USB devices. Block removes the prompt and breaks web-based hardware wallets (Ledger, Trezor) and in-browser firmware flashers; Ask keeps the prompt. Chromium has no Allow state for this key.",
+     "short": "Sets the default for sites talking to USB devices",
+     "group": "",
+     "choices": [
+      [
+       "Not managed",
+       null
+      ],
+      [
+       "Ask",
+       3
+      ],
+      [
+       "Block",
+       2
+      ]
+     ]
+    },
+    {
+     "name": "Web Serial Access",
+     "key": "DefaultSerialGuardSetting",
+     "full": "Sets the default for sites opening serial ports. Block removes the prompt and breaks in-browser microcontroller and device programming tools; Ask keeps the prompt. Chromium has no Allow state for this key.",
+     "short": "Sets the default for sites opening serial ports",
+     "group": "",
+     "choices": [
+      [
+       "Not managed",
+       null
+      ],
+      [
+       "Ask",
+       3
+      ],
+      [
+       "Block",
+       2
+      ]
+     ]
+    },
+    {
+     "name": "WebHID Access",
+     "key": "DefaultWebHidGuardSetting",
+     "full": "Sets the default for sites talking to human interface devices. Block removes the prompt and may break security keys and gamepad configurators that use WebHID rather than WebAuthn. Chromium has no Allow state for this key.",
+     "short": "Sets the default for sites talking to human interface devices",
+     "group": "",
+     "choices": [
+      [
+       "Not managed",
+       null
+      ],
+      [
+       "Ask",
+       3
+      ],
+      [
+       "Block",
+       2
+      ]
+     ]
+    },
+    {
+     "name": "Local Font Enumeration",
+     "key": "DefaultLocalFontsSetting",
+     "full": "Sets the default for sites asking which fonts are installed on your machine - a strong fingerprinting signal that Shields' font protections don't cover. Blocking rarely breaks anything outside web design tools. Chromium has no Allow state for this key.",
+     "short": "Sets the default for sites asking which fonts are installed on your machine - a strong fingerprinting signal that Shields' font protections don't cover",
+     "group": "",
+     "choices": [
+      [
+       "Not managed",
+       null
+      ],
+      [
+       "Ask",
+       3
+      ],
+      [
+       "Block",
+       2
+      ]
+     ]
+    },
+    {
+     "name": "Multi-Screen Access",
+     "key": "DefaultWindowManagementSetting",
+     "full": "Sets the default for sites reading your monitor layout and placing windows on a chosen screen. Blocking breaks the full-screen presentation mode in some web apps. Chromium has no Allow state for this key.",
+     "short": "Sets the default for sites reading your monitor layout and placing windows on a chosen screen",
+     "group": "",
+     "choices": [
+      [
+       "Not managed",
+       null
+      ],
+      [
+       "Ask",
+       3
+      ],
+      [
+       "Block",
+       2
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Access Controls",
+   "rows": [
+    {
+     "name": "Force Google SafeSearch",
+     "key": "ForceGoogleSafeSearch",
+     "full": "Forces SafeSearch on for all Google searches. Mainly useful for parental controls.",
+     "short": "Forces SafeSearch on for all Google searches",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Filter Adult Content (SafeSites)",
+     "key": "SafeSitesFilterBehavior",
+     "full": "Sends every URL you navigate to - including URLs loaded inside frames - to Google's Safe Search API to be classified, and blocks anything rated adult. This is a remote lookup, not a local filter. Mainly useful for parental controls.",
+     "short": "Sends every URL you navigate to - including URLs loaded inside frames - to Google's Safe Search API to be classified, and blocks anything rated adult",
+     "group": "",
+     "value": 1
+    },
+    {
+     "name": "Disable Guest Mode",
+     "key": "BrowserGuestModeEnabled",
+     "full": "Removes guest browsing sessions. Closes the loophole where a guest window bypasses profile-level restrictions and history.",
+     "short": "Removes guest browsing sessions",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Block All Extensions",
+     "key": "ExtensionInstallBlocklist",
+     "full": "Blocks installation of every extension and disables ones already installed. For lockdown/parental setups - a proxy or VPN extension would bypass DNS filtering.",
+     "short": "Blocks installation of every extension and disables ones already installed",
+     "group": "",
+     "value": [
+      "*"
+     ]
+    },
+    {
+     "name": "Block Sideloaded (External) Extensions",
+     "key": "BlockExternalExtensions",
+     "full": "Blocks extensions that other programs install for you through the registry or a drop-in file, which is how bundleware gets in. Extensions you install yourself keep working, so this rarely breaks anything.",
+     "short": "Blocks extensions that other programs install for you through the registry or a drop-in file, which is how bundleware gets in",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Disable Incognito Mode",
+     "key": "IncognitoModeAvailability",
+     "full": "Removes private browsing entirely - no incognito windows can be opened. Mutually exclusive with Force Incognito Mode.",
+     "short": "Removes private browsing entirely - no incognito windows can be opened",
+     "group": "incognito",
+     "value": 1
+    },
+    {
+     "name": "Force Incognito Mode",
+     "key": "IncognitoModeAvailability",
+     "full": "Every window opens in incognito: no history, and logins and most extensions stop persisting. Mutually exclusive with Disable Incognito Mode.",
+     "short": "Every window opens in incognito: no history, and logins and most extensions stop persisting",
+     "group": "incognito",
+     "value": 2
+    }
+   ]
+  },
+  {
+   "name": "Brave Features",
+   "rows": [
+    {
+     "name": "Disable Brave Rewards",
+     "key": "BraveRewardsDisabled",
+     "full": "Removes Brave Rewards and BAT ads from the browser UI.",
+     "short": "Removes Brave Rewards and BAT ads from the browser UI.",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Disable Brave Wallet",
+     "key": "BraveWalletDisabled",
+     "full": "Disables the built-in cryptocurrency wallet and hides its UI.",
+     "short": "Disables the built-in cryptocurrency wallet and hides its UI.",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Disable Brave VPN (no effect on Linux builds)",
+     "key": "BraveVPNDisabled",
+     "full": "",
+     "short": "",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Disable Brave AI Chat",
+     "key": "BraveAIChatEnabled",
+     "full": "Disables Leo, Brave's built-in AI assistant, and removes it from the sidebar and address bar.",
+     "short": "Disables Leo, Brave's built-in AI assistant, and removes it from the sidebar and address bar.",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Local AI (On-Device Models, Brave 1.94+)",
+     "key": "BraveLocalAIEnabled",
+     "full": "Stops Brave from downloading and running on-device AI models and from building an AI index of your browsing history. Separate from Brave AI Chat - disabling Leo does not cover this. Needs Brave 1.94 or newer - that is current stable, so most installs already have it; older versions ignore the key. Takes effect after a browser restart.",
+     "short": "Stops Brave from downloading and running on-device AI models and from building an AI index of your browsing history",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Brave Shields",
+     "key": "BraveShieldsDisabledForUrls",
+     "full": "Turns Shields OFF for every site: no ad blocking, no tracker blocking. Also makes Enforce Ad Blocking, Enforce Fingerprinting Protection, Force HTTPS Upgrades and Cap Referrers do nothing, because Brave skips all four wherever Shields are off. Almost nobody wants this - it exists for kiosk/testing setups. Mutually exclusive with Force Shields On.",
+     "short": "Turns Shields OFF for every site: no ad blocking, no tracker blocking",
+     "group": "shields",
+     "value": [
+      "*"
+     ]
+    },
+    {
+     "name": "Force Shields On (All Sites)",
+     "key": "BraveShieldsEnabledForUrls",
+     "full": "Locks Shields ON for every site; the per-site Shields toggle stops working. Mutually exclusive with Disable Brave Shields.",
+     "short": "Locks Shields ON for every site; the per-site Shields toggle stops working",
+     "group": "shields",
+     "value": [
+      "*"
+     ]
+    },
+    {
+     "name": "Disable Brave News",
+     "key": "BraveNewsDisabled",
+     "full": "Removes the Brave News feed from the new tab page.",
+     "short": "Removes the Brave News feed from the new tab page.",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Disable Brave Talk",
+     "key": "BraveTalkDisabled",
+     "full": "Disables Brave Talk video calls.",
+     "short": "Disables Brave Talk video calls.",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Disable Brave Playlist",
+     "key": "BravePlaylistEnabled",
+     "full": "Disables the Playlist feature for saving and playing media in the sidebar.",
+     "short": "Disables the Playlist feature for saving and playing media in the sidebar.",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Web Discovery",
+     "key": "BraveWebDiscoveryEnabled",
+     "full": "Stops Brave from anonymously contributing pages you visit to the Brave Search index (Web Discovery Project).",
+     "short": "Stops Brave from anonymously contributing pages you visit to the Brave Search index (Web Discovery Project).",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Speedreader",
+     "key": "BraveSpeedreaderEnabled",
+     "full": "Disables Speedreader, the distraction-free article reading mode.",
+     "short": "Disables Speedreader, the distraction-free article reading mode.",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Tor",
+     "key": "TorDisabled",
+     "full": "Removes the 'New private window with Tor' option.",
+     "short": "Removes the 'New private window with Tor' option.",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Disable Sync",
+     "key": "SyncDisabled",
+     "full": "Disables Brave Sync, which shares bookmarks, history, and settings across devices via a sync chain.",
+     "short": "Disables Brave Sync, which shares bookmarks, history, and settings across devices via a sync chain.",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Disable Email Aliases",
+     "key": "EmailAliasesEnabled",
+     "full": "Disables the Email Aliases feature for generating throwaway email addresses.",
+     "short": "Disables the Email Aliases feature for generating throwaway email addresses.",
+     "group": "",
+     "value": false
+    }
+   ]
+  },
+  {
+   "name": "Shields & Content Protection",
+   "rows": [
+    {
+     "name": "Enforce Ad Blocking",
+     "key": "DefaultBraveAdblockSetting",
+     "full": "Pins Brave's ad and tracker blocking on as managed policy, so it can't be lowered in settings or per-site.",
+     "short": "Pins Brave's ad and tracker blocking on as managed policy, so it can't be lowered in settings or per-site.",
+     "group": "",
+     "value": 2
+    },
+    {
+     "name": "Enforce Fingerprinting Protection",
+     "key": "DefaultBraveFingerprintingV2Setting",
+     "full": "Pins Shields fingerprinting protection on as managed policy, so sites can't be exempted from it.",
+     "short": "Pins Shields fingerprinting protection on as managed policy, so sites can't be exempted from it.",
+     "group": "",
+     "value": 3
+    },
+    {
+     "name": "Force HTTPS Upgrades (Strict)",
+     "key": "DefaultBraveHttpsUpgradeSetting",
+     "full": "Always upgrades connections to HTTPS. Sites that can't serve HTTPS show a warning page instead of silently falling back to HTTP.",
+     "short": "Always upgrades connections to HTTPS",
+     "group": "",
+     "value": 2
+    },
+    {
+     "name": "Cap Referrers (Strict Origin)",
+     "key": "DefaultBraveReferrersSetting",
+     "full": "Caps the Referer header at the origin for cross-site requests, locked as managed policy. Mutually exclusive with Allow Permissive Referrers.",
+     "short": "Caps the Referer header at the origin for cross-site requests, locked as managed policy",
+     "group": "referrers",
+     "value": 2
+    },
+    {
+     "name": "Allow Permissive Referrers (unsafe-url)",
+     "key": "DefaultBraveReferrersSetting",
+     "full": "Sends your full referring URL cross-origin when a site requests it. Compatibility escape hatch only - this weakens privacy and is excluded from every preset. Mutually exclusive with Cap Referrers.",
+     "short": "Sends your full referring URL cross-origin when a site requests it",
+     "group": "referrers",
+     "value": 1
+    },
+    {
+     "name": "Forget First-Party Storage on Close",
+     "key": "DefaultBraveRemember1PStorageSetting",
+     "full": "Clears a site's cookies and storage when you close its last tab - sites forget you (and your logins) between visits.",
+     "short": "Clears a site's cookies and storage when you close its last tab - sites forget you (and your logins) between visits.",
+     "group": "",
+     "value": 2
+    }
+   ]
+  },
+  {
+   "name": "Performance & Bloat",
+   "rows": [
+    {
+     "name": "Disable Background Mode",
+     "key": "BackgroundModeEnabled",
+     "full": "Stops Brave from keeping background processes running after the last window is closed.",
+     "short": "Stops Brave from keeping background processes running after the last window is closed.",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Enable Memory Saver",
+     "key": "HighEfficiencyModeEnabled",
+     "full": "Forces Memory Saver on: inactive tabs are discarded to free RAM and reload when you return to them.",
+     "short": "Forces Memory Saver on: inactive tabs are discarded to free RAM and reload when you return to them.",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Force Hardware Acceleration",
+     "key": "HardwareAccelerationModeEnabled",
+     "full": "Pins GPU hardware acceleration on so rendering and video decode stay off the CPU. Takes effect after a browser restart.",
+     "short": "Pins GPU hardware acceleration on so rendering and video decode stay off the CPU",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Disable Media Router (Cast)",
+     "key": "EnableMediaRouter",
+     "full": "Disables the Google Cast media router and its background device discovery on the local network. Takes effect after a browser restart.",
+     "short": "Disables the Google Cast media router and its background device discovery on the local network",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Media Recommendations",
+     "key": "MediaRecommendationsEnabled",
+     "full": "Disables the media history and recommendation surfaces built from what you watch.",
+     "short": "Disables the media history and recommendation surfaces built from what you watch.",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Shopping List",
+     "key": "ShoppingListEnabled",
+     "full": "Disables the price-tracking shopping list feature.",
+     "short": "Disables the price-tracking shopping list feature.",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Always Open PDF Externally",
+     "key": "AlwaysOpenPdfExternally",
+     "full": "Downloads PDF files and opens them in your system PDF viewer instead of the built-in viewer.",
+     "short": "Downloads PDF files and opens them in your system PDF viewer instead of the built-in viewer.",
+     "group": "",
+     "value": true
+    },
+    {
+     "name": "Disable Translate",
+     "key": "TranslateEnabled",
+     "full": "Disables the built-in page translation feature and its popup prompts.",
+     "short": "Disables the built-in page translation feature and its popup prompts.",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Spellcheck",
+     "key": "SpellcheckEnabled",
+     "full": "Turns off spell checking in text fields entirely. Mutually exclusive with Disable Enhanced Spell Check, which keeps offline checking and only removes the Google lookup.",
+     "short": "Turns off spell checking in text fields entirely",
+     "group": "spellcheck",
+     "value": false
+    },
+    {
+     "name": "Disable Search Suggestions",
+     "key": "SearchSuggestEnabled",
+     "full": "Stops sending what you type in the address bar to your search engine for live suggestions.",
+     "short": "Stops sending what you type in the address bar to your search engine for live suggestions.",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Printing",
+     "key": "PrintingEnabled",
+     "full": "Disables printing from the browser entirely (including Ctrl+P).",
+     "short": "Disables printing from the browser entirely (including Ctrl+P).",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Default Browser Prompt",
+     "key": "DefaultBrowserSettingEnabled",
+     "full": "Stops Brave from asking to become your default browser.",
+     "short": "Stops Brave from asking to become your default browser.",
+     "group": "",
+     "value": false
+    },
+    {
+     "name": "Disable Developer Tools",
+     "key": "DeveloperToolsAvailability",
+     "full": "Blocks DevTools (F12) and extension debugging everywhere. Don't enable this if you do web development.",
+     "short": "Blocks DevTools (F12) and extension debugging everywhere",
+     "group": "",
+     "value": 2
+    },
+    {
+     "name": "Disable Wayback Machine",
+     "key": "BraveWaybackMachineEnabled",
+     "full": "Stops Brave from offering an archive.org snapshot when a page returns 404.",
+     "short": "Stops Brave from offering an archive.org snapshot when a page returns 404.",
+     "group": "",
+     "value": false
+    }
+   ]
+  }
+ ],
+ "presets": [
+  {
+   "name": "Maximum Privacy",
+   "blurb": "Everything privacy-related, at the cost of convenience.",
+   "count": 59,
+   "features": {
+    "MetricsReportingEnabled": false,
+    "SafeBrowsingExtendedReportingEnabled": false,
+    "UrlKeyedAnonymizedDataCollectionEnabled": false,
+    "BraveP3AEnabled": false,
+    "BraveStatsPingEnabled": false,
+    "AutofillAddressEnabled": false,
+    "AutofillCreditCardEnabled": false,
+    "PasswordManagerEnabled": false,
+    "PasswordLeakDetectionEnabled": false,
+    "BrowserSignin": 0,
+    "BraveGlobalPrivacyControlEnabled": true,
+    "BraveDeAmpEnabled": true,
+    "BraveDebouncingEnabled": true,
+    "BraveTrackingQueryParametersFilteringEnabled": true,
+    "BraveReduceLanguageEnabled": true,
+    "WebRtcIPHandling": "disable_non_proxied_udp",
+    "QuicAllowed": false,
+    "NetworkPredictionOptions": 2,
+    "BlockThirdPartyCookies": true,
+    "PaymentMethodQueryEnabled": false,
+    "AlternateErrorPagesEnabled": false,
+    "DefaultNotificationsSetting": 2,
+    "DefaultGeolocationSetting": 2,
+    "DefaultSensorsSetting": 2,
+    "BraveRewardsDisabled": true,
+    "BraveWalletDisabled": true,
+    "BraveVPNDisabled": true,
+    "BraveAIChatEnabled": false,
+    "BraveNewsDisabled": true,
+    "BraveTalkDisabled": true,
+    "BravePlaylistEnabled": false,
+    "BraveWebDiscoveryEnabled": false,
+    "BraveSpeedreaderEnabled": false,
+    "TorDisabled": true,
+    "SyncDisabled": true,
+    "EmailAliasesEnabled": false,
+    "DefaultBraveAdblockSetting": 2,
+    "DefaultBraveFingerprintingV2Setting": 3,
+    "DefaultBraveHttpsUpgradeSetting": 2,
+    "DefaultBraveReferrersSetting": 2,
+    "DefaultBraveRemember1PStorageSetting": 2,
+    "BackgroundModeEnabled": false,
+    "EnableMediaRouter": false,
+    "MediaRecommendationsEnabled": false,
+    "ShoppingListEnabled": false,
+    "AlwaysOpenPdfExternally": true,
+    "TranslateEnabled": false,
+    "SpellcheckEnabled": false,
+    "SearchSuggestEnabled": false,
+    "PrintingEnabled": false,
+    "DefaultBrowserSettingEnabled": false,
+    "DeveloperToolsAvailability": 2,
+    "BraveWaybackMachineEnabled": false,
+    "BraveLocalAIEnabled": false,
+    "DNSInterceptionChecksEnabled": false,
+    "RemoteDebuggingAllowed": false,
+    "BasicAuthOverHttpEnabled": false,
+    "BlockExternalExtensions": true,
+    "ChromeVariations": 1
+   },
+   "dns": "",
+   "tmpl": ""
+  },
+  {
+   "name": "Balanced Privacy",
+   "blurb": "Strong privacy that keeps the conveniences most people want.",
+   "count": 38,
+   "features": {
+    "MetricsReportingEnabled": false,
+    "SafeBrowsingExtendedReportingEnabled": false,
+    "UrlKeyedAnonymizedDataCollectionEnabled": false,
+    "BraveP3AEnabled": false,
+    "BraveStatsPingEnabled": false,
+    "AutofillCreditCardEnabled": false,
+    "BrowserSignin": 0,
+    "BraveGlobalPrivacyControlEnabled": true,
+    "BraveDeAmpEnabled": true,
+    "BraveDebouncingEnabled": true,
+    "BraveTrackingQueryParametersFilteringEnabled": true,
+    "BraveReduceLanguageEnabled": true,
+    "WebRtcIPHandling": "disable_non_proxied_udp",
+    "QuicAllowed": false,
+    "NetworkPredictionOptions": 2,
+    "BlockThirdPartyCookies": true,
+    "PaymentMethodQueryEnabled": false,
+    "AlternateErrorPagesEnabled": false,
+    "BraveRewardsDisabled": true,
+    "BraveWalletDisabled": true,
+    "BraveVPNDisabled": true,
+    "BraveAIChatEnabled": false,
+    "BraveNewsDisabled": true,
+    "BraveTalkDisabled": true,
+    "BraveWebDiscoveryEnabled": false,
+    "TorDisabled": true,
+    "SyncDisabled": true,
+    "BackgroundModeEnabled": false,
+    "MediaRecommendationsEnabled": false,
+    "ShoppingListEnabled": false,
+    "DefaultBrowserSettingEnabled": false,
+    "BraveLocalAIEnabled": false,
+    "DNSInterceptionChecksEnabled": false,
+    "RemoteDebuggingAllowed": false,
+    "BasicAuthOverHttpEnabled": false,
+    "BlockExternalExtensions": true,
+    "ChromeVariations": 1,
+    "SpellCheckServiceEnabled": false
+   },
+   "dns": "automatic",
+   "tmpl": ""
+  },
+  {
+   "name": "Performance Focused",
+   "blurb": "Speed and clutter, not privacy extremes.",
+   "count": 24,
+   "features": {
+    "MetricsReportingEnabled": false,
+    "BraveP3AEnabled": false,
+    "BraveStatsPingEnabled": false,
+    "BraveDeAmpEnabled": true,
+    "BraveDebouncingEnabled": true,
+    "BraveTrackingQueryParametersFilteringEnabled": true,
+    "BraveRewardsDisabled": true,
+    "BraveWalletDisabled": true,
+    "BraveVPNDisabled": true,
+    "BraveAIChatEnabled": false,
+    "BraveNewsDisabled": true,
+    "BraveTalkDisabled": true,
+    "BravePlaylistEnabled": false,
+    "BraveWebDiscoveryEnabled": false,
+    "BraveSpeedreaderEnabled": false,
+    "BackgroundModeEnabled": false,
+    "HighEfficiencyModeEnabled": true,
+    "HardwareAccelerationModeEnabled": true,
+    "EnableMediaRouter": false,
+    "MediaRecommendationsEnabled": false,
+    "ShoppingListEnabled": false,
+    "DefaultBrowserSettingEnabled": false,
+    "BraveWaybackMachineEnabled": false,
+    "BraveLocalAIEnabled": false
+   },
+   "dns": "automatic",
+   "tmpl": ""
+  },
+  {
+   "name": "Developer",
+   "blurb": "Telemetry off, dev tools and the network stack untouched.",
+   "count": 20,
+   "features": {
+    "MetricsReportingEnabled": false,
+    "SafeBrowsingExtendedReportingEnabled": false,
+    "UrlKeyedAnonymizedDataCollectionEnabled": false,
+    "BraveP3AEnabled": false,
+    "BraveStatsPingEnabled": false,
+    "AlternateErrorPagesEnabled": false,
+    "BraveRewardsDisabled": true,
+    "BraveWalletDisabled": true,
+    "BraveVPNDisabled": true,
+    "BraveAIChatEnabled": false,
+    "BraveNewsDisabled": true,
+    "BraveTalkDisabled": true,
+    "BackgroundModeEnabled": false,
+    "MediaRecommendationsEnabled": false,
+    "ShoppingListEnabled": false,
+    "DefaultBrowserSettingEnabled": false,
+    "BraveLocalAIEnabled": false,
+    "DNSInterceptionChecksEnabled": false,
+    "ChromeVariations": 1,
+    "SpellCheckServiceEnabled": false
+   },
+   "dns": "automatic",
+   "tmpl": ""
+  },
+  {
+   "name": "Strict Parental Controls",
+   "blurb": "Lockdown: filtered, no incognito, no extensions.",
+   "count": 23,
+   "features": {
+    "BraveP3AEnabled": false,
+    "BraveStatsPingEnabled": false,
+    "IncognitoModeAvailability": 1,
+    "BrowserGuestModeEnabled": false,
+    "ExtensionInstallBlocklist": [
+     "*"
+    ],
+    "ForceGoogleSafeSearch": true,
+    "SafeSitesFilterBehavior": 1,
+    "BrowserSignin": 0,
+    "BraveDeAmpEnabled": true,
+    "BraveDebouncingEnabled": true,
+    "BraveTrackingQueryParametersFilteringEnabled": true,
+    "BraveReduceLanguageEnabled": true,
+    "SyncDisabled": true,
+    "BraveRewardsDisabled": true,
+    "BraveWalletDisabled": true,
+    "BraveVPNDisabled": true,
+    "BraveAIChatEnabled": false,
+    "BraveNewsDisabled": true,
+    "BraveTalkDisabled": true,
+    "BraveWebDiscoveryEnabled": false,
+    "TorDisabled": true,
+    "DeveloperToolsAvailability": 2,
+    "RemoteDebuggingAllowed": false
+   },
+   "dns": "custom",
+   "tmpl": "https://family.cloudflare-dns.com/dns-query"
+  },
+  {
+   "name": "Brave Origin",
+   "blurb": "Clones Brave Origin's enforced policy set.",
+   "count": 15,
+   "features": {
+    "BraveP3AEnabled": false,
+    "BraveStatsPingEnabled": false,
+    "BraveRewardsDisabled": true,
+    "BraveWalletDisabled": true,
+    "BraveVPNDisabled": true,
+    "BraveAIChatEnabled": false,
+    "BraveLocalAIEnabled": false,
+    "BraveNewsDisabled": true,
+    "BraveTalkDisabled": true,
+    "BravePlaylistEnabled": false,
+    "BraveWebDiscoveryEnabled": false,
+    "BraveSpeedreaderEnabled": false,
+    "BraveWaybackMachineEnabled": false,
+    "TorDisabled": true,
+    "EmailAliasesEnabled": false
+   },
+   "dns": "",
+   "tmpl": ""
+  }
+ ],
+ "dnsModes": [
+  "unmanaged",
+  "automatic",
+  "off",
+  "secure",
+  "custom"
+ ]
+}
