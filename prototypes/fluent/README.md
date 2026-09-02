@@ -73,7 +73,9 @@ Exactly what the shipping tool writes, to
   Shields" would otherwise leave shields stuck off. Apply and Reset scrub them
   from every profile of every installed channel. Your own per-site exceptions
   are left alone. If Brave is running it says so and skips, because Chromium
-  would overwrite the fix on its next save.
+  would overwrite the fix on its next save. On a shared PC it repairs every
+  account that has Brave data, since the policy it writes is machine-wide and
+  the leak reaches all of them.
 - **Secure and custom DNS modes require a valid `https://` template.** Apply
   refuses without one: those modes send DNS over HTTPS only, so a missing or
   malformed resolver means nothing resolves at all, and the setting cannot be

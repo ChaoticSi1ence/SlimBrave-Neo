@@ -157,23 +157,59 @@ function Repair-OneBravePrefs([string]$pref) {
     return $removed
 }
 
-function Repair-BravePrefs {
-    # Every Brave channel runs as brave.exe on Windows.
-    $running = ($null -ne (Get-Process brave -ErrorAction SilentlyContinue))
-    # Chromium serves prefs from an in-memory PrefService and rewrites the file
-    # on shutdown, so a scrub done now is discarded the moment the user closes
-    # Brave - which is exactly what we tell them to do next. Report it instead
-    # of claiming a clean that will not survive.
-    if ($running) { return @{ Removed = 0; Running = $true; Skipped = $true } }
+function Get-UserAppDataRoots {
+    <#
+      Which LOCALAPPDATA roots hold a Brave profile worth scrubbing.
 
-    # Prefer the invoking user's profile root. After self-elevation under
-    # over-the-shoulder UAC, $env:LOCALAPPDATA belongs to the admin account and
-    # scrubbing it would silently clean nothing while reporting success.
-    $localAppData = $env:LOCALAPPDATA
+      The single-user case is the fast path and comes first: the invoking
+      user's own root. But the policy this tool writes lives in HKLM and
+      applies to every account on the machine, so on a shared PC the leaked
+      Shields exceptions land in every profile that opened Brave while it was
+      active - not just the one running this.
+
+      Other users' roots come from the ProfileList registry key rather than by
+      globbing C:\Users, because that key is the authoritative mapping and it
+      lets us filter to real interactive accounts (S-1-5-21-*), skipping
+      SYSTEM, service accounts, Default and Public.
+    #>
+    $roots = New-Object System.Collections.ArrayList
+    $primary = $env:LOCALAPPDATA
     if (-not [string]::IsNullOrWhiteSpace($script:OriginalLocalAppData)) {
-        $localAppData = $script:OriginalLocalAppData
+        $primary = $script:OriginalLocalAppData
+    }
+    if (-not [string]::IsNullOrWhiteSpace($primary)) {
+        [void]$roots.Add(@{ Path = $primary; Label = "this user" })
     }
 
+    $profileList = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
+    if (Test-Path $profileList) {
+        foreach ($sk in (Get-ChildItem $profileList -ErrorAction SilentlyContinue)) {
+            $sid = $sk.PSChildName
+            if ($sid -notlike "S-1-5-21-*") { continue }
+            $img = (Get-ItemProperty $sk.PSPath -ErrorAction SilentlyContinue).ProfileImagePath
+            if ([string]::IsNullOrWhiteSpace($img)) { continue }
+            $local = Join-Path $img "AppData\Local"
+            # Another user's profile is unreadable when this is running
+            # unelevated, and Test-Path surfaces that as a visible error even
+            # though the miss is handled. Silence it: an unreadable root is
+            # simply one we cannot repair.
+            if (-not (Test-Path $local -ErrorAction SilentlyContinue)) { continue }
+            $already = $false
+            foreach ($r in $roots) {
+                if ($r.Path -and ($r.Path.TrimEnd('\') -ieq $local.TrimEnd('\'))) { $already = $true; break }
+            }
+            if ($already) { continue }
+            # only bother with accounts that actually have Brave data
+            if (-not (Test-Path (Join-Path $local "BraveSoftware") -ErrorAction SilentlyContinue)) { continue }
+            [void]$roots.Add(@{ Path = $local; Label = (Split-Path $img -Leaf) })
+        }
+    }
+    return $roots
+}
+
+function Repair-OneUserRoot([string]$localAppData) {
+    # One unreadable or locked profile must not abort the sweep - the other
+    # users on the machine still deserve their repair.
     $removed = 0
     foreach ($channelDir in @('Brave-Browser', 'Brave-Browser-Beta', 'Brave-Browser-Nightly', 'Brave-Browser-Dev')) {
         $userData = Join-Path $localAppData "BraveSoftware\$channelDir\User Data"
@@ -181,10 +217,29 @@ function Repair-BravePrefs {
         $profileDirs = Get-ChildItem -Path $userData -Directory -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' }
         foreach ($dir in $profileDirs) {
-            $removed += Repair-OneBravePrefs (Join-Path $dir.FullName 'Preferences')
+            try { $removed += Repair-OneBravePrefs (Join-Path $dir.FullName 'Preferences') } catch { }
         }
     }
-    return @{ Removed = $removed; Running = $false; Skipped = $false }
+    return $removed
+}
+
+function Repair-BravePrefs {
+    # Every Brave channel runs as brave.exe on Windows.
+    $running = ($null -ne (Get-Process brave -ErrorAction SilentlyContinue))
+    # Chromium serves prefs from an in-memory PrefService and rewrites the file
+    # on shutdown, so a scrub done now is discarded the moment the user closes
+    # Brave - which is exactly what we tell them to do next. Report it instead
+    # of claiming a clean that will not survive.
+    if ($running) { return @{ Removed = 0; Running = $true; Skipped = $true; Users = 0 } }
+
+    $removed = 0
+    $users = 0
+    foreach ($root in Get-UserAppDataRoots) {
+        $n = Repair-OneUserRoot $root.Path
+        if ($n -gt 0) { $users++ }
+        $removed += $n
+    }
+    return @{ Removed = $removed; Running = $false; Skipped = $false; Users = $users }
 }
 
 function Get-RepairNote($repair) {
@@ -194,6 +249,11 @@ function Get-RepairNote($repair) {
     if ($repair.Removed -gt 0) {
         $plural = ""
         if ($repair.Removed -ne 1) { $plural = "s" }
+        # Machine policy applies to every account, so say when the repair
+        # reached beyond the person sitting here.
+        if ($repair.Users -gt 1) {
+            return " Also cleaned $($repair.Removed) leaked profile pref$plural across $($repair.Users) user profiles on this PC."
+        }
         return " Also cleaned $($repair.Removed) leaked profile pref$plural that earlier SlimBrave versions wrote into your Brave profile."
     }
     return ""
