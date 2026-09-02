@@ -1,14 +1,14 @@
-# SlimBrave Fluent v0.5 - full parity prototype (Win11 Settings style).
-# 78 rows, 6 presets, DNS page, action bar, expandable descriptions.
-# PowerShell 5.1 + GDI+ owner-draw. Writes nothing anywhere.
 
 # Forwarded by the elevation relaunch below, never passed by hand. After
-# elevation $env:LOCALAPPDATA belongs to whichever account approved UAC, which
-# under over-the-shoulder UAC is the admin and not the user whose Brave profile
-# holds the leaked prefs. This carries the invoking user's path across.
+# elevation $env:LOCALAPPDATA and HKCU belong to whichever account approved
+# UAC, which under over-the-shoulder UAC is the admin and not the user whose
+# Brave profile holds the leaked prefs. These carry the invoking user's path
+# and SID across. $OriginalSid is read further down; dropping it from this
+# block does not fail loudly, it silently scrubs the wrong hive.
 # Must stay the literal first statement of the file.
 param (
-    [string] $OriginalLocalAppData
+    [string] $OriginalLocalAppData,
+    [string] $OriginalSid
 )
 
 # SlimBrave Neo - debloat and harden Brave Browser on Windows.
@@ -38,9 +38,15 @@ if (-not $isAdmin) {
         exit 1
     }
     try {
+        # ONE quoted string, not an array: Start-Process joins an array with
+        # spaces and quotes nothing, so any path containing a space (OneDrive,
+        # "John Smith") silently launches the wrong thing. -NoProfile keeps the
+        # elevating admin's PowerShell profile out of this process.
+        $currentSid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+        $relaunchArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$($script:selfPath)`"" +
+            " -OriginalLocalAppData `"$env:LOCALAPPDATA`" -OriginalSid `"$currentSid`""
         Start-Process -FilePath "powershell.exe" -Verb RunAs -ErrorAction Stop `
-            -ArgumentList @("-ExecutionPolicy", "Bypass", "-File", $script:selfPath,
-                            "-OriginalLocalAppData", $env:LOCALAPPDATA)
+            -ArgumentList $relaunchArgs
     } catch {
         # A declined UAC prompt is non-terminating without -ErrorAction Stop,
         # so without this the original would exit silently and look broken.
@@ -1068,7 +1074,38 @@ function Get-RowPolicyValue($row) {
         return $row.choices[$st.Sel][1]
     }
     if (-not $st.On) { return $null }
+    # Unary comma: PowerShell unrolls a one-element array on return, which turns
+    # ExtensionInstallBlocklist = @("*") into a bare string, so Get-RowRegType
+    # calls it String and it is written as REG_SZ instead of a policy list.
+    # Chromium then ignores it while the UI reports success.
+    if ($row.value -is [array]) { return ,$row.value }
     return $row.value
+}
+
+function Get-DeclaredListValues {
+    # Every List row's declared value, keyed by policy key. Used as the
+    # ownership baseline when deciding whether a list on disk is ours.
+    $map = @{}
+    foreach ($row in Get-AllRows) {
+        if ($row.value -is [array]) { $map[$row.key] = [string[]]$row.value }
+    }
+    return $map
+}
+
+function Remove-OwnedListPolicy([string]$Scope, [string]$Key, $DeclaredLists) {
+    # An unticked List row does NOT mean "no list is set". Re-sync only ticks
+    # the box on a match, so an admin's own - or a GPO's, or Intune's -
+    # ExtensionInstallBlocklist leaves it unticked, and removing the subkey
+    # would destroy a policy SlimBrave never wrote. Only remove a list that is
+    # exactly ours. Non-list keys are unaffected.
+    if (-not (Test-Path $Scope)) { return $false }
+    if ($DeclaredLists.ContainsKey($Key) -and
+        -not (Test-ListPolicyIsExactly -RegistryPath $Scope -Name $Key `
+                                       -Expected $DeclaredLists[$Key])) {
+        return $false
+    }
+    Remove-ListPolicy $Scope $Key
+    return $true
 }
 
 function Get-RowRegType($value) {
@@ -1323,6 +1360,8 @@ function Invoke-ApplyPolicy {
         if ($null -eq $v) { continue }
         $selected[$row.key] = @{ Key = $row.key; Value = $v; Type = (Get-RowRegType $v) }
     }
+    $declaredLists = Get-DeclaredListValues
+    $skippedLists = @{}
     $uniqueKeys = (Get-AllRows | ForEach-Object { $_.key } | Select-Object -Unique)
     $written = 0
     foreach ($key in $uniqueKeys) {
@@ -1343,8 +1382,11 @@ function Invoke-ApplyPolicy {
                 $written++
             } catch { }
         } else {
-            Remove-ListPolicy $script:machineReg $key
-            if (Test-Path $script:userReg) { Remove-ListPolicy $script:userReg $key }
+            foreach ($scope in @($script:machineReg, $script:userReg)) {
+                if (-not (Remove-OwnedListPolicy $scope $key $declaredLists)) {
+                    if ($declaredLists.ContainsKey($key)) { $skippedLists[$key] = $true }
+                }
+            }
         }
     }
 
@@ -1387,9 +1429,15 @@ function Invoke-ResetPolicy {
         return $false
     }
     $uniqueKeys = (Get-AllRows | ForEach-Object { $_.key } | Select-Object -Unique)
+    $declaredLists = Get-DeclaredListValues
+    $skippedLists = @{}
     foreach ($scope in @($script:machineReg, $script:userReg)) {
         if (-not (Test-Path $scope)) { continue }
-        foreach ($key in $uniqueKeys) { Remove-ListPolicy $scope $key }
+        foreach ($key in $uniqueKeys) {
+            if (-not (Remove-OwnedListPolicy $scope $key $declaredLists)) {
+                if ($declaredLists.ContainsKey($key)) { $skippedLists[$key] = $true }
+            }
+        }
         Remove-ItemProperty -Path $scope -Name "DnsOverHttpsMode" -ErrorAction SilentlyContinue
         Remove-ItemProperty -Path $scope -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
     }
@@ -1397,7 +1445,12 @@ function Invoke-ResetPolicy {
     $script:dnsState.Mode = 0
     $script:dnsState.Tmpl = ""
     $repair = Repair-BravePrefs
-    Set-Status ("Reset. Only keys SlimBrave Neo manages were removed." + (Get-RepairNote $repair))
+    $note = "Reset. Only keys SlimBrave Neo manages were removed."
+    if ($skippedLists.Count -gt 0) {
+        $note += " Left $($skippedLists.Count) externally-managed list policy" +
+                 $(if ($skippedLists.Count -eq 1) { "" } else { "s" }) + " alone."
+    }
+    Set-Status ($note + (Get-RepairNote $repair))
     return $true
 }
 
@@ -1462,7 +1515,17 @@ function Import-PresetIntoState($preset) {
                 if ([string]$row.choices[$i][1] -eq [string]$want) { $script:state[$row.Id].Sel = $i; break }
             }
         } elseif ($row.value -is [array]) {
-            $script:state[$row.Id].On = $true
+            # Match the VALUE, not merely the key. Ticking on key presence alone
+            # means an imported single-site exception such as
+            # BraveShieldsDisabledForUrls = ["https://intranet.example"] stages
+            # this row, and Apply then writes SlimBrave's own wildcard - turning
+            # one site into the whole web.
+            $wantList = @(); foreach ($x in @($want)) { $wantList += [string]$x }
+            $mine = @();     foreach ($x in $row.value) { $mine += [string]$x }
+            if ($wantList.Count -eq $mine.Count -and
+                -not (Compare-Object $wantList $mine)) {
+                $script:state[$row.Id].On = $true
+            }
         } else {
             if ([string](ConvertTo-RegValue $want) -eq [string](ConvertTo-RegValue $row.value)) {
                 $script:state[$row.Id].On = $true
@@ -2107,6 +2170,18 @@ function New-PresetCard($preset,[int]$y){
 }
 
 # --------------------------------------------------------------- DNS page
+# Script scope on purpose: the Leave handler fires long after Build-DnsPage
+# has returned, and a nested function is out of scope by then - every blur of
+# the template box threw CommandNotFoundException.
+$script:tmplHint = "https://dns.example/dns-query"
+function Sync-TmplHint($box){
+    if($box.Focused){ return }
+    if([string]::IsNullOrEmpty($box.Tag)){
+        $box.ForeColor=[System.Drawing.Color]::FromArgb(96,96,96)
+        $box.Text=$script:tmplHint
+    }
+}
+
 function Build-DnsPage {
     $card=New-Object System.Windows.Forms.Panel
     $card.Location=New-Object System.Drawing.Point 2,4
@@ -2171,14 +2246,6 @@ function Build-DnsPage {
 
     # .NET Framework has no PlaceholderText, so fake one: grey hint while the
     # box is empty and unfocused, cleared the moment the user types.
-    $script:tmplHint="https://dns.example/dns-query"
-    function Sync-TmplHint($box){
-        if($box.Focused){ return }
-        if([string]::IsNullOrEmpty($box.Tag)){
-            $box.ForeColor=[System.Drawing.Color]::FromArgb(96,96,96)
-            $box.Text=$script:tmplHint
-        }
-    }
     $tmpl.Tag=""
     $tmpl.Add_Enter({
         if([string]::IsNullOrEmpty($this.Tag)){ $this.Text="" }
