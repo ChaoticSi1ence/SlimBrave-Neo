@@ -194,7 +194,10 @@ function New-NavItem([int]$idx,[string]$name,[int]$y){
     })
     $it.Add_MouseEnter({$this.Tag.Hot=$true;$this.Invalidate()})
     $it.Add_MouseLeave({$this.Tag.Hot=$false;$this.Invalidate()})
-    $it.Add_Click({ Select-Page $this.Tag.Idx })
+    $it.Add_Click({
+        if($script:searchBox -and $script:searchBox.Text){ $script:searchBox.Text="" }
+        Select-Page $this.Tag.Idx
+    })
     $it.Cursor=[System.Windows.Forms.Cursors]::Hand
     $rail.Controls.Add($it); return $it
 }
@@ -213,6 +216,44 @@ $pageTitle=New-Object System.Windows.Forms.Label
 $pageTitle.Font=$script:titleFont; $pageTitle.ForeColor=$F.Text; $pageTitle.BackColor=$F.Bg
 $pageTitle.Location=New-Object System.Drawing.Point 280,38; $pageTitle.AutoSize=$true
 $pageTitle.UseMnemonic=$false; $form.Controls.Add($pageTitle)
+
+# Search box. Sits in the header so it is reachable from any page, not just
+# All Options - a policy you cannot name is exactly the one you need to find.
+$searchHost=New-Object System.Windows.Forms.Panel
+$searchHost.Location=New-Object System.Drawing.Point 880,34
+$searchHost.Size=New-Object System.Drawing.Size 272,32
+$searchHost.BackColor=$F.Bg
+Enable-DoubleBuffer $searchHost
+$searchHost.Add_Paint({
+    param($s,$e); $g=$e.Graphics
+    $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $g.Clear($script:F.Bg)
+    $r=New-Object System.Drawing.RectangleF 0,0,($s.Width-1),($s.Height-1)
+    Fill-Round $g $r 4 $script:F.Row
+    $edge=$script:F.RowEdge
+    if($script:searchBox -and $script:searchBox.Focused){ $edge=$script:F.Accent }
+    Stroke-Round $g $r 4 $edge
+    $ib=New-Object System.Drawing.SolidBrush $script:F.TextSub
+    $gl=[char]0xE721
+    $g.DrawString($gl,$script:iconFont,$ib,9,7,$script:SF); $ib.Dispose()
+    if(-not $script:searchBox -or [string]::IsNullOrEmpty($script:searchBox.Text)){
+        $pb=New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(110,110,110))
+        $g.DrawString("Search policies and descriptions",$script:capFont,$pb,34,9,$script:SF)
+        $pb.Dispose()
+    }
+})
+$form.Controls.Add($searchHost)
+
+$script:searchBox=New-Object System.Windows.Forms.TextBox
+$script:searchBox.BorderStyle=[System.Windows.Forms.BorderStyle]::None
+$script:searchBox.Font=$script:rowFont
+$script:searchBox.BackColor=$F.Row
+$script:searchBox.ForeColor=$F.Text
+$script:searchBox.Location=New-Object System.Drawing.Point 34,8
+$script:searchBox.Size=New-Object System.Drawing.Size 228,20
+$searchHost.Controls.Add($script:searchBox)
+$script:searchBox.Add_GotFocus({ $searchHost.Invalidate() })
+$script:searchBox.Add_LostFocus({ $searchHost.Invalidate() })
 
 $page=New-Object System.Windows.Forms.Panel
 $page.Location=New-Object System.Drawing.Point 270,80
@@ -581,7 +622,8 @@ function New-SectionHeader([string]$text,[int]$y,[int]$count){
         $g.DrawString($s.Tag.T,$script:pTitle,$tb,4,12,$script:SF); $tb.Dispose()
         $w=[int]($g.MeasureString($s.Tag.T,$script:pTitle,1000,$script:SF).Width)
         $cb=New-Object System.Drawing.SolidBrush $script:F.TextSub
-        $g.DrawString("$($s.Tag.N)",$script:capFont,$cb,($w+12),16,$script:SF); $cb.Dispose()
+        if($s.Tag.N -gt 0){ $g.DrawString("$($s.Tag.N)",$script:capFont,$cb,($w+12),16,$script:SF) }
+        $cb.Dispose()
         $p=New-Object System.Drawing.Pen $script:F.RowEdge
         $g.DrawLine($p,($w+34),24,835,24); $p.Dispose()
     })
@@ -778,6 +820,76 @@ function Build-DnsPage {
 }
 
 # --------------------------------------------------------------- page switch
+function Get-SearchMatches([string]$query){
+    # Token matching over name + key + full description, so a word that only
+    # appears in the prose still finds the row. Each token must hit somewhere
+    # (AND), which makes "password leak" narrower than either word alone.
+    # Trailing "s" is trimmed on both sides so "passwords" finds "password".
+    $tokens=@($query.ToLower() -split '\s+' | Where-Object { $_ })
+    if(-not $tokens){ return @() }
+    $hits=@()
+    for($ci=0;$ci -lt $script:cats.Count;$ci++){
+        $cat=$script:cats[$ci]
+        foreach($row in $cat.rows){
+            $name=[string]$row.name
+            $desc=[string]$row.full
+            $key=[string]$row.key
+            $hay=("$name $key $desc $($cat.name)").ToLower()
+            $stemHay=($hay -replace 's\b','')
+            $titleHay=("$name $key").ToLower()
+            $titleStem=($titleHay -replace 's\b','')
+            $all=$true; $score=0
+            foreach($tok in $tokens){
+                $stem=$tok -replace 's$',''
+                if($hay.Contains($tok) -or $stemHay.Contains($stem)){
+                    # a title or key hit ranks above a description-only hit
+                    if($titleHay.Contains($tok) -or $titleStem.Contains($stem)){ $score+=10 }
+                    else { $score+=3 }
+                } else { $all=$false; break }
+            }
+            if($all){ $hits+=@{Row=$row;Cat=$cat.name;Score=$score} }
+        }
+    }
+    return ($hits | Sort-Object -Property @{Expression={$_.Score};Descending=$true},
+                                          @{Expression={$_.Row.name}})
+}
+
+function Show-SearchResults([string]$query){
+    $hits=Get-SearchMatches $query
+    $pageTitle.Text="Search"
+    $n=@($hits).Count
+    $word="matches"; if($n -eq 1){ $word="match" }
+    $crumb.Text="SlimBrave Neo  >  Search  -  $n $word for `"$query`""
+    foreach($n2 in $script:navItems){ $n2.Invalidate() }
+    $page.SuspendLayout()
+    $page.AutoScrollPosition=New-Object System.Drawing.Point 0,0
+    $page.AutoScrollMinSize=New-Object System.Drawing.Size 0,0
+    $page.Controls.Clear(); $script:rowPanels=@()
+    $y=4
+    if($n -eq 0){
+        $empty=New-Object System.Windows.Forms.Label
+        $empty.Text="Nothing matches `"$query`"."
+        $empty.Font=$script:rowFont; $empty.ForeColor=$F.TextSub
+        $empty.BackColor=$F.Bg; $empty.AutoSize=$true
+        $empty.Location=New-Object System.Drawing.Point 6,12
+        $page.Controls.Add($empty)
+    } else {
+        $lastCat=""
+        foreach($h in $hits){
+            if($h.Cat -ne $lastCat){
+                $hd=New-SectionHeader $h.Cat $y 0
+                $page.Controls.Add($hd); $script:rowPanels+=$hd; $y+=42
+                $lastCat=$h.Cat
+            }
+            $rp=New-FluentRow $h.Row $y
+            $page.Controls.Add($rp); $script:rowPanels+=$rp; $y+=68
+        }
+    }
+    $page.ResumeLayout()
+    $page.AutoScrollPosition=New-Object System.Drawing.Point 0,0
+    $page.Invalidate($true); $page.Update()
+}
+
 function Select-Page([int]$idx){
     $script:sel=$idx
     foreach($n in $script:navItems){$n.Invalidate()}
@@ -825,6 +937,16 @@ function Select-Page([int]$idx){
     $page.AutoScrollPosition=New-Object System.Drawing.Point 0,0
     $page.Invalidate($true); $page.Update()
 }
+
+$script:searchBox.Add_TextChanged({
+    $q=$this.Text.Trim()
+    $searchHost.Invalidate()
+    if([string]::IsNullOrWhiteSpace($q)){ Select-Page $script:sel } else { Show-SearchResults $q }
+})
+$script:searchBox.Add_KeyDown({
+    param($s,$ev)
+    if($ev.KeyCode -eq [System.Windows.Forms.Keys]::Escape){ $s.Text="" }
+})
 
 if(Test-Path $script:machineReg){ Sync-FromRegistry } else { Set-Status "No Brave policy set on this machine" }
 Select-Page 0

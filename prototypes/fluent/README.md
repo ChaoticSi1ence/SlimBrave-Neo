@@ -33,6 +33,13 @@ under its title — *"Stops the daily usage ping that counts this install in
 Brave's active-user statistics"* — rather than hiding it in a tooltip. Where
 the text is longer than the row, a chevron expands it in place.
 
+**Search finds policies by what they do.** The box in the header searches
+titles, policy keys, category names *and* the descriptions — so typing
+`passwords` surfaces "Require HTTPS for Basic Auth" even though its title never
+says the word, and `telemetry` returns the whole reporting section. Multiple
+words narrow the results, plurals match singulars, and title matches rank above
+prose matches. Escape clears it.
+
 **Navigate, or don't.** A sidebar splits the policies into seven categories.
 If you would rather not click through them, **All Options** lists all 78 in one
 scroll with section headers.
@@ -77,7 +84,6 @@ Not yet included:
   exceptions that pre-1.x versions wrote into the browser profile. If you have
   used a very old SlimBrave on this machine, run the released `SlimBrave.ps1`
   once to clean those up.
-- **No search on the All Options page.**
 - Only the Windows GUI is rebuilt; the Linux and macOS TUIs are unchanged.
 
 If something behaves differently from the released tool, that is a bug worth
