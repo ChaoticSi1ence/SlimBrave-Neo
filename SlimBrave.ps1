@@ -1390,20 +1390,32 @@ function Invoke-ApplyPolicy {
         }
     }
 
-    if ($mode -eq "unmanaged") {
-        foreach ($scope in @($script:machineReg, $script:userReg)) {
-            if (Test-Path $scope) {
-                Remove-ItemProperty -Path $scope -Name "DnsOverHttpsMode" -ErrorAction SilentlyContinue
-                Remove-ItemProperty -Path $scope -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
-            }
+    # Clear BOTH scopes first, unconditionally. The managed branch below used
+    # to write HKLM only and never touch the user-scope twin, unlike every other
+    # key here - so a leftover HKCU DnsOverHttpsTemplates from an older tool
+    # survived, stayed invisible to Read-LivePolicy (machine scope only), and
+    # could still be the template Chromium honoured.
+    foreach ($scope in @($script:machineReg, $script:userReg)) {
+        if (Test-Path $scope) {
+            Remove-ItemProperty -Path $scope -Name "DnsOverHttpsMode" -ErrorAction SilentlyContinue
+            Remove-ItemProperty -Path $scope -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
         }
+    }
+    if ($mode -eq "unmanaged") {
+        # nothing further: the scrub above is the whole action
     } else {
         # "custom" is Chromium's "secure" plus a template; the UI keeps them
         # apart so the template field can be required for one and not the other.
         $writeMode = $mode
         if ($mode -eq "custom") { $writeMode = "secure" }
         Set-ItemProperty -Path $script:machineReg -Name "DnsOverHttpsMode" -Value $writeMode -Type String -Force
-        $wantsTemplate = ($mode -eq "custom" -or $mode -eq "secure" -or $mode -eq "automatic")
+        # Chromium does honour a template in "automatic" mode, but this UI
+        # greys the template box out there and captions it "Only used by the
+        # custom and secure modes". Writing it anyway pinned a resolver the
+        # interface said was inactive, with the box disabled so it could not be
+        # cleared. Match what the user is shown; "custom" is the way to pair a
+        # template with a mode here.
+        $wantsTemplate = ($mode -eq "custom" -or $mode -eq "secure")
         if ($wantsTemplate -and -not [string]::IsNullOrWhiteSpace($script:dnsState.Tmpl)) {
             Set-ItemProperty -Path $script:machineReg -Name "DnsOverHttpsTemplates" `
                 -Value $script:dnsState.Tmpl -Type String -Force
@@ -1507,7 +1519,33 @@ function Sync-FromRegistry {
 function Import-PresetIntoState($preset) {
     foreach ($id in @($script:state.Keys)) { $script:state[$id].On = $false; $script:state[$id].Sel = 0 }
     $feat = $preset.features
+    if ($feat -is [array]) {
+        # Legacy pre-2026 export: Features was a bare ARRAY of policy key names,
+        # not an object of key/value pairs. main carried an explicit branch for
+        # this; without one, PSObject.Properties[$key] is $null for every row,
+        # so the import staged nothing and still reported success - after having
+        # already cleared the user's selections above.
+        $names = @()
+        foreach ($n in $feat) { $names += [string]$n }
+        foreach ($row in Get-AllRows) {
+            if ($names -notcontains $row.key) { continue }
+            if ($script:state[$row.Id].On -or $script:state[$row.Id].Sel -gt 0) { continue }
+            if (Test-IsChoiceRow $row) {
+                for ($i = 1; $i -lt $row.choices.Count; $i++) {
+                    if ([string]$row.choices[$i][1] -eq [string]$row.value) {
+                        $script:state[$row.Id].Sel = $i; break
+                    }
+                }
+            } else {
+                # A bare key in the legacy format means "apply this row's own
+                # declared value", which is what the row is ticked to write.
+                $script:state[$row.Id].On = $true
+            }
+        }
+        $feat = $null
+    }
     foreach ($row in Get-AllRows) {
+        if ($null -eq $feat) { continue }
         if ($null -eq $feat.PSObject.Properties[$row.key]) { continue }
         $want = $feat.$($row.key)
         if (Test-IsChoiceRow $row) {
@@ -1826,8 +1864,17 @@ function New-BarButton([string]$label,[bool]$accent,[int]$x){
                         $out.DnsMode=$m
                         if($script:dnsState.Tmpl){ $out.DnsTemplates=$script:dnsState.Tmpl }
                     }
-                    ($out | ConvertTo-Json -Depth 5) | Set-Content -Path $dlg.FileName -Encoding UTF8
-                    Set-Status "Exported $($feat.Count) policies"
+                    # Set-Content failure is NON-terminating, so without this
+                    # the success status ran even when nothing was written -
+                    # a locked, read-only or full target reported "Exported".
+                    try{
+                        [System.IO.File]::WriteAllText($dlg.FileName,
+                            ($out | ConvertTo-Json -Depth 5),
+                            (New-Object System.Text.UTF8Encoding $false))
+                        Set-Status "Exported $($feat.Count) policies"
+                    } catch {
+                        Set-Status "Export failed - $($_.Exception.Message)"
+                    }
                 }
             }
             "Import" {
@@ -2148,8 +2195,8 @@ function New-PresetCard($preset,[int]$y){
         $cb=New-Object System.Drawing.SolidBrush $script:F.TextSub
         $g.DrawString($st.P.blurb,$script:capFont,$cb,18,40,$script:SF)
         $g.DrawString("$($st.P.count) policies",$script:capFont,$cb,18,56,$script:SF); $cb.Dispose()
-        $bw=110
-        $br=New-Object System.Drawing.RectangleF (815-$bw),24,$bw,32
+        $bw=$script:PC_BW
+        $br=New-Object System.Drawing.RectangleF $script:PC_BX,$script:PC_BY,$bw,$script:PC_BH
         $bg=$script:F.RowHot; if($st.Hot){$bg=$script:F.Accent}
         Fill-Round $g $br 4 $bg
         if(-not $st.Hot){ Stroke-Round $g $br 4 $script:F.RowEdge }
@@ -2158,15 +2205,37 @@ function New-PresetCard($preset,[int]$y){
         $sz=$g.MeasureString("Load",$script:btnFont,1000,$script:SF)
         $g.DrawString("Load",$script:btnFont,$lb,($br.X+($bw-$sz.Width)/2),($br.Y+7),$script:SF); $lb.Dispose()
     })
-    $p.Add_MouseEnter({$this.Tag.Hot=$true;$this.Invalidate()})
-    $p.Add_MouseLeave({$this.Tag.Hot=$false;$this.Invalidate()})
-    $p.Add_Click({
-        Import-PresetIntoState $this.Tag.P
-        Select-Page $script:sel
-        Set-Status "$($this.Tag.P.name) loaded - $($this.Tag.P.count) policies staged. Nothing is written until Apply."
+    # Same zone discipline as the setting rows: loading a preset DISCARDS every
+    # staged selection, so a stray click on the blurb the user is reading must
+    # not do it. Only the drawn Load button responds, and only it lights up.
+    $p.Add_MouseMove({
+        param($s,$ev)
+        $over=(Test-InPresetButton $ev.X $ev.Y)
+        if($s.Tag.Hot -ne $over){ $s.Tag.Hot=$over; $s.Invalidate() }
+        if($over){ $s.Cursor=[System.Windows.Forms.Cursors]::Hand }
+        else     { $s.Cursor=[System.Windows.Forms.Cursors]::Default }
     })
-    $p.Cursor=[System.Windows.Forms.Cursors]::Hand
+    $p.Add_MouseLeave({$this.Tag.Hot=$false;$this.Invalidate()})
+    $p.Add_MouseDown({
+        param($s,$ev)
+        if(-not (Test-InPresetButton $ev.X $ev.Y)){ return }
+        Import-PresetIntoState $s.Tag.P
+        Select-Page $script:sel
+        Set-Status "$($s.Tag.P.name) loaded - $($s.Tag.P.count) policies staged. Nothing is written until Apply."
+    })
     return $p
+}
+
+# Shared by New-PresetCard's Paint and its hit-testing. Kept as constants for
+# the same reason the row control columns are: when the drawn rect and the
+# clickable rect were computed separately, they drifted apart.
+$script:PC_BX = 705
+$script:PC_BY = 24
+$script:PC_BW = 110
+$script:PC_BH = 32
+function Test-InPresetButton($x, $y) {
+    return ($x -ge $script:PC_BX -and $x -le ($script:PC_BX + $script:PC_BW) -and
+            $y -ge $script:PC_BY -and $y -le ($script:PC_BY + $script:PC_BH))
 }
 
 # --------------------------------------------------------------- DNS page
