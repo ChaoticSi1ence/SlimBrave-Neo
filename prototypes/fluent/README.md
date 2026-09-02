@@ -67,6 +67,13 @@ Exactly what the shipping tool writes, to
 - **Re-sync** re-reads the registry into the interface.
 - **Export / Import** use the same JSON format as the released tool, so configs
   move between the two.
+- **Leaked Shields exceptions are repaired**, same as the released tool. Brave
+  writes managed `*ForUrls` policies through into each profile's preferences,
+  and removing the policy does not roll them back — so unticking "Disable Brave
+  Shields" would otherwise leave shields stuck off. Apply and Reset scrub them
+  from every profile of every installed channel. Your own per-site exceptions
+  are left alone. If Brave is running it says so and skips, because Chromium
+  would overwrite the fix on its next save.
 - **Secure and custom DNS modes require a valid `https://` template.** Apply
   refuses without one: those modes send DNS over HTTPS only, so a missing or
   malformed resolver means nothing resolves at all, and the setting cannot be
@@ -80,10 +87,6 @@ the years of use the shipping script has.
 
 Not yet included:
 
-- **No leaked-preference repair.** The released tool scrubs stale Shields
-  exceptions that pre-1.x versions wrote into the browser profile. If you have
-  used a very old SlimBrave on this machine, run the released `SlimBrave.ps1`
-  once to clean those up.
 - Only the Windows GUI is rebuilt; the Linux and macOS TUIs are unchanged.
 
 If something behaves differently from the released tool, that is a bug worth

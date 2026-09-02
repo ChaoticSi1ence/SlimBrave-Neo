@@ -2,6 +2,15 @@
 # 78 rows, 6 presets, DNS page, action bar, expandable descriptions.
 # PowerShell 5.1 + GDI+ owner-draw. Writes nothing anywhere.
 
+# Forwarded by the elevation relaunch below, never passed by hand. After
+# elevation $env:LOCALAPPDATA belongs to whichever account approved UAC, which
+# under over-the-shoulder UAC is the admin and not the user whose Brave profile
+# holds the leaked prefs. This carries the invoking user's path across.
+# Must stay the literal first statement of the file.
+param (
+    [string] $OriginalLocalAppData
+)
+
 # SlimBrave Neo - Fluent GUI (beta). Relaunches itself elevated so Apply and
 # Reset can write machine policy. Capture the path BEFORE anything else: under
 # `iex (irm ...)` or an unsaved buffer $MyInvocation.MyCommand.Path is empty,
@@ -24,7 +33,8 @@ if (-not $isAdmin) {
     }
     try {
         Start-Process -FilePath "powershell.exe" -Verb RunAs -ErrorAction Stop `
-            -ArgumentList @("-ExecutionPolicy", "Bypass", "-File", $script:selfPath)
+            -ArgumentList @("-ExecutionPolicy", "Bypass", "-File", $script:selfPath,
+                            "-OriginalLocalAppData", $env:LOCALAPPDATA)
     } catch {
         # A declined UAC prompt is non-terminating without -ErrorAction Stop,
         # so without this the original would exit silently and look broken.
@@ -55,6 +65,7 @@ $data = Get-Content "$PSScriptRoot\catalog.json" -Raw | ConvertFrom-Json
 $script:cats = $data.categories
 $script:presets = $data.presets
 $script:dnsModes = $data.dnsModes
+$script:OriginalLocalAppData = $OriginalLocalAppData
 . "$PSScriptRoot\engine.ps1"
 Initialize-State
 

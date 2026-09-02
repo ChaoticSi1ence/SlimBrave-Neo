@@ -119,6 +119,86 @@ function Test-DohTemplate([string]$Raw) {
     return @{ Ok = $true; Value = $v; Reason = "" }
 }
 
+# ---------------------------------------------------------------------------
+# LEAKED SHIELDS EXCEPTIONS
+# Brave writes managed *ForUrls content-setting policies through to each
+# profile's Preferences file. Removing the policy from the registry does NOT
+# roll those entries back, so unticking "Disable Brave Shields" leaves shields
+# stuck off. They land in every profile of every installed channel, because the
+# registry policy applies to all of them.
+# ---------------------------------------------------------------------------
+function Repair-OneBravePrefs([string]$pref) {
+    if (-not (Test-Path $pref)) { return 0 }
+    try { $j = Get-Content $pref -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return 0 }
+    $bs = $null
+    if ($j.profile -and $j.profile.content_settings -and $j.profile.content_settings.exceptions) {
+        $bs = $j.profile.content_settings.exceptions.braveShields
+    }
+    if (-not $bs) { return 0 }
+    $removed = 0
+    foreach ($pattern in @('http://*,*', 'https://*,*')) {
+        if ($bs.PSObject.Properties.Name -contains $pattern) {
+            $bs.PSObject.Properties.Remove($pattern)
+            $removed++
+        }
+    }
+    if ($removed -eq 0) { return 0 }
+    # Brave reads Preferences as compact UTF-8 without BOM. Out-File would
+    # write UTF-16 with a BOM and break Brave on next launch.
+    $json = $j | ConvertTo-Json -Depth 100 -Compress
+    $tmp = "$pref.slimbrave-tmp"
+    try {
+        [System.IO.File]::WriteAllText($tmp, $json, (New-Object System.Text.UTF8Encoding $false))
+        Move-Item -Force $tmp $pref
+    } catch {
+        if (Test-Path $tmp) { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
+        return 0
+    }
+    return $removed
+}
+
+function Repair-BravePrefs {
+    # Every Brave channel runs as brave.exe on Windows.
+    $running = ($null -ne (Get-Process brave -ErrorAction SilentlyContinue))
+    # Chromium serves prefs from an in-memory PrefService and rewrites the file
+    # on shutdown, so a scrub done now is discarded the moment the user closes
+    # Brave - which is exactly what we tell them to do next. Report it instead
+    # of claiming a clean that will not survive.
+    if ($running) { return @{ Removed = 0; Running = $true; Skipped = $true } }
+
+    # Prefer the invoking user's profile root. After self-elevation under
+    # over-the-shoulder UAC, $env:LOCALAPPDATA belongs to the admin account and
+    # scrubbing it would silently clean nothing while reporting success.
+    $localAppData = $env:LOCALAPPDATA
+    if (-not [string]::IsNullOrWhiteSpace($script:OriginalLocalAppData)) {
+        $localAppData = $script:OriginalLocalAppData
+    }
+
+    $removed = 0
+    foreach ($channelDir in @('Brave-Browser', 'Brave-Browser-Beta', 'Brave-Browser-Nightly', 'Brave-Browser-Dev')) {
+        $userData = Join-Path $localAppData "BraveSoftware\$channelDir\User Data"
+        if (-not (Test-Path $userData)) { continue }
+        $profileDirs = Get-ChildItem -Path $userData -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' }
+        foreach ($dir in $profileDirs) {
+            $removed += Repair-OneBravePrefs (Join-Path $dir.FullName 'Preferences')
+        }
+    }
+    return @{ Removed = $removed; Running = $false; Skipped = $false }
+}
+
+function Get-RepairNote($repair) {
+    if ($repair.Skipped) {
+        return " Brave is running, so leaked profile prefs were left alone - it would overwrite the fix on its next save. Close Brave fully and run this again to clear them."
+    }
+    if ($repair.Removed -gt 0) {
+        $plural = ""
+        if ($repair.Removed -ne 1) { $plural = "s" }
+        return " Also cleaned $($repair.Removed) leaked profile pref$plural that earlier SlimBrave versions wrote into your Brave profile."
+    }
+    return ""
+}
+
 function Invoke-ApplyPolicy {
     # DNS is validated first. Writing features and then bailing out would
     # leave the store half-applied, which is what the v1.9.5 critical bug
@@ -216,7 +296,8 @@ function Invoke-ApplyPolicy {
         }
         $written++
     }
-    Set-Status "Applied $written policies. Restart Brave, then check brave://policy"
+    $repair = Repair-BravePrefs
+    Set-Status ("Applied $written policies. Restart Brave, then check brave://policy." + (Get-RepairNote $repair))
     return $true
 }
 
@@ -241,7 +322,8 @@ function Invoke-ResetPolicy {
     foreach ($id in @($script:state.Keys)) { $script:state[$id].On = $false; $script:state[$id].Sel = 0 }
     $script:dnsState.Mode = 0
     $script:dnsState.Tmpl = ""
-    Set-Status "Reset. Only keys SlimBrave Neo manages were removed."
+    $repair = Repair-BravePrefs
+    Set-Status ("Reset. Only keys SlimBrave Neo manages were removed." + (Get-RepairNote $repair))
     return $true
 }
 
