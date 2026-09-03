@@ -100,6 +100,26 @@ public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int va
     [SlimBrave.DpiHelper]::EnableDpiAwareness()
 } catch {}
 
+# Layout scale. The process is per-monitor-DPI-aware (above), so Windows does
+# not bitmap-scale the window: every pixel literal in the GUI is laid out as
+# written, while the fonts are in points and grow with the display. S() maps
+# a 96-DPI design pixel to a device pixel so the grid grows with the glyphs.
+# Read once, AFTER the awareness call - before it the screen DC reports a
+# virtualised 96 - and kept for the life of the window (see the form below).
+# It is the system DPI at startup: nothing here handles WM_DPICHANGED, so a
+# scaling change after launch, or a drag to a monitor of a different DPI,
+# keeps this factor (relaunch to pick up the new one).
+$script:DPI = 1.0
+try {
+    $g0 = [System.Drawing.Graphics]::FromHwnd([IntPtr]::Zero)
+    $script:DPI = [double]$g0.DpiX / 96.0
+    $g0.Dispose()
+} catch {}
+function S([double]$px){
+    # AwayFromZero: [math]::Round alone is banker's rounding, 22.5 -> 22.
+    return [int][math]::Round($px*$script:DPI,[System.MidpointRounding]::AwayFromZero)
+}
+
 $machineRegistryPath = "HKLM:\SOFTWARE\Policies\BraveSoftware\Brave"
 # HKCU inside the elevated process is the admin's hive, which is the wrong
 # one under over-the-shoulder UAC. The invoking user is interactively logged
@@ -1416,9 +1436,30 @@ public class DarkMenuColors : ProfessionalColorTable {
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "SlimBrave Neo - Fluent GUI (beta)"
-$form.ClientSize = New-Object System.Drawing.Size 1180, 760
+# Design size is 1180x760 at 96 DPI; scaled it is 1770x1140 at 150%, taller
+# than a 1080p work area, so the HEIGHT yields to the screen (the page is
+# AutoScroll and absorbs it; the bar keeps the bottom edge). Width cannot
+# yield - the columns do not reflow - so it is S'd and may overhang.
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedSingle
 $form.MaximizeBox = $false
+# Non-client height of THIS window style, from the same AdjustWindowRectEx
+# WinForms sizes the window with. SystemInformation.CaptionHeight +
+# 2*FixedFrameBorderSize.Height says 29 on Windows 11 where the frame is 39.
+$chromeH=$form.Height-$form.ClientSize.Height
+# Primary screen on purpose: $script:DPI is the system DPI, i.e. the primary
+# monitor's, and the window is placed there below, so size, factor and
+# position come from one monitor. Never grows past the design; never
+# shrinks below ~4 rows (then it overhangs rather than the page vanishing).
+$wa=[System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+$clientH=[math]::Max((S 300),[math]::Min((S 760),($wa.Height-$chromeH)))
+$form.ClientSize = New-Object System.Drawing.Size (S 1180), $clientH
+# Windows' default placement keeps a window inside the MONITOR, not the work
+# area: a work-area-tall window lands with its bottom on the screen edge and
+# the action bar under the taskbar (measured: y=48 on 1080p / Windows 11).
+# Place it ourselves, centred in the work area the height was clamped to;
+# a clamped window gets y = $wa.Y, a shorter one is centred.
+$form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+$form.Location = New-Object System.Drawing.Point ($wa.X+[math]::Max(0,[int](($wa.Width-$form.Width)/2))),($wa.Y+[math]::Max(0,[int](($wa.Height-$form.Height)/2)))
 $form.BackColor = $F.Bg
 Enable-DoubleBuffer $form
 
@@ -1435,15 +1476,19 @@ catch { $script:iconFont = New-Object System.Drawing.Font "Segoe UI",10 }
 # --------------------------------------------------------------- nav rail
 $rail=New-Object System.Windows.Forms.Panel
 $rail.Location=New-Object System.Drawing.Point 0,0
-$rail.Size=New-Object System.Drawing.Size 250,760
+$rail.Size=New-Object System.Drawing.Size (S 250),$form.ClientSize.Height
+# Anchored: WinForms caps Form.Height at MaxWindowTrackSize in the setter while
+# ClientSize still reports the request, so the derived sizes must follow the
+# client the OS actually grants, not the one asked for.
+$rail.Anchor=[System.Windows.Forms.AnchorStyles]"Top,Bottom,Left"
 $rail.BackColor=$F.Rail; Enable-DoubleBuffer $rail; $form.Controls.Add($rail)
 
 $script:railTitleFont=New-Object System.Drawing.Font "Segoe UI Semibold",15
 $script:railSubFont=New-Object System.Drawing.Font "Segoe UI",9
 
 $railHead=New-Object System.Windows.Forms.Panel
-$railHead.Location=New-Object System.Drawing.Point 0,14
-$railHead.Size=New-Object System.Drawing.Size 250,60
+$railHead.Location=New-Object System.Drawing.Point 0,(S 14)
+$railHead.Size=New-Object System.Drawing.Size (S 250),(S 60)
 $railHead.BackColor=$F.Rail
 Enable-DoubleBuffer $railHead
 $railHead.Add_Paint({
@@ -1453,18 +1498,18 @@ $railHead.Add_Paint({
     $g.Clear($script:F.Rail)
     # accent-tinted app tile with the shield glyph, the same language the nav
     # items use, so the header reads as part of the list rather than a banner
-    $tile=New-Object System.Drawing.RectangleF 16,8,32,32
-    Fill-Round $g $tile 8 $script:F.AccentDim
+    $tile=New-Object System.Drawing.RectangleF (S 16),(S 8),(S 32),(S 32)
+    Fill-Round $g $tile (S 8) $script:F.AccentDim
     $ib=New-Object System.Drawing.SolidBrush $script:F.Accent
     $glyphFont=New-Object System.Drawing.Font $script:iconFont.FontFamily,14
     $gl=[char]0xE72E
     $sz=$g.MeasureString($gl,$glyphFont,1000,$script:SF)
-    $g.DrawString($gl,$glyphFont,$ib,(16+(32-$sz.Width)/2),(8+(32-$sz.Height)/2),$script:SF)
+    $g.DrawString($gl,$glyphFont,$ib,($tile.X+($tile.Width-$sz.Width)/2),($tile.Y+($tile.Height-$sz.Height)/2),$script:SF)
     $glyphFont.Dispose(); $ib.Dispose()
     $tb=New-Object System.Drawing.SolidBrush $script:F.Text
-    $g.DrawString("SlimBrave Neo",$script:railTitleFont,$tb,58,6,$script:SF); $tb.Dispose()
+    $g.DrawString("SlimBrave Neo",$script:railTitleFont,$tb,(S 58),(S 6),$script:SF); $tb.Dispose()
     $sb=New-Object System.Drawing.SolidBrush $script:F.TextSub
-    $g.DrawString("Policy manager",$script:railSubFont,$sb,60,31,$script:SF); $sb.Dispose()
+    $g.DrawString("Policy manager",$script:railSubFont,$sb,(S 60),(S 31),$script:SF); $sb.Dispose()
 })
 $rail.Controls.Add($railHead)
 
@@ -1476,8 +1521,8 @@ $script:navItems=@(); $script:sel=0
 
 function New-NavItem([int]$idx,[string]$name,[int]$y){
     $it=New-Object System.Windows.Forms.Panel
-    $it.Location=New-Object System.Drawing.Point 8,$y
-    $it.Size=New-Object System.Drawing.Size 234,36
+    $it.Location=New-Object System.Drawing.Point (S 8),$y
+    $it.Size=New-Object System.Drawing.Size (S 234),(S 36)
     $it.BackColor=$F.Rail; $it.Tag=@{Idx=$idx;Name=$name;Hot=$false}
     Enable-DoubleBuffer $it
     $it.Add_Paint({
@@ -1487,20 +1532,20 @@ function New-NavItem([int]$idx,[string]$name,[int]$y){
         $isSel=($st.Idx -eq $script:sel)
         if($isSel -or $st.Hot){
             $c=$script:F.NavHot; if($isSel){$c=$script:F.NavSel}
-            Fill-Round $g (New-Object System.Drawing.RectangleF 0,0,($s.Width-1),($s.Height-1)) 5 $c
+            Fill-Round $g (New-Object System.Drawing.RectangleF 0,0,($s.Width-1),($s.Height-1)) (S 5) $c
         }
         if($isSel){ $b=New-Object System.Drawing.SolidBrush $script:F.Accent
-                    $g.FillRectangle($b,0,10,3,16); $b.Dispose() }
+                    $g.FillRectangle($b,0,(S 10),(S 3),(S 16)); $b.Dispose() }
         $glyph=[char]0xE713
         if($st.Idx -eq 0){ $glyph=[char]0xE7BE }
         elseif($st.Idx -eq 1){ $glyph=[char]0xE8FD }
         elseif(($st.Idx-2) -lt $script:navGlyphs.Count){ $glyph=$script:navGlyphs[$st.Idx-2] }
         else { $glyph=[char]0xE968 }
         $ib=New-Object System.Drawing.SolidBrush $script:F.Accent
-        $g.DrawString($glyph,$script:iconFont,$ib,14,8,$script:SF); $ib.Dispose()
+        $g.DrawString($glyph,$script:iconFont,$ib,(S 14),(S 8),$script:SF); $ib.Dispose()
         $ink=$script:F.TextSub; if($isSel){$ink=$script:F.Text}
         $nb=New-Object System.Drawing.SolidBrush $ink
-        $g.DrawString($st.Name,$script:navFont,$nb,44,9,$script:SF); $nb.Dispose()
+        $g.DrawString($st.Name,$script:navFont,$nb,(S 44),(S 9),$script:SF); $nb.Dispose()
     })
     $it.Add_MouseEnter({$this.Tag.Hot=$true;$this.Invalidate()})
     $it.Add_MouseLeave({$this.Tag.Hot=$false;$this.Invalidate()})
@@ -1511,27 +1556,27 @@ function New-NavItem([int]$idx,[string]$name,[int]$y){
     $it.Cursor=[System.Windows.Forms.Cursors]::Hand
     $rail.Controls.Add($it); return $it
 }
-$yy=88
+$yy=S 88
 for($i=0;$i -lt $script:pages.Count;$i++){
-    $script:navItems+=(New-NavItem $i $script:pages[$i] $yy); $yy+=40
+    $script:navItems+=(New-NavItem $i $script:pages[$i] $yy); $yy+=S 40
 }
 
 # --------------------------------------------------------------- header
 $crumb=New-Object System.Windows.Forms.Label
 $crumb.Font=$script:crumbFont; $crumb.ForeColor=$F.TextSub; $crumb.BackColor=$F.Bg
-$crumb.Location=New-Object System.Drawing.Point 282,18; $crumb.AutoSize=$true
+$crumb.Location=New-Object System.Drawing.Point (S 282),(S 18); $crumb.AutoSize=$true
 $crumb.UseMnemonic=$false; $form.Controls.Add($crumb)
 
 $pageTitle=New-Object System.Windows.Forms.Label
 $pageTitle.Font=$script:titleFont; $pageTitle.ForeColor=$F.Text; $pageTitle.BackColor=$F.Bg
-$pageTitle.Location=New-Object System.Drawing.Point 280,38; $pageTitle.AutoSize=$true
+$pageTitle.Location=New-Object System.Drawing.Point (S 280),(S 38); $pageTitle.AutoSize=$true
 $pageTitle.UseMnemonic=$false; $form.Controls.Add($pageTitle)
 
 # Search box. Sits in the header so it is reachable from any page, not just
 # All Options - a policy you cannot name is exactly the one you need to find.
 $searchHost=New-Object System.Windows.Forms.Panel
-$searchHost.Location=New-Object System.Drawing.Point 880,34
-$searchHost.Size=New-Object System.Drawing.Size 272,32
+$searchHost.Location=New-Object System.Drawing.Point (S 880),(S 34)
+$searchHost.Size=New-Object System.Drawing.Size (S 272),(S 32)
 $searchHost.BackColor=$F.Bg
 Enable-DoubleBuffer $searchHost
 $searchHost.Add_Paint({
@@ -1539,16 +1584,16 @@ $searchHost.Add_Paint({
     $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
     $g.Clear($script:F.Bg)
     $r=New-Object System.Drawing.RectangleF 0,0,($s.Width-1),($s.Height-1)
-    Fill-Round $g $r 4 $script:F.Row
+    Fill-Round $g $r (S 4) $script:F.Row
     $edge=$script:F.RowEdge
     if($script:searchBox -and $script:searchBox.Focused){ $edge=$script:F.Accent }
-    Stroke-Round $g $r 4 $edge
+    Stroke-Round $g $r (S 4) $edge
     $ib=New-Object System.Drawing.SolidBrush $script:F.TextSub
     $gl=[char]0xE721
-    $g.DrawString($gl,$script:iconFont,$ib,9,7,$script:SF); $ib.Dispose()
+    $g.DrawString($gl,$script:iconFont,$ib,(S 9),(S 7),$script:SF); $ib.Dispose()
     if(-not $script:searchBox -or [string]::IsNullOrEmpty($script:searchBox.Text)){
         $pb=New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(110,110,110))
-        $g.DrawString("Search policies and descriptions",$script:capFont,$pb,34,9,$script:SF)
+        $g.DrawString("Search policies and descriptions",$script:capFont,$pb,(S 34),(S 9),$script:SF)
         $pb.Dispose()
     }
 })
@@ -1559,26 +1604,28 @@ $script:searchBox.BorderStyle=[System.Windows.Forms.BorderStyle]::None
 $script:searchBox.Font=$script:rowFont
 $script:searchBox.BackColor=$F.Row
 $script:searchBox.ForeColor=$F.Text
-$script:searchBox.Location=New-Object System.Drawing.Point 34,8
-$script:searchBox.Size=New-Object System.Drawing.Size 228,20
+$script:searchBox.Location=New-Object System.Drawing.Point (S 34),(S 8)
+$script:searchBox.Size=New-Object System.Drawing.Size (S 228),(S 20)
 $searchHost.Controls.Add($script:searchBox)
 $script:searchBox.Add_GotFocus({ $searchHost.Invalidate() })
 $script:searchBox.Add_LostFocus({ $searchHost.Invalidate() })
 
 $page=New-Object System.Windows.Forms.Panel
-$page.Location=New-Object System.Drawing.Point 270,80
-$page.Size=New-Object System.Drawing.Size 900,608
+$page.Location=New-Object System.Drawing.Point (S 270),(S 80)
+$page.Size=New-Object System.Drawing.Size (S 900),($form.ClientSize.Height-(S 152))   # 80 above, 68 bar, 4 gap
+$page.Anchor=[System.Windows.Forms.AnchorStyles]"Top,Bottom,Left"
 $page.BackColor=$F.Bg; $page.AutoScroll=$true
 Enable-DoubleBuffer $page; $form.Controls.Add($page)
 
 # --------------------------------------------------------------- action bar
 $bar=New-Object System.Windows.Forms.Panel
-$bar.Location=New-Object System.Drawing.Point 250,692
-$bar.Size=New-Object System.Drawing.Size 930,68
+$bar.Location=New-Object System.Drawing.Point (S 250),($form.ClientSize.Height-(S 68))
+$bar.Size=New-Object System.Drawing.Size (S 930),(S 68)
+$bar.Anchor=[System.Windows.Forms.AnchorStyles]"Bottom,Left"
 $bar.BackColor=$F.Bar; Enable-DoubleBuffer $bar; $form.Controls.Add($bar)
 $script:statusText="Ready"
-$script:BAR_PAD=20   # status text left margin, button row right margin
-$script:BAR_GAP=8    # between buttons
+$script:BAR_PAD=S 20   # status text left margin, button row right margin
+$script:BAR_GAP=S 8    # between buttons
 $script:barButtonsLeft=$bar.Width   # x of the leftmost button, set once the row is built
 $script:barTip=New-Object System.Windows.Forms.ToolTip
 $bar.Add_Paint({
@@ -1595,9 +1642,9 @@ $bar.Add_Paint({
     # any of it was cut. At 100% every one-line message paints as before.
     $room=$script:barButtonsLeft-(2*$script:BAR_PAD)
     $lineH=$g.MeasureString("Ag",$script:capFont,10000,$script:SF).Height
-    $lines=2; if((2*$lineH) -gt ($s.Height-6)){ $lines=1 }
+    $lines=2; if((2*$lineH) -gt ($s.Height-(S 6))){ $lines=1 }
     $boxH=[int][math]::Ceiling($lineH*$lines)
-    $rect=New-Object System.Drawing.RectangleF $script:BAR_PAD,(34-($boxH/2)),([math]::Max($room,0)),$boxH
+    $rect=New-Object System.Drawing.RectangleF $script:BAR_PAD,((S 34)-($boxH/2)),([math]::Max($room,0)),$boxH
     $fmt=New-Object System.Drawing.StringFormat $script:SF
     $fmt.Trimming=[System.Drawing.StringTrimming]::EllipsisWord
     $fmt.FormatFlags=[System.Drawing.StringFormatFlags]::LineLimit
@@ -1616,9 +1663,9 @@ function Set-Status([string]$t){ $script:statusText=$t; $bar.Invalidate() }
 
 function New-BarButton([string]$label,[bool]$accent){
     $b=New-Object System.Windows.Forms.Panel
-    $w=[int]([System.Windows.Forms.TextRenderer]::MeasureText($label,$script:btnFont).Width+34)
-    $b.Location=New-Object System.Drawing.Point 0,18   # x is placed by the caller once the width is known
-    $b.Size=New-Object System.Drawing.Size $w,32
+    $w=[int]([System.Windows.Forms.TextRenderer]::MeasureText($label,$script:btnFont).Width+(S 34))
+    $b.Location=New-Object System.Drawing.Point 0,(S 18)   # x is placed by the caller once the width is known
+    $b.Size=New-Object System.Drawing.Size $w,(S 32)
     $b.BackColor=$F.Bar; $b.Tag=@{L=$label;A=$accent;Hot=$false}
     Enable-DoubleBuffer $b
     $b.Add_Paint({
@@ -1628,10 +1675,10 @@ function New-BarButton([string]$label,[bool]$accent){
         $r=New-Object System.Drawing.RectangleF 0,0,($s.Width-1),($s.Height-1)
         if($s.Tag.A){
             $c=$script:F.Accent; if($s.Tag.Hot){$c=[System.Drawing.Color]::FromArgb(96,205,255)}
-            Fill-Round $g $r 4 $c; $ink=[System.Drawing.Color]::FromArgb(27,27,27)
+            Fill-Round $g $r (S 4) $c; $ink=[System.Drawing.Color]::FromArgb(27,27,27)
         } else {
             $c=$script:F.Row; if($s.Tag.Hot){$c=$script:F.RowHot}
-            Fill-Round $g $r 4 $c; Stroke-Round $g $r 4 $script:F.RowEdge; $ink=$script:F.Text
+            Fill-Round $g $r (S 4) $c; Stroke-Round $g $r (S 4) $script:F.RowEdge; $ink=$script:F.Text
         }
         $tb=New-Object System.Drawing.SolidBrush $ink
         $sz=$g.MeasureString($s.Tag.L,$script:btnFont,1000,$script:SF)
@@ -1721,24 +1768,24 @@ $script:barButtonsLeft=$bx+$script:BAR_GAP
 
 # --------------------------------------------------------------- rows
 $script:rowPanels=@()
-$script:COLLAPSED=64
-$script:EXP_X=690        # chevron column on toggle rows
-$script:EXP_X_CHOICE=596 # chevron column on dropdown rows
-$script:DD_X=640         # dropdown control left edge
-$script:DD_W=180         # dropdown control width
-$script:TG_X=768         # toggle pill left edge
-$script:TG_Y=22          # toggle pill top
-$script:TG_W=44
-$script:TG_H=20
-$script:TG_PAD=10        # generous hit padding around the pill
+$script:COLLAPSED=S 64
+$script:EXP_X=S 690        # chevron column on toggle rows
+$script:EXP_X_CHOICE=S 596 # chevron column on dropdown rows
+$script:DD_X=S 640         # dropdown control left edge
+$script:DD_W=S 180         # dropdown control width
+$script:TG_X=S 768         # toggle pill left edge
+$script:TG_Y=S 22          # toggle pill top
+$script:TG_W=S 44
+$script:TG_H=S 20
+$script:TG_PAD=S 10        # generous hit padding around the pill
 
 function Get-CapWidth($isChoice){
     # room a caption has before it reaches that row type's chevron column.
     # Choice rows lose ~100px to the dropdown, so a fixed character count
     # cannot serve both - it either wastes space on toggles or overruns
     # into the dropdown on permissions rows.
-    if($isChoice){ return ($script:EXP_X_CHOICE-34) }
-    return ($script:EXP_X-34)
+    if($isChoice){ return ($script:EXP_X_CHOICE-(S 34)) }
+    return ($script:EXP_X-(S 34))
 }
 
 function Fit-Text([System.Drawing.Graphics]$g,[string]$text,[System.Drawing.Font]$font,[int]$w){
@@ -1759,12 +1806,12 @@ function Zone-Of($panel,[int]$x,[int]$y){
     $hasExp = ($st.Row.full -and ($st.Row.full -ne $st.Row.short -or
         $g2.MeasureString($st.Row.short,$script:capFont,10000,$script:SF).Width -gt (Get-CapWidth $st.IsChoice)))
     $g2.Dispose()
-    if($hasExp -and $x -ge $ecol -and $x -le ($ecol+26) -and $y -ge 14 -and $y -le 50){ return "exp" }
+    if($hasExp -and $x -ge $ecol -and $x -le ($ecol+(S 26)) -and $y -ge (S 14) -and $y -le (S 50)){ return "exp" }
     if($st.IsChoice){
         # bounded exactly like the toggle: clicking a label or empty space
         # must do nothing on BOTH row types. Only the control is live.
         $dl=$script:DD_X-$script:TG_PAD; $dr2=$script:DD_X+$script:DD_W+$script:TG_PAD
-        if($x -ge $dl -and $x -le $dr2 -and $y -ge (17-$script:TG_PAD) -and $y -le (47+$script:TG_PAD)){ return "ctl" }
+        if($x -ge $dl -and $x -le $dr2 -and $y -ge ((S 17)-$script:TG_PAD) -and $y -le ((S 47)+$script:TG_PAD)){ return "ctl" }
         return ""
     }
     $l=$script:TG_X-$script:TG_PAD; $r=$script:TG_X+$script:TG_W+$script:TG_PAD
@@ -1775,8 +1822,8 @@ function Zone-Of($panel,[int]$x,[int]$y){
 
 function New-FluentRow($row,[int]$y){
     $p=New-Object System.Windows.Forms.Panel
-    $p.Location=New-Object System.Drawing.Point 2,$y
-    $p.Size=New-Object System.Drawing.Size 840,$script:COLLAPSED
+    $p.Location=New-Object System.Drawing.Point (S 2),$y
+    $p.Size=New-Object System.Drawing.Size (S 840),$script:COLLAPSED
     $p.BackColor=$F.Bg
     $isChoice=($null -ne $row.PSObject.Properties['choices'])
     $p.Tag=@{Row=$row;Hot=$false;IsChoice=$isChoice;Open=$false;Zone=''}
@@ -1788,20 +1835,20 @@ function New-FluentRow($row,[int]$y){
         $st=$s.Tag; $g.Clear($script:F.Bg)
         $r=New-Object System.Drawing.RectangleF 0,0,($s.Width-1),($s.Height-2)
         $c=$script:F.Row; if($st.Hot){$c=$script:F.RowHot}
-        Fill-Round $g $r 6 $c; Stroke-Round $g $r 6 $script:F.RowEdge
+        Fill-Round $g $r (S 6) $c; Stroke-Round $g $r (S 6) $script:F.RowEdge
         $hi=New-Object System.Drawing.Pen $script:F.RowTopHi
-        $g.DrawLine($hi,7,1,($s.Width-8),1); $hi.Dispose()
+        $g.DrawLine($hi,(S 7),1,($s.Width-(S 8)),1); $hi.Dispose()
         $tb=New-Object System.Drawing.SolidBrush $script:F.Text
-        $g.DrawString($st.Row.name,$script:rowFont,$tb,18,11,$script:SF); $tb.Dispose()
+        $g.DrawString($st.Row.name,$script:rowFont,$tb,(S 18),(S 11),$script:SF); $tb.Dispose()
         $cb=New-Object System.Drawing.SolidBrush $script:F.TextSub
         if($st.Open){
             $wcol=$script:EXP_X; if($st.IsChoice){ $wcol=$script:EXP_X_CHOICE }
-            $rect=New-Object System.Drawing.RectangleF 18,33,($wcol-30),($s.Height-42)
+            $rect=New-Object System.Drawing.RectangleF (S 18),(S 33),($wcol-(S 30)),($s.Height-(S 42))
             $g.DrawString($st.Row.full,$script:capFont,$cb,$rect,$script:SFw)
         } else {
             $avail=Get-CapWidth $st.IsChoice
             $short=Fit-Text $g $st.Row.short $script:capFont $avail
-            $g.DrawString($short,$script:capFont,$cb,18,34,$script:SF)
+            $g.DrawString($short,$script:capFont,$cb,(S 18),(S 34),$script:SF)
         }
         $cb.Dispose()
         # expander chevron, only when there is more to show
@@ -1809,20 +1856,20 @@ function New-FluentRow($row,[int]$y){
         $truncated=($g.MeasureString($st.Row.short,$script:capFont,10000,$script:SF).Width -gt $avail2)
         if($st.Row.full -and ($st.Row.full -ne $st.Row.short -or $truncated)){
             $ecol=$script:EXP_X; if($st.IsChoice){ $ecol=$script:EXP_X_CHOICE }
-            $ex=New-Object System.Drawing.RectangleF $ecol,18,26,26
-            if($st.Zone -eq "exp"){ Fill-Round $g $ex 4 $script:F.RowTopHi }
-            $cp=New-Object System.Drawing.Pen $script:F.TextSub,1.7
-            $cx=($ecol+6); $cy=29
+            $ex=New-Object System.Drawing.RectangleF $ecol,(S 18),(S 26),(S 26)
+            if($st.Zone -eq "exp"){ Fill-Round $g $ex (S 4) $script:F.RowTopHi }
+            $cp=New-Object System.Drawing.Pen $script:F.TextSub,([float](1.7*$script:DPI))
+            $cx=($ecol+(S 6)); $cy=S 29; $d2=S 2; $d4=S 4; $d7=S 7; $d14=S 14
             if($st.Open){
                 $g.DrawLines($cp,[System.Drawing.PointF[]]@(
-                    [System.Drawing.PointF]::new($cx,($cy+4)),
-                    [System.Drawing.PointF]::new(($cx+7),($cy-2)),
-                    [System.Drawing.PointF]::new(($cx+14),($cy+4))))
+                    [System.Drawing.PointF]::new($cx,($cy+$d4)),
+                    [System.Drawing.PointF]::new(($cx+$d7),($cy-$d2)),
+                    [System.Drawing.PointF]::new(($cx+$d14),($cy+$d4))))
             } else {
                 $g.DrawLines($cp,[System.Drawing.PointF[]]@(
-                    [System.Drawing.PointF]::new($cx,($cy-2)),
-                    [System.Drawing.PointF]::new(($cx+7),($cy+4)),
-                    [System.Drawing.PointF]::new(($cx+14),($cy-2))))
+                    [System.Drawing.PointF]::new($cx,($cy-$d2)),
+                    [System.Drawing.PointF]::new(($cx+$d7),($cy+$d4)),
+                    [System.Drawing.PointF]::new(($cx+$d14),($cy-$d2))))
             }
             $cp.Dispose()
         }
@@ -1830,42 +1877,42 @@ function New-FluentRow($row,[int]$y){
             # owner-drawn dropdown: a stock ComboBox paints a light arrow
             # button that no dark theme can reach, so draw the whole control
             # and open a themed menu on click.
-            $dr=New-Object System.Drawing.RectangleF $script:DD_X,17,$script:DD_W,30
+            $dr=New-Object System.Drawing.RectangleF $script:DD_X,(S 17),$script:DD_W,(S 30)
             $managed=($script:state[$st.Row.Id].Sel -gt 0)
             $bg=$script:F.RowHot; if($managed){ $bg=$script:F.AccentDim }
             if($st.Zone -eq "ctl"){ $bg=$script:F.RowTopHi; if($managed){ $bg=[System.Drawing.Color]::FromArgb(70,76,194,255) } }
-            Fill-Round $g $dr 4 $bg
+            Fill-Round $g $dr (S 4) $bg
             $edge=$script:F.RowEdge; if($managed){ $edge=$script:F.Accent }
-            Stroke-Round $g $dr 4 $edge
+            Stroke-Round $g $dr (S 4) $edge
             $ink=$script:F.Text; if($managed){ $ink=$script:F.Accent }
             $vb=New-Object System.Drawing.SolidBrush $ink
-            $g.DrawString($st.Row.choices[$script:state[$st.Row.Id].Sel][0],$script:rowFont,$vb,($dr.X+12),($dr.Y+6),$script:SF)
+            $g.DrawString($st.Row.choices[$script:state[$st.Row.Id].Sel][0],$script:rowFont,$vb,($dr.X+(S 12)),($dr.Y+(S 6)),$script:SF)
             $vb.Dispose()
-            $ch=New-Object System.Drawing.Pen $ink,1.6
-            $cx2=$dr.Right-24; $cy2=$dr.Y+13
+            $ch=New-Object System.Drawing.Pen $ink,([float](1.6*$script:DPI))
+            $cx2=$dr.Right-(S 24); $cy2=$dr.Y+(S 13)
             $g.DrawLines($ch,[System.Drawing.PointF[]]@(
                 [System.Drawing.PointF]::new($cx2,$cy2),
-                [System.Drawing.PointF]::new(($cx2+5),($cy2+5)),
-                [System.Drawing.PointF]::new(($cx2+10),$cy2)))
+                [System.Drawing.PointF]::new(($cx2+(S 5)),($cy2+(S 5))),
+                [System.Drawing.PointF]::new(($cx2+(S 10)),$cy2)))
             $ch.Dispose()
         } else {
             $word="Off"; if($script:state[$st.Row.Id].On){$word="On"}
             $wb=New-Object System.Drawing.SolidBrush $script:F.TextSub
-            $g.DrawString($word,$script:rowFont,$wb,726,21,$script:SF); $wb.Dispose()
+            $g.DrawString($word,$script:rowFont,$wb,(S 726),(S 21),$script:SF); $wb.Dispose()
             $tx=$script:TG_X;$ty=$script:TG_Y
             if($st.Zone -eq "ctl"){
-                $halo=New-Object System.Drawing.RectangleF ($tx-6),($ty-6),($script:TG_W+12),($script:TG_H+12)
-                Fill-Round $g $halo 15 $script:F.RowTopHi
+                $halo=New-Object System.Drawing.RectangleF ($tx-(S 6)),($ty-(S 6)),($script:TG_W+(S 12)),($script:TG_H+(S 12))
+                Fill-Round $g $halo (S 15) $script:F.RowTopHi
             }
             $track=New-Object System.Drawing.RectangleF $tx,$ty,$script:TG_W,$script:TG_H
             if($script:state[$st.Row.Id].On){
-                Fill-Round $g $track 10 $script:F.Accent
+                Fill-Round $g $track (S 10) $script:F.Accent
                 $th=New-Object System.Drawing.SolidBrush $script:F.ThumbOn
-                $g.FillEllipse($th,($tx+26),($ty+3),14,14); $th.Dispose()
+                $g.FillEllipse($th,($tx+(S 26)),($ty+(S 3)),(S 14),(S 14)); $th.Dispose()
             } else {
-                Stroke-Round $g $track 10 $script:F.OutlineOff
+                Stroke-Round $g $track (S 10) $script:F.OutlineOff
                 $th=New-Object System.Drawing.SolidBrush $script:F.ThumbOff
-                $g.FillEllipse($th,($tx+4),($ty+3),14,14); $th.Dispose()
+                $g.FillEllipse($th,($tx+(S 4)),($ty+(S 3)),(S 14),(S 14)); $th.Dispose()
             }
         }
     })
@@ -1883,9 +1930,9 @@ function New-FluentRow($row,[int]$y){
             if($st.Open){
                 $g=$s.CreateGraphics()
                 $wc=$script:EXP_X; if($st.IsChoice){ $wc=$script:EXP_X_CHOICE }
-                $sz=$g.MeasureString($st.Row.full,$script:capFont,($wc-30),$script:SFw)
+                $sz=$g.MeasureString($st.Row.full,$script:capFont,($wc-(S 30)),$script:SFw)
                 $g.Dispose()
-                $s.Height=[Math]::Max($script:COLLAPSED,[int]($sz.Height+46))
+                $s.Height=[Math]::Max($script:COLLAPSED,[int]($sz.Height+(S 46)))
             } else { $s.Height=$script:COLLAPSED }
             Reflow-Page
             $s.Invalidate(); return
@@ -1911,7 +1958,7 @@ function New-FluentRow($row,[int]$y){
                     })
                     $i++
                 }
-                $menu.Show($s,(New-Object System.Drawing.Point $script:DD_X,47))
+                $menu.Show($s,(New-Object System.Drawing.Point $script:DD_X,(S 47)))
             }
             return
         }
@@ -1962,11 +2009,11 @@ function Reflow-Page {
     $keep=[Math]::Abs($page.AutoScrollPosition.Y)
     $page.SuspendLayout()
     $page.AutoScrollPosition=New-Object System.Drawing.Point 0,0
-    $y=4
+    $y=S 4
     foreach($p in $script:rowPanels){
-        $p.Location=New-Object System.Drawing.Point 2,$y
-        $y+=$p.Height+4
-        if($null -ne $p.Tag.T){ $y+=6 }   # extra air under a section header
+        $p.Location=New-Object System.Drawing.Point (S 2),$y
+        $y+=$p.Height+(S 4)
+        if($null -ne $p.Tag.T){ $y+=S 6 }   # extra air under a section header
     }
     $page.ResumeLayout()
     $page.AutoScrollPosition=New-Object System.Drawing.Point 0,$keep
@@ -1979,8 +2026,8 @@ function Reflow-Page {
 
 function New-SectionHeader([string]$text,[int]$y,[int]$count){
     $h=New-Object System.Windows.Forms.Panel
-    $h.Location=New-Object System.Drawing.Point 2,$y
-    $h.Size=New-Object System.Drawing.Size 840,38
+    $h.Location=New-Object System.Drawing.Point (S 2),$y
+    $h.Size=New-Object System.Drawing.Size (S 840),(S 38)
     $h.BackColor=$F.Bg; $h.Tag=@{T=$text;N=$count}
     Enable-DoubleBuffer $h
     $h.Add_Paint({
@@ -1988,13 +2035,13 @@ function New-SectionHeader([string]$text,[int]$y,[int]$count){
         $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
         $g.Clear($script:F.Bg)
         $tb=New-Object System.Drawing.SolidBrush $script:F.Text
-        $g.DrawString($s.Tag.T,$script:pTitle,$tb,4,12,$script:SF); $tb.Dispose()
+        $g.DrawString($s.Tag.T,$script:pTitle,$tb,(S 4),(S 12),$script:SF); $tb.Dispose()
         $w=[int]($g.MeasureString($s.Tag.T,$script:pTitle,1000,$script:SF).Width)
         $cb=New-Object System.Drawing.SolidBrush $script:F.TextSub
-        if($s.Tag.N -gt 0){ $g.DrawString("$($s.Tag.N)",$script:capFont,$cb,($w+12),16,$script:SF) }
+        if($s.Tag.N -gt 0){ $g.DrawString("$($s.Tag.N)",$script:capFont,$cb,($w+(S 12)),(S 16),$script:SF) }
         $cb.Dispose()
         $p=New-Object System.Drawing.Pen $script:F.RowEdge
-        $g.DrawLine($p,($w+34),24,835,24); $p.Dispose()
+        $g.DrawLine($p,($w+(S 34)),(S 24),(S 835),(S 24)); $p.Dispose()
     })
     return $h
 }
@@ -2002,8 +2049,8 @@ function New-SectionHeader([string]$text,[int]$y,[int]$count){
 # --------------------------------------------------------------- preset cards
 function New-PresetCard($preset,[int]$y){
     $p=New-Object System.Windows.Forms.Panel
-    $p.Location=New-Object System.Drawing.Point 2,$y
-    $p.Size=New-Object System.Drawing.Size 840,78
+    $p.Location=New-Object System.Drawing.Point (S 2),$y
+    $p.Size=New-Object System.Drawing.Size (S 840),(S 78)
     $p.BackColor=$F.Bg; $p.Tag=@{P=$preset;Hot=$false}
     Enable-DoubleBuffer $p
     $p.Add_Paint({
@@ -2012,23 +2059,23 @@ function New-PresetCard($preset,[int]$y){
         $st=$s.Tag; $g.Clear($script:F.Bg)
         $r=New-Object System.Drawing.RectangleF 0,0,($s.Width-1),($s.Height-2)
         $c=$script:F.Row; if($st.Hot){$c=$script:F.RowHot}
-        Fill-Round $g $r 6 $c; Stroke-Round $g $r 6 $script:F.RowEdge
+        Fill-Round $g $r (S 6) $c; Stroke-Round $g $r (S 6) $script:F.RowEdge
         $hi=New-Object System.Drawing.Pen $script:F.RowTopHi
-        $g.DrawLine($hi,7,1,($s.Width-8),1); $hi.Dispose()
+        $g.DrawLine($hi,(S 7),1,($s.Width-(S 8)),1); $hi.Dispose()
         $tb=New-Object System.Drawing.SolidBrush $script:F.Text
-        $g.DrawString($st.P.name,$script:pTitle,$tb,18,14,$script:SF); $tb.Dispose()
+        $g.DrawString($st.P.name,$script:pTitle,$tb,(S 18),(S 14),$script:SF); $tb.Dispose()
         $cb=New-Object System.Drawing.SolidBrush $script:F.TextSub
-        $g.DrawString($st.P.blurb,$script:capFont,$cb,18,40,$script:SF)
-        $g.DrawString("$($st.P.count) policies",$script:capFont,$cb,18,56,$script:SF); $cb.Dispose()
+        $g.DrawString($st.P.blurb,$script:capFont,$cb,(S 18),(S 40),$script:SF)
+        $g.DrawString("$($st.P.count) policies",$script:capFont,$cb,(S 18),(S 56),$script:SF); $cb.Dispose()
         $bw=$script:PC_BW
         $br=New-Object System.Drawing.RectangleF $script:PC_BX,$script:PC_BY,$bw,$script:PC_BH
         $bg=$script:F.RowHot; if($st.Hot){$bg=$script:F.Accent}
-        Fill-Round $g $br 4 $bg
-        if(-not $st.Hot){ Stroke-Round $g $br 4 $script:F.RowEdge }
+        Fill-Round $g $br (S 4) $bg
+        if(-not $st.Hot){ Stroke-Round $g $br (S 4) $script:F.RowEdge }
         $ink=$script:F.Text; if($st.Hot){$ink=[System.Drawing.Color]::FromArgb(27,27,27)}
         $lb=New-Object System.Drawing.SolidBrush $ink
         $sz=$g.MeasureString("Load",$script:btnFont,1000,$script:SF)
-        $g.DrawString("Load",$script:btnFont,$lb,($br.X+($bw-$sz.Width)/2),($br.Y+7),$script:SF); $lb.Dispose()
+        $g.DrawString("Load",$script:btnFont,$lb,($br.X+($bw-$sz.Width)/2),($br.Y+(S 7)),$script:SF); $lb.Dispose()
     })
     # Same zone discipline as the setting rows: loading a preset DISCARDS every
     # staged selection, so a stray click on the blurb the user is reading must
@@ -2054,10 +2101,10 @@ function New-PresetCard($preset,[int]$y){
 # Shared by New-PresetCard's Paint and its hit-testing. Kept as constants for
 # the same reason the row control columns are: when the drawn rect and the
 # clickable rect were computed separately, they drifted apart.
-$script:PC_BX = 705
-$script:PC_BY = 24
-$script:PC_BW = 110
-$script:PC_BH = 32
+$script:PC_BX = S 705
+$script:PC_BY = S 24
+$script:PC_BW = S 110
+$script:PC_BH = S 32
 function Test-InPresetButton($x, $y) {
     return ($x -ge $script:PC_BX -and $x -le ($script:PC_BX + $script:PC_BW) -and
             $y -ge $script:PC_BY -and $y -le ($script:PC_BY + $script:PC_BH))
@@ -2078,8 +2125,8 @@ function Sync-TmplHint($box){
 
 function Build-DnsPage {
     $card=New-Object System.Windows.Forms.Panel
-    $card.Location=New-Object System.Drawing.Point 2,4
-    $card.Size=New-Object System.Drawing.Size 840,150
+    $card.Location=New-Object System.Drawing.Point (S 2),(S 4)
+    $card.Size=New-Object System.Drawing.Size (S 840),(S 150)
     $card.BackColor=$F.Bg
     $card.Tag=@{Zone=""}
     Enable-DoubleBuffer $card
@@ -2090,50 +2137,50 @@ function Build-DnsPage {
         $st=$s.Tag
         $g.Clear($script:F.Bg)
         $r=New-Object System.Drawing.RectangleF 0,0,($s.Width-1),($s.Height-2)
-        Fill-Round $g $r 6 $script:F.Row; Stroke-Round $g $r 6 $script:F.RowEdge
+        Fill-Round $g $r (S 6) $script:F.Row; Stroke-Round $g $r (S 6) $script:F.RowEdge
         $hi=New-Object System.Drawing.Pen $script:F.RowTopHi
-        $g.DrawLine($hi,7,1,($s.Width-8),1); $hi.Dispose()
+        $g.DrawLine($hi,(S 7),1,($s.Width-(S 8)),1); $hi.Dispose()
         $tb=New-Object System.Drawing.SolidBrush $script:F.Text
-        $g.DrawString("DNS over HTTPS mode",$script:rowFont,$tb,18,18,$script:SF)
-        $g.DrawString("Custom template URL",$script:rowFont,$tb,18,92,$script:SF); $tb.Dispose()
+        $g.DrawString("DNS over HTTPS mode",$script:rowFont,$tb,(S 18),(S 18),$script:SF)
+        $g.DrawString("Custom template URL",$script:rowFont,$tb,(S 18),(S 92),$script:SF); $tb.Dispose()
         $cb=New-Object System.Drawing.SolidBrush $script:F.TextSub
-        $g.DrawString("unmanaged writes no DNS policy, leaving Brave's own setting alone",$script:capFont,$cb,18,40,$script:SF)
+        $g.DrawString("unmanaged writes no DNS policy, leaving Brave's own setting alone",$script:capFont,$cb,(S 18),(S 40),$script:SF)
         $needs=($script:dnsModes[$script:dnsState.Mode] -eq "custom" -or $script:dnsModes[$script:dnsState.Mode] -eq "secure")
         $note="Only used by the custom and secure modes"
         if($needs){ $note="Required - secure DNS with no template resolves nothing" }
-        $g.DrawString($note,$script:capFont,$cb,18,114,$script:SF); $cb.Dispose()
+        $g.DrawString($note,$script:capFont,$cb,(S 18),(S 114),$script:SF); $cb.Dispose()
 
         # mode dropdown, same column and bounds rule as every other row
-        $dr=New-Object System.Drawing.RectangleF $script:DD_X,16,$script:DD_W,30
+        $dr=New-Object System.Drawing.RectangleF $script:DD_X,(S 16),$script:DD_W,(S 30)
         $managed=($script:dnsState.Mode -gt 0)
         $bg=$script:F.RowHot; if($managed){ $bg=$script:F.AccentDim }
         if($st.Zone -eq "ctl"){ $bg=$script:F.RowTopHi; if($managed){ $bg=[System.Drawing.Color]::FromArgb(70,76,194,255) } }
-        Fill-Round $g $dr 4 $bg
+        Fill-Round $g $dr (S 4) $bg
         $edge=$script:F.RowEdge; if($managed){ $edge=$script:F.Accent }
-        Stroke-Round $g $dr 4 $edge
+        Stroke-Round $g $dr (S 4) $edge
         $ink=$script:F.Text; if($managed){ $ink=$script:F.Accent }
         $vb=New-Object System.Drawing.SolidBrush $ink
-        $g.DrawString($script:dnsModes[$script:dnsState.Mode],$script:rowFont,$vb,($dr.X+12),($dr.Y+6),$script:SF); $vb.Dispose()
-        $ch=New-Object System.Drawing.Pen $ink,1.6
-        $cx=$dr.Right-24; $cy=$dr.Y+13
+        $g.DrawString($script:dnsModes[$script:dnsState.Mode],$script:rowFont,$vb,($dr.X+(S 12)),($dr.Y+(S 6)),$script:SF); $vb.Dispose()
+        $ch=New-Object System.Drawing.Pen $ink,([float](1.6*$script:DPI))
+        $cx=$dr.Right-(S 24); $cy=$dr.Y+(S 13)
         $g.DrawLines($ch,[System.Drawing.PointF[]]@(
             [System.Drawing.PointF]::new($cx,$cy),
-            [System.Drawing.PointF]::new(($cx+5),($cy+5)),
-            [System.Drawing.PointF]::new(($cx+10),$cy)))
+            [System.Drawing.PointF]::new(($cx+(S 5)),($cy+(S 5))),
+            [System.Drawing.PointF]::new(($cx+(S 10)),$cy)))
         $ch.Dispose()
 
         # the template field is a real TextBox child; just draw its frame
-        $well=New-Object System.Drawing.RectangleF ($script:DD_X-1),89,($script:DD_W+2),28
+        $well=New-Object System.Drawing.RectangleF ($script:DD_X-1),(S 89),($script:DD_W+2),(S 28)
         $wedge=$script:F.RowEdge; if($needs){ $wedge=$script:F.Accent }
-        Stroke-Round $g $well 4 $wedge
+        Stroke-Round $g $well (S 4) $wedge
     })
     $tmpl=New-Object System.Windows.Forms.TextBox
     $tmpl.BorderStyle=[System.Windows.Forms.BorderStyle]::None
     $tmpl.Font=$script:rowFont
     $tmpl.BackColor=[System.Drawing.Color]::FromArgb(38,38,38)
     $tmpl.ForeColor=$F.Text
-    $tmpl.Location=New-Object System.Drawing.Point ($script:DD_X+8),96
-    $tmpl.Size=New-Object System.Drawing.Size ($script:DD_W-16),20
+    $tmpl.Location=New-Object System.Drawing.Point ($script:DD_X+(S 8)),(S 96)
+    $tmpl.Size=New-Object System.Drawing.Size ($script:DD_W-(S 16)),(S 20)
     $tmpl.Text=""
     $card.Controls.Add($tmpl)
     $card.Tag.Tmpl=$tmpl
@@ -2158,7 +2205,7 @@ function Build-DnsPage {
         param($s,$ev)
         $z=""
         $dl=$script:DD_X-$script:TG_PAD; $dr2=$script:DD_X+$script:DD_W+$script:TG_PAD
-        if($ev.X -ge $dl -and $ev.X -le $dr2 -and $ev.Y -ge 6 -and $ev.Y -le 56){ $z="ctl" }
+        if($ev.X -ge $dl -and $ev.X -le $dr2 -and $ev.Y -ge (S 6) -and $ev.Y -le (S 56)){ $z="ctl" }
         if($z -ne $s.Tag.Zone){
             $s.Tag.Zone=$z
             if($z -eq ""){ $s.Cursor=[System.Windows.Forms.Cursors]::Default }
@@ -2197,7 +2244,7 @@ function Build-DnsPage {
             })
             $i++
         }
-        $menu.Show($s,(New-Object System.Drawing.Point $script:DD_X,46))
+        $menu.Show($s,(New-Object System.Drawing.Point $script:DD_X,(S 46)))
     })
     $m0=$script:dnsModes[$script:dnsState.Mode]
     $tmpl.Enabled=($m0 -eq "custom" -or $m0 -eq "secure")
@@ -2260,24 +2307,24 @@ function Show-SearchResults([string]$query){
     $page.AutoScrollPosition=New-Object System.Drawing.Point 0,0
     $page.AutoScrollMinSize=New-Object System.Drawing.Size 0,0
     $page.Controls.Clear(); $script:rowPanels=@()
-    $y=4
+    $y=S 4
     if($n -eq 0){
         $empty=New-Object System.Windows.Forms.Label
         $empty.Text="Nothing matches `"$query`"."
         $empty.Font=$script:rowFont; $empty.ForeColor=$F.TextSub
         $empty.BackColor=$F.Bg; $empty.AutoSize=$true
-        $empty.Location=New-Object System.Drawing.Point 6,12
+        $empty.Location=New-Object System.Drawing.Point (S 6),(S 12)
         $page.Controls.Add($empty)
     } else {
         $lastCat=""
         foreach($h in $hits){
             if($h.Cat -ne $lastCat){
                 $hd=New-SectionHeader $h.Cat $y 0
-                $page.Controls.Add($hd); $script:rowPanels+=$hd; $y+=42
+                $page.Controls.Add($hd); $script:rowPanels+=$hd; $y+=S 42
                 $lastCat=$h.Cat
             }
             $rp=New-FluentRow $h.Row $y
-            $page.Controls.Add($rp); $script:rowPanels+=$rp; $y+=68
+            $page.Controls.Add($rp); $script:rowPanels+=$rp; $y+=S 68
         }
     }
     $page.ResumeLayout()
@@ -2301,31 +2348,31 @@ function Select-Page([int]$idx){
     $page.AutoScrollMinSize=New-Object System.Drawing.Size 0,0
     $page.Controls.Clear(); $script:rowPanels=@()
     if($idx -eq 0){
-        $y=4
+        $y=S 4
         foreach($pr in $script:presets){
-            $c=New-PresetCard $pr $y; $page.Controls.Add($c); $y+=82
+            $c=New-PresetCard $pr $y; $page.Controls.Add($c); $y+=S 82
         }
     } elseif($idx -eq 1){
         # every row, every category, one scroll - no menuing
-        $y=4; $total=0
+        $y=S 4; $total=0
         foreach($cat in $script:cats){
             $hd=New-SectionHeader $cat.name $y $cat.rows.Count
-            $page.Controls.Add($hd); $script:rowPanels+=$hd; $y+=42
+            $page.Controls.Add($hd); $script:rowPanels+=$hd; $y+=S 42
             foreach($row in $cat.rows){
                 $rp=New-FluentRow $row $y; $page.Controls.Add($rp)
-                $script:rowPanels+=$rp; $y+=68; $total++
+                $script:rowPanels+=$rp; $y+=S 68; $total++
             }
-            $y+=10
+            $y+=S 10
         }
         $pageTitle.Text="All Options"
         $crumb.Text="SlimBrave Neo  >  All Options  -  $total policies in one list"
     } elseif($idx -eq ($script:pages.Count-1)){
         Build-DnsPage
     } else {
-        $cat=$script:cats[$idx-2]; $y=4
+        $cat=$script:cats[$idx-2]; $y=S 4
         foreach($row in $cat.rows){
             $rp=New-FluentRow $row $y; $page.Controls.Add($rp)
-            $script:rowPanels+=$rp; $y+=68
+            $script:rowPanels+=$rp; $y+=S 68
         }
     }
     $page.ResumeLayout()

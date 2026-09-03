@@ -2288,14 +2288,19 @@ def test_ps1_row_control_columns_do_not_collide():
     """
     text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
 
+    # Constants are 96-DPI design pixels, written either bare or as `S n`
+    # (the display-scale helper, which is the identity at 100%). The
+    # relations below hold in design units whichever way they are spelt.
     def const(name):
-        m = re.search(r"^\$script:" + name + r"\s*=\s*(\d+)", text, re.MULTILINE)
+        m = re.search(r"^\$script:" + name + r"\s*=\s*(?:S\s+)?(\d+)", text, re.MULTILINE)
         assert m, f"layout constant {name} is missing from SlimBrave.ps1"
         return int(m.group(1))
 
-    m = re.search(r"\$p\.Size=New-Object System\.Drawing\.Size (\d+),\$script:COLLAPSED", text)
+    m = re.search(
+        r"\$p\.Size=New-Object System\.Drawing\.Size (?:\(S (\d+)\)|(\d+)),\$script:COLLAPSED", text
+    )
     assert m, "the settings-row width is no longer declared where this test looks"
-    row_w = int(m.group(1))
+    row_w = int(m.group(1) or m.group(2))
 
     exp_x, exp_choice = const("EXP_X"), const("EXP_X_CHOICE")
     dd_x, dd_w = const("DD_X"), const("DD_W")
@@ -2333,7 +2338,7 @@ def test_ps1_action_bar_row_is_right_anchored_and_status_is_bounded():
     text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
 
     def const(name):  # same shape as the row-geometry test above
-        m = re.search(r"^\$script:" + name + r"\s*=\s*(\d+)", text, re.MULTILINE)
+        m = re.search(r"^\$script:" + name + r"\s*=\s*(?:S\s+)?(\d+)", text, re.MULTILINE)
         assert m, f"layout constant {name} is missing from SlimBrave.ps1"
         return int(m.group(1))
 
@@ -2421,4 +2426,69 @@ def test_ps1_row_mousedown_uses_zone_of_for_the_expander():
     z = md.find("Zone-Of $s $ev.X $ev.Y")
     e = md.find('"exp"')
     assert 0 <= z < e, "MouseDown does not resolve the zone before testing for the expander"
+
+
+# ---------------------------------------------------------------------------
+# Windows GUI: every layout number is a 96-DPI design pixel and goes through S()
+# ---------------------------------------------------------------------------
+#
+# The process is per-monitor DPI aware, so Windows lays the window out at the
+# literal pixel sizes while the point-size fonts grow with the display. The
+# grid therefore scales itself: S() maps a design pixel to a device pixel and
+# every layout literal in the GUI is wrapped in it. S() is the identity at
+# 100%, which is exactly the hazard - a literal that escapes the wrap is
+# invisible on the developer's screen and shows up only as a collision at
+# 125% and above. These two tests are the mechanical half of the discipline.
+
+
+def _gui_text():
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    return text[text.index("$form = New-Object System.Windows.Forms.Form") :]
+
+
+def _strip_parens(s):
+    """Drop every parenthesised group, innermost first, so `(S 18)` and
+    arithmetic such as `($s.Width-1)` vanish and only bare tokens remain."""
+    while True:
+        new = re.sub(r"\([^()]*\)", "", s)
+        if new == s:
+            return s
+        s = new
+
+
+def test_ps1_gui_constructors_take_no_bare_pixel_literal():
+    """Every Point / Size / RectangleF built from the form onward must be made
+    of S() calls, script-scope constants (themselves S'd once at definition)
+    or values derived from them. Zero is exempt; the 1 and 2 px hairline
+    insets live inside parentheses and are stripped with everything else."""
+    bad = []
+    for m in re.finditer(r"New-Object System\.Drawing\.(?:Point|Size|RectangleF) ([^\r\n]*)", _gui_text()):
+        args = _strip_parens(m.group(1).split("#")[0])
+        if re.search(r"(?<![\w$.])[1-9]\d*\b", args):
+            bad.append(m.group(0).strip())
+    assert not bad, "bare pixel literal(s) in GUI constructors - wrap each in S():\n" + "\n".join(bad)
+
+
+def test_ps1_gui_paint_calls_take_no_bare_pixel_literal():
+    """The same rule for what the Paint handlers hand to GDI+: DrawString /
+    DrawLine / FillEllipse / FillRectangle coordinates, Fill-Round and
+    Stroke-Round radii and PointF vertices. Here the arithmetic is not
+    stripped, so `($wcol-30)` fails and `($s.Width-1)` passes: exempt are
+    `(S n)`, the scaled pen widths, colours, string literals, `/2` centring
+    ratios and the 1 and 2 px hairline insets."""
+    verbs = re.compile(
+        r"\.(?:DrawString|DrawLine|DrawLines|FillEllipse|FillRectangle)\(|Fill-Round |Stroke-Round |PointF\]::new\("
+    )
+    bad = []
+    for line in _gui_text().splitlines():
+        if not verbs.search(line):
+            continue
+        s = line.split("#")[0]
+        s = re.sub(r'"[^"]*"', '""', s)
+        s = re.sub(r"\(S [\d.]+\)", "", s)
+        s = re.sub(r"\[float\]\([^()]*\$script:DPI\)", "", s)
+        s = re.sub(r"FromArgb\([^()]*\)", "", s)
+        if re.search(r"(?<![\w$.*/])(?:[3-9]|[1-9]\d+)\b", s):
+            bad.append(line.strip())
+    assert not bad, "bare pixel literal(s) in GUI paint calls - wrap each in S():\n" + "\n".join(bad)
 
