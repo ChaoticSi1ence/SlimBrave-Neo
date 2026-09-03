@@ -179,6 +179,22 @@ a branch — swap `experiment/fluent-gui` for `main` in that URL to get the rele
 version instead, and see [`SECURITY.md`](SECURITY.md) for its tagged releases and
 SHA-256 sums.
 
+**Prefer the previous layout?** [v2.1.0](https://github.com/ChaoticSi1ence/SlimBrave-Neo/releases/tag/v2.1.0)
+is the last release with the three-column window. It keeps working; it just won't
+receive the newer fixes. Pinned to that tag, either way:
+
+```powershell
+git clone -b v2.1.0 --depth 1 https://github.com/ChaoticSi1ence/SlimBrave-Neo.git
+cd SlimBrave-Neo
+powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1
+```
+
+```powershell
+iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/v2.1.0/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; .\SlimBrave.ps1
+```
+
+A tag never moves, so both of those fetch the same file every time.
+
 Requires Administrator privileges; the script re-launches itself elevated. It opens showing the policy already on the machine.
 
 **Every policy explains itself.** Each row carries a plain-English description under its title — *"Stops the daily usage ping that counts this install in Brave's active-user statistics"* — rather than hiding it in a tooltip. Where the text is longer than the row, a chevron expands it in place.
