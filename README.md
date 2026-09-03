@@ -17,130 +17,28 @@ SlimBrave Neo uses Chromium enterprise managed policies to disable telemetry, bl
 
 </div>
 
-> [!NOTE]
-> **Provenance and AI use.** SlimBrave Neo is a fork of [SlimBrave](https://github.com/ltx0101/SlimBrave) by [@ltx0101](https://github.com/ltx0101), extended to Linux and macOS and released under the same GPL-3.0 license.
->
-> AI maintains this project; it did not write it. Claude re-audits every policy key against brave-core and Chromium source, catches drift between the three implementations, and helps with tests and docs. What ships is a human call. The receipts are in [`AUDIT.md`](AUDIT.md).
-
 > [!IMPORTANT]
-> **The only official source of SlimBrave Neo is this repository:**
-> [`github.com/ChaoticSi1ence/SlimBrave-Neo`](https://github.com/ChaoticSi1ence/SlimBrave-Neo)
->
-> This project ships **source code only**. Python and PowerShell scripts you can read before running.
-> **There are no official `.exe`, `.msi`, `.dmg`, `.pkg`, installers, or compiled binaries.**
-> If you find a download claiming to be SlimBrave-Neo elsewhere, it is not from this project. See [`SECURITY.md`](SECURITY.md).
+> **Source code only — no `.exe`, `.msi`, `.dmg` or installers, ever.** This repository is the only official source; a download claiming to be SlimBrave Neo anywhere else is not from this project. See [`SECURITY.md`](SECURITY.md).
 
 > [!NOTE]
-> **Linux users: consider [Brave Origin](https://brave.com/origin/linux/) first.**
-> Brave Origin is a free, official Brave variant that ships with telemetry and bloat already removed. It has reached the Release channel on Linux and installs from Brave's own apt/rpm repositories as `brave-origin` — no longer a nightly preview. If you just want a clean Brave without configuration, that's the simpler path.
->
-> The Linux version of SlimBrave Neo is still fully supported, and is the right tool if you want fine-grained control over individual policies, custom presets, or your own DoH templates beyond what Origin provides out of the box.
+> A fork of [SlimBrave](https://github.com/ltx0101/SlimBrave) by [@ltx0101](https://github.com/ltx0101), GPL-3.0, extended to Linux and macOS. Policy keys are curated and re-audited against brave-core and Chromium source by Claude Fable; what ships is a human call. Receipts in [`AUDIT.md`](AUDIT.md).
+
+> [!NOTE]
+> **Linux users: consider [Brave Origin](https://brave.com/origin/linux/) first** — an official Brave build with telemetry and bloat already removed, now on the Release channel (`apt install brave-origin`). SlimBrave Neo is the better fit if you want per-policy control, presets, or your own DoH templates.
 
 <div align="center">
 
 ---
 
-<img src="assets/tui-screenshot.png" width="620" alt="SlimBrave Neo Linux TUI">
+<img src="assets/gui-screenshot.png" width="820" alt="SlimBrave Neo Windows GUI">
 
-*The Linux/macOS TUI: collapsible categories with a live count of what each one is managing, `/` to search, `?` for keys. Zero dependencies, runs in any terminal.*
+*The Windows GUI, on All Options: every policy in one scroll, each with a plain-English description under its title. A sidebar splits them into categories, and the search reads the descriptions as well as the names.*
 
 </div>
 
 ---
 
 ## Quick Start
-
-### Linux
-
-```bash
-git clone https://github.com/ChaoticSi1ence/SlimBrave-Neo.git
-cd SlimBrave-Neo
-sudo python3 slimbrave-linux.py
-```
-
-That's it. No `pip install`, no `jq`, no external dependencies. Just Python 3 and root.
-
-#### The TUI
-
-With no flags the script opens a curses interface: seven collapsible categories — Telemetry & Reporting, Privacy & Security, Site Permissions, Access Controls, Brave Features, Shields & Content Protection, Performance & Bloat — followed by a DNS Over HTTPS section, with an Import / Export / Apply / Reset / Quit button row underneath.
-
-Each category header carries a disclosure marker and a live `n/m on` count of the settings under it that are actually managed — a ticked checkbox, or a selector sitting off *Not managed*. The count updates as you toggle, so a folded section still tells you whether anything inside it is set. Left folds a header, Right unfolds it, Space or Enter does either, and `c` folds every section at once — or unfolds them all when they are already folded. On launch the folds reflect what is already applied: a section holding a managed setting opens, the rest stay folded — so a clean machine opens on a short overview and a configured one opens on what it is enforcing.
-
-`/` filters the list by row name. Matches narrow as you type, the hint line reports how many rows matched, and only matching rows and the headers owning them stay on screen. Folded sections are searched too, so a fold cannot hide a match. Esc clears the filter and puts the fold states back as they were before the search.
-
-The eight tri-state permission rows render as `Web Notifications: < Block >` and are cycled with Left/Right, the same way the DNS mode selector has always worked; Space or Enter steps forward through the same states. A row sitting off *Not managed* is highlighted and counts toward the header above it.
-
-`?` opens a key overlay over the list.
-
-| Key | Action |
-|-----|--------|
-| Up / Down | Move the cursor; Down past the last row jumps to the button row |
-| PageUp / PageDown | Move one screenful |
-| Home / End | Jump to the first / last row |
-| Left / Right | Cycle a selector, fold / unfold a header, or move along the button row |
-| Space | Toggle a checkbox, cycle a selector, fold or unfold a header |
-| Enter | The same, and presses the focused button |
-| `c` | Fold every section, or unfold them all |
-| `/` | Filter rows by name |
-| Esc | Clear the filter; quit when no filter is active |
-| `?` | Show the key overlay |
-| Tab | Move between the list and the button row |
-| `q` | Quit |
-
-**CLI mode (non-interactive):**
-
-```bash
-sudo python3 slimbrave-linux.py --import "./Presets/Maximum Privacy Preset.json"
-sudo python3 slimbrave-linux.py --export ~/SlimBraveNeoSettings.json
-sudo python3 slimbrave-linux.py --reset
-```
-
-**Multiple Brave channels (Stable / Beta / Nightly):** Brave hardcodes the managed-policy directory to `/etc/brave/policies` for every channel, so a single policy file applies to all of them — no per-channel selector is needed. If multiple channels are installed, leaked Shields exceptions are scrubbed from each channel's user-data directory and "Brave is running" detection covers all installed channels.
-
-After applying, restart Brave and verify at `brave://policy`.
-
-### macOS
-
-```bash
-git clone https://github.com/ChaoticSi1ence/SlimBrave-Neo.git
-cd SlimBrave-Neo
-sudo python3 slimbrave-mac.py
-```
-
-Requires root. Policies are written to `/Library/Managed Preferences/com.brave.Browser.plist` by default; with `--persist on` an Apple Configuration Profile is installed instead.
-
-The TUI is the same one [described under Linux](#the-tui) — same categories and live counts, same collapsing, `/` search, paging and `?` overlay, same Left/Right selectors — plus the two Apply-time prompts below.
-
-**Persistence on macOS (Apple Silicon / macOS 13+).** On modern macOS, `cfprefsd` and `mdmclient` may clear directly-written `/Library/Managed Preferences/*.plist` files at reboot when no Configuration Profile backs them, so policies don't always survive a restart. SlimBrave Neo offers two modes:
-
-| Mode | What it does | Persists | User action |
-|------|--------------|----------|-------------|
-| `off` (default) | Writes the plist only | may reset on macOS 13+ | just `sudo` |
-| `on` | Installs an Apple Configuration Profile via System Settings | yes, durable | `sudo` + one-time GUI install |
-
-When `--persist` is omitted on the CLI, the mode currently installed on the Mac is reused, so a re-run never silently demotes an installed profile back to plist-only. A fresh install defaults to `off`.
-
-When you click Apply in the TUI, SlimBrave Neo asks two macOS-only questions in order: which Brave channels to manage (only when more than one is installed), then whether to persist across reboots. Both prompts have a sticky default — Enter keeps whichever scope and mode are currently installed.
-
-```bash
-sudo python3 slimbrave-mac.py --import "./Presets/Maximum Privacy Preset.json" --persist on
-sudo python3 slimbrave-mac.py --import "./Presets/Maximum Privacy Preset.json" --persist off
-sudo python3 slimbrave-mac.py --reset
-```
-
-**Finishing the Configuration Profile install (macOS 26).** With `--persist on`, SlimBrave Neo writes a `.mobileconfig` and opens System Settings, but macOS 11+ disallows CLI-driven profile installs so you finish the step in the GUI: a "Profile Downloaded" notification appears; in System Settings click **General** → **Device Management**, scroll down to **Downloaded**, double-click **SlimBrave Neo - Brave Policy**, click **Install**, and enter your login password. Policies then take effect immediately and persist across reboots. To uninstall, run `--reset` or remove the profile under the same Device Management pane. Reference: [Apple — Install configuration profiles on Mac](https://support.apple.com/guide/mac-help/mh35561/mac).
-
-**CLI mode (non-interactive):**
-
-```bash
-sudo python3 slimbrave-mac.py --import "./Presets/Maximum Privacy Preset.json"
-sudo python3 slimbrave-mac.py --export ~/SlimBraveNeoSettings.json
-sudo python3 slimbrave-mac.py --reset
-sudo python3 slimbrave-mac.py --import preset.json --channels stable,beta
-sudo python3 slimbrave-mac.py --import preset.json --persist on
-```
-
-After applying, restart Brave and verify at `brave://policy`.
 
 ### Windows
 
@@ -149,14 +47,6 @@ git clone https://github.com/ChaoticSi1ence/SlimBrave-Neo.git
 cd SlimBrave-Neo
 powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1
 ```
-
-<div align="center">
-
-<img src="assets/gui-screenshot.png" width="820" alt="SlimBrave Neo Windows GUI">
-
-*The Windows GUI, on All Options: every policy in one scroll, each with a plain-English description under its title. A sidebar splits them into categories, and the search reads the descriptions as well as the names.*
-
-</div>
 
 **No git?** One line:
 
@@ -208,9 +98,114 @@ Every row of Site Permissions is a dropdown rather than a checkbox: **Not manage
 
 ---
 
+### Linux
+
+<div align="center">
+
+<img src="assets/tui-screenshot.png" width="620" alt="SlimBrave Neo Linux TUI">
+
+*The Linux/macOS TUI: collapsible categories with a live count of what each one is managing, `/` to search, `?` for keys. Zero dependencies, runs in any terminal.*
+
+</div>
+
+```bash
+git clone https://github.com/ChaoticSi1ence/SlimBrave-Neo.git
+cd SlimBrave-Neo
+sudo python3 slimbrave-linux.py
+```
+
+That's it. No `pip install`, no `jq`, no external dependencies. Just Python 3 and root.
+
+<details>
+<summary><strong>The TUI — keys, folding and search</strong></summary>
+
+With no flags the script opens a curses interface: seven collapsible categories — Telemetry & Reporting, Privacy & Security, Site Permissions, Access Controls, Brave Features, Shields & Content Protection, Performance & Bloat — followed by a DNS Over HTTPS section, with an Import / Export / Apply / Reset / Quit button row underneath.
+
+Each category header carries a disclosure marker and a live `n/m on` count of the settings under it that are actually managed — a ticked checkbox, or a selector sitting off *Not managed*. The count updates as you toggle, so a folded section still tells you whether anything inside it is set. Left folds a header, Right unfolds it, Space or Enter does either, and `c` folds every section at once — or unfolds them all when they are already folded. On launch the folds reflect what is already applied: a section holding a managed setting opens, the rest stay folded — so a clean machine opens on a short overview and a configured one opens on what it is enforcing.
+
+`/` filters the list by row name. Matches narrow as you type, the hint line reports how many rows matched, and only matching rows and the headers owning them stay on screen. Folded sections are searched too, so a fold cannot hide a match. Esc clears the filter and puts the fold states back as they were before the search.
+
+The eight tri-state permission rows render as `Web Notifications: < Block >` and are cycled with Left/Right, the same way the DNS mode selector has always worked; Space or Enter steps forward through the same states. A row sitting off *Not managed* is highlighted and counts toward the header above it.
+
+`?` opens a key overlay over the list.
+
+| Key | Action |
+|-----|--------|
+| Up / Down | Move the cursor; Down past the last row jumps to the button row |
+| PageUp / PageDown | Move one screenful |
+| Home / End | Jump to the first / last row |
+| Left / Right | Cycle a selector, fold / unfold a header, or move along the button row |
+| Space | Toggle a checkbox, cycle a selector, fold or unfold a header |
+| Enter | The same, and presses the focused button |
+| `c` | Fold every section, or unfold them all |
+| `/` | Filter rows by name |
+| Esc | Clear the filter; quit when no filter is active |
+| `?` | Show the key overlay |
+| Tab | Move between the list and the button row |
+| `q` | Quit |
+
+**CLI mode (non-interactive):**
+
+```bash
+sudo python3 slimbrave-linux.py --import "./Presets/Maximum Privacy Preset.json"
+sudo python3 slimbrave-linux.py --export ~/SlimBraveNeoSettings.json
+sudo python3 slimbrave-linux.py --reset
+```
+
+**Multiple Brave channels (Stable / Beta / Nightly):** Brave hardcodes the managed-policy directory to `/etc/brave/policies` for every channel, so a single policy file applies to all of them — no per-channel selector is needed. If multiple channels are installed, leaked Shields exceptions are scrubbed from each channel's user-data directory and "Brave is running" detection covers all installed channels.
+
+After applying, restart Brave and verify at `brave://policy`.
+
+</details>
+
+### macOS
+
+```bash
+git clone https://github.com/ChaoticSi1ence/SlimBrave-Neo.git
+cd SlimBrave-Neo
+sudo python3 slimbrave-mac.py
+```
+
+Requires root. Policies are written to `/Library/Managed Preferences/com.brave.Browser.plist` by default; with `--persist on` an Apple Configuration Profile is installed instead.
+
+The TUI is the same one [described under Linux](#the-tui) — same categories and live counts, same collapsing, `/` search, paging and `?` overlay, same Left/Right selectors — plus the two Apply-time prompts below.
+
+**Persistence on macOS (Apple Silicon / macOS 13+).** On modern macOS, `cfprefsd` and `mdmclient` may clear directly-written `/Library/Managed Preferences/*.plist` files at reboot when no Configuration Profile backs them, so policies don't always survive a restart. SlimBrave Neo offers two modes:
+
+| Mode | What it does | Persists | User action |
+|------|--------------|----------|-------------|
+| `off` (default) | Writes the plist only | may reset on macOS 13+ | just `sudo` |
+| `on` | Installs an Apple Configuration Profile via System Settings | yes, durable | `sudo` + one-time GUI install |
+
+When `--persist` is omitted on the CLI, the mode currently installed on the Mac is reused, so a re-run never silently demotes an installed profile back to plist-only. A fresh install defaults to `off`.
+
+When you click Apply in the TUI, SlimBrave Neo asks two macOS-only questions in order: which Brave channels to manage (only when more than one is installed), then whether to persist across reboots. Both prompts have a sticky default — Enter keeps whichever scope and mode are currently installed.
+
+```bash
+sudo python3 slimbrave-mac.py --import "./Presets/Maximum Privacy Preset.json" --persist on
+sudo python3 slimbrave-mac.py --import "./Presets/Maximum Privacy Preset.json" --persist off
+sudo python3 slimbrave-mac.py --reset
+```
+
+**Finishing the Configuration Profile install (macOS 26).** With `--persist on`, SlimBrave Neo writes a `.mobileconfig` and opens System Settings, but macOS 11+ disallows CLI-driven profile installs so you finish the step in the GUI: a "Profile Downloaded" notification appears; in System Settings click **General** → **Device Management**, scroll down to **Downloaded**, double-click **SlimBrave Neo - Brave Policy**, click **Install**, and enter your login password. Policies then take effect immediately and persist across reboots. To uninstall, run `--reset` or remove the profile under the same Device Management pane. Reference: [Apple — Install configuration profiles on Mac](https://support.apple.com/guide/mac-help/mh35561/mac).
+
+**CLI mode (non-interactive):**
+
+```bash
+sudo python3 slimbrave-mac.py --import "./Presets/Maximum Privacy Preset.json"
+sudo python3 slimbrave-mac.py --export ~/SlimBraveNeoSettings.json
+sudo python3 slimbrave-mac.py --reset
+sudo python3 slimbrave-mac.py --import preset.json --channels stable,beta
+sudo python3 slimbrave-mac.py --import preset.json --persist on
+```
+
+After applying, restart Brave and verify at `brave://policy`.
+
 ## Features
 
-### Telemetry & Reporting
+<details>
+<summary><strong>Telemetry & Reporting</strong></summary>
+
 - Disable Metrics Reporting (needs a restart)
 - Disable Safe Browsing Reporting
 - Disable URL Data Collection
@@ -219,7 +214,11 @@ Every row of Site Permissions is a dropdown rather than a checkbox: **Not manage
 - Limit Variations to Critical Fixes, or Disable Variations / Griffin Experiments outright (mutually exclusive). Griffin is the remote seed Brave fetches to flip features in a browser that is already installed; "Limit" keeps the emergency security killswitches working, "Disable" blocks those too.
 - Disable Enhanced Spell Check — mutually exclusive with Disable Spellcheck below; this row keeps offline checking and only drops the Google lookup
 
-### Privacy & Security
+</details>
+
+<details>
+<summary><strong>Privacy & Security</strong></summary>
+
 - Disable Safe Browsing (security downgrade — Brave proxies these lookups through its own servers, so Google never sees them either way; excluded from every preset)
 - Disable Autofill (Addresses & Credit Cards)
 - Disable Password Manager
@@ -240,7 +239,11 @@ Every row of Site Permissions is a dropdown rather than a checkbox: **Not manage
 - Disable DNS Interception Probes (three random hostnames resolved at every launch and network change, visible to your ISP or DoH resolver)
 - Require HTTPS for Basic Auth (breaks logins on legacy HTTP-only routers, printers and appliances)
 
-### Site Permissions
+</details>
+
+<details>
+<summary><strong>Site Permissions</strong></summary>
+
 Content-setting defaults sites are granted. These rows are **not checkboxes** — Chromium models these keys as an enum rather than a boolean, so the tool now exposes the enum instead of hardcoding "block". Each is a dropdown in the Windows GUI and a `< Block >`-style selector in the TUI, with the same states everywhere:
 
 - **Not managed** — the default. Writes nothing at all, so Brave's own default and your per-site choices stand. An untouched row behaves exactly like the unticked checkbox it replaced.
@@ -261,7 +264,11 @@ Content-setting defaults sites are granted. These rows are **not checkboxes** �
 
 Older configs keep working unchanged: a v1.9.5 export or preset naming one of these keys carries the value `2`, so it imports as **Block**, and a key the config doesn't name comes back as **Not managed**. A value outside a key's legal set is left unmanaged rather than written out, and the import result names the key it skipped.
 
-### Access Controls
+</details>
+
+<details>
+<summary><strong>Access Controls</strong></summary>
+
 Lockdowns, and the escape hatches (guest, incognito, extensions) that would otherwise bypass the rest of the policy set — ordinary toggles:
 
 - Force Google SafeSearch
@@ -271,7 +278,11 @@ Lockdowns, and the escape hatches (guest, incognito, extensions) that would othe
 - Block Sideloaded (External) Extensions (the silent registry / drop-in-file install channel bundleware uses; extensions you install yourself keep working)
 - Disable / Force Incognito Mode (mutually exclusive; needs a restart)
 
-### Brave Features
+</details>
+
+<details>
+<summary><strong>Brave Features</strong></summary>
+
 - Disable Brave Rewards
 - Disable Brave Wallet
 - Disable Brave VPN (no effect on Linux builds — Brave doesn't compile the VPN there, though `brave://policy` still reports the key as applied)
@@ -287,7 +298,11 @@ Lockdowns, and the escape hatches (guest, incognito, extensions) that would othe
 - Disable Sync
 - Disable Email Aliases
 
-### Shields & Content Protection
+</details>
+
+<details>
+<summary><strong>Shields & Content Protection</strong></summary>
+
 Pin Brave's own protection defaults as managed policy so they can't be weakened per-site or in settings (requires Brave 1.84+; fingerprinting protection also works on 1.83):
 - Enforce Ad Blocking
 - Enforce Fingerprinting Protection
@@ -297,7 +312,11 @@ Pin Brave's own protection defaults as managed policy so they can't be weakened 
 
 > **Note on referrers:** with no referrer policy applied, Brave still caps cross-origin referrers by default, but you can loosen it per-site by lowering Shields on that site. "Allow Permissive Referrers" makes the loosening global as managed policy (`DefaultBraveReferrersSetting: 1`) — sites that request `unsafe-url` get your full referring URL cross-origin. It exists for compatibility with sites that break under capped referrers; it weakens privacy and is deliberately excluded from every preset.
 
-### Performance & Bloat
+</details>
+
+<details>
+<summary><strong>Performance & Bloat</strong></summary>
+
 - Disable Background Mode (Windows/Linux only — the policy doesn't exist on macOS)
 - Enable Memory Saver (discard inactive tabs to free RAM)
 - Force Hardware Acceleration (keeps rendering and video decode on the GPU; needs a restart)
@@ -313,16 +332,23 @@ Pin Brave's own protection defaults as managed policy so they can't be weakened 
 - Disable Developer Tools
 - Disable Wayback Machine
 
-### DNS Over HTTPS
+</details>
+
+<details>
+<summary><strong>DNS Over HTTPS</strong></summary>
+
 - `unmanaged` by default — no DNS policy is written, so Brave's own DNS settings stay user-controlled
 - Four managed modes: `automatic`, `off`, `secure`, `custom` (`off` force-disables DoH as policy)
 - Custom DoH template URL support (e.g. `https://cloudflare-dns.com/dns-query`)
 - Inline editable template field in the TUI
 - `secure` and `custom` **require** a template URL and are refused without one. Chromium would otherwise apply the mode with an empty resolver list and resolve nothing at all — and being machine-managed policy, you couldn't fix it from `brave://settings`. `automatic` is exempt: an empty template there is valid, and a template is honoured if you set one.
 
----
+</details>
 
-## CLI Reference (Linux and macOS)
+## CLI Reference
+
+<details>
+<summary><strong>Flags for the Linux and macOS scripts</strong></summary>
 
 The Windows PowerShell script is GUI-only: it has no user-facing flags. It declares only the two internal parameters the elevation relaunch passes to itself, so use its Import and Export buttons instead.
 
@@ -341,12 +367,18 @@ Import/export uses the same JSON format as the Windows PowerShell version. Confi
 
 ---
 
+## Presets
+
 <details>
-<summary><strong>Presets</strong></summary>
+<summary><strong>How presets behave</strong></summary>
 
 A preset is a starting point, not a verdict — import it, untick whatever you don't want, then Apply. Every preset except Strict Parental turns off Background Mode; that policy is Windows/Linux only, so on macOS the key is skipped and the rest of the preset applies unchanged. None of the presets ships "Disable Safe Browsing", "Allow Permissive Referrers", or the two mutually-exclusive Shields overrides.
 
-### Maximum Privacy Preset
+</details>
+
+<details>
+<summary><strong>Maximum Privacy Preset</strong></summary>
+
 - **Telemetry:** Turns off every reporting channel — metrics, extended Safe Browsing reports, URL-keyed data collection, P3A analytics, and the daily stats ping.
 - **Safe Browsing:** Left **on**. Only the extended *reports* are disabled. Brave routes Safe Browsing lookups through its own servers rather than Google's, so switching the protection off would cost you phishing and malware interstitials for essentially no privacy gain — the "Disable Safe Browsing (security downgrade)" toggle is there if you disagree, but no preset sets it.
 - **Privacy:** Disables autofill (addresses and cards), the password manager, leak detection, browser sign-in, WebRTC IP exposure, QUIC, network prediction and alternate error pages; blocks third-party cookies, payment-method probing, web notifications, location access, and motion sensors; enables Global Privacy Control, De-AMP, debouncing, tracking-parameter stripping, and reduced language fingerprinting. (Location Access is set to Block, not Ask — maps and delivery sites need addresses typed manually; drop the "Location Access" row to Ask, or to Not managed, if that is too strict.)
@@ -359,7 +391,11 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 - **Deliberately not set:** the WebUSB / Web Serial / WebHID / Local Fonts / Multi-Screen dropdowns stay *Not managed* — blocking them breaks hardware wallets, flashers and some security keys. Flip them to Block yourself for the full lockdown.
 - **Best for:** Paranoid users, journalists, activists, or anyone who wants Brave as private as possible — provided they read the performance bullet first.
 
-### Balanced Privacy Preset
+</details>
+
+<details>
+<summary><strong>Balanced Privacy Preset</strong></summary>
+
 - **Telemetry:** Same five reporting channels as Maximum Privacy — metrics, extended Safe Browsing reports, URL-keyed collection, P3A, stats ping. Safe Browsing protection itself stays on.
 - **Privacy:** Blocks third-party cookies, payment-method probing, network prediction and alternate error pages; enables Global Privacy Control, De-AMP, debouncing, tracking-parameter stripping, and reduced language fingerprinting; disables **QUIC** (all traffic falls back to TCP) and restricts **WebRTC** to proxied connections, which can break in-browser video and voice calls. Credit-card autofill is off, but address autofill and the password manager are deliberately kept.
 - **Accounts:** Browser sign-in and **Brave Sync** are both disabled, so bookmarks, history and settings stop syncing across your devices. Untick "Disable Sync" and "Disable Browser Sign-in" before Apply if you rely on a sync chain.
@@ -369,7 +405,11 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 - **New in 2.1:** kills the enhanced-spellcheck web service while keeping offline spellcheck working — the exact balanced trade — plus on-device AI off, DNS interception probes off, remote debugging blocked, cleartext Basic Auth refused, sideloaded extensions blocked (your own extensions keep working), and variations limited to critical fixes.
 - **Best for:** Most users who want privacy but still need convenience features — the password manager, address autofill, and Shields left at Brave's own defaults.
 
-### Performance Focused Preset
+</details>
+
+<details>
+<summary><strong>Performance Focused Preset</strong></summary>
+
 - **Telemetry:** Blocks metrics reporting, P3A analytics, and the daily stats ping (Safe Browsing and its extended reports stay untouched).
 - **Privacy:** The three no-cost speedups only — De-AMP, debouncing, and tracking-parameter stripping. Nothing else in Privacy & Security is touched.
 - **Brave Features:** Disables Rewards, Wallet, VPN, AI Chat, News, Talk, Playlist, Speedreader, Web Discovery, and the Wayback Machine prompt to declutter the browser.
@@ -378,7 +418,11 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 - **New in 2.1:** on-device AI off — Brave 1.94+ downloads and runs a local model and builds an AI index of your history; this preset's job is exactly that kind of background weight.
 - **Best for:** Users who want a faster, cleaner Brave without extreme privacy tweaks.
 
-### Developer Preset
+</details>
+
+<details>
+<summary><strong>Developer Preset</strong></summary>
+
 - **Telemetry:** Blocks all five reporting channels (metrics, extended Safe Browsing reports, URL-keyed collection, P3A, stats ping).
 - **Privacy:** Disables alternate error pages so you always see the real network error, never a suggestion page. Nothing else in Privacy & Security is touched.
 - **Brave Features:** Disables Rewards, Wallet, VPN, AI Chat (Leo), News, and Talk.
@@ -389,7 +433,11 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 - **Remote debugging deliberately stays available.** Blocking it would break Puppeteer, Playwright and `brave://inspect` — the tools this preset exists to keep working.
 - **Best for:** Developers who need dev tools and a working network stack but still want telemetry and Brave's monetised features out of the way.
 
-### Strict Parental Controls Preset
+</details>
+
+<details>
+<summary><strong>Strict Parental Controls Preset</strong></summary>
+
 - **Telemetry:** P3A analytics and the daily stats ping.
 - **Privacy:** Blocks incognito mode **and guest mode** (a guest window would bypass every other restriction), forces Google SafeSearch, enables the SafeSites adult-content filter, disables browser sign-in and **Brave Sync**, and turns on De-AMP, debouncing, tracking-parameter stripping, and reduced language fingerprinting.
 - **SafeSites is a Google callout.** `SafeSitesFilterBehavior` sends every URL the browser navigates to — including URLs loaded inside frames — to Google's Safe Search API for classification. It is a remote lookup, not a local blocklist. That is the price of the filter; if it isn't acceptable, untick "Filter Adult Content (SafeSites)" and rely on the DNS filter alone.
@@ -399,7 +447,11 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 - **New in 2.1:** remote debugging blocked — a debugging port is a scriptable side door past every filter this preset sets up.
 - **Best for:** Parents, schools, or workplaces that need restricted browsing.
 
-### Brave Origin Preset
+</details>
+
+<details>
+<summary><strong>Brave Origin Preset</strong></summary>
+
 Applies the policy half of what [Brave Origin](https://brave.com/origin/) upgrade mode enforces to a standard Brave install — the same feature kill-switches, through the same policy keys Origin itself sets.
 
 - **The set is derived from source, not guessed:** the 15 keys and their exact values come from `brave_origin_service_factory.cc` in brave-core, the file where Origin defines what it enforces. Rewards, Wallet, VPN, AI Chat, Local AI, News, Talk, Playlist, Web Discovery, Speedreader, Wayback Machine, Email Aliases and Tor go off; P3A and the stats ping stop reporting.
@@ -410,9 +462,12 @@ Applies the policy half of what [Brave Origin](https://brave.com/origin/) upgrad
 
 </details>
 
----
+</details>
 
 ## How It Works
+
+<details>
+<summary><strong>Policy locations, precedence and scope</strong></summary>
 
 SlimBrave Neo writes Chromium [managed enterprise policies](https://chromeenterprise.google/policies/) to platform-specific locations. Brave reads these on startup and enforces the policies. No browser modifications needed.
 
@@ -471,7 +526,7 @@ Set-ExecutionPolicy -ExecutionPolicy Undefined   -Scope CurrentUser   # undo
 
 </details>
 
----
+</details>
 
 ## Roadmap
 
