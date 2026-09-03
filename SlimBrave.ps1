@@ -1089,9 +1089,20 @@ function Repair-BravePrefs {
     return @{ Removed = $removed; Running = $false; Skipped = $false; Users = $users }
 }
 
+function Join-Status([string]$lead, $repair) {
+    # The repair note follows the routine result - unless it needs the user
+    # to act (Brave was running, nothing was cleared), in which case it leads.
+    $n = (Get-RepairNote $repair).Trim()
+    if (-not $n) { return $lead }
+    if ($repair.Skipped) { return "$n $lead" }
+    return "$lead $n"
+}
+
 function Get-RepairNote($repair) {
     if ($repair.Skipped) {
-        return " Brave is running, so leaked profile prefs were left alone - it would overwrite the fix on its next save. Close Brave fully and run this again to clear them."
+        # Leads with the action: this is the one line the user has to do
+        # something about, so it goes first (see Join-Status) and says so.
+        return " Close Brave fully and run this again to clear leaked profile prefs - Brave is running, and it would overwrite the fix on its next save."
     }
     if ($repair.Removed -gt 0) {
         $plural = ""
@@ -1221,7 +1232,7 @@ function Invoke-ApplyPolicy {
         $written++
     }
     $repair = Repair-BravePrefs
-    Set-Status ("Applied $written policies. Restart Brave, then check brave://policy." + (Get-RepairNote $repair))
+    Set-Status (Join-Status "Applied $written policies. Restart Brave, then check brave://policy." $repair)
     return $true
 }
 
@@ -1258,7 +1269,7 @@ function Invoke-ResetPolicy {
         $note += " Left $($skippedLists.Count) externally-managed list policy" +
                  $(if ($skippedLists.Count -eq 1) { "" } else { "s" }) + " alone."
     }
-    Set-Status ($note + (Get-RepairNote $repair))
+    Set-Status (Join-Status $note $repair)
     return $true
 }
 
@@ -1678,9 +1689,13 @@ $bar.Add_Paint({
     # any of it was cut. At 100% every one-line message paints as before.
     $room=$script:barButtonsLeft-(2*$script:BAR_PAD)
     $lineH=$g.MeasureString("Ag",$script:capFont,10000,$script:SF).Height
-    $lines=2; if((2*$lineH) -gt ($s.Height-(S 6))){ $lines=1 }
+    # As many lines as the bar's CURRENT height holds - Set-Status has already
+    # grown the bar to fit the message, so this is normally all of it. The
+    # ellipsis and tooltip below are a last resort past the four-line cap,
+    # not the channel for anything a user has to act on.
+    $lines=[math]::Max(1,[math]::Min($script:BAR_MAX_LINES,[math]::Floor(($s.Height-(S 12))/$lineH)))
     $boxH=[int][math]::Ceiling($lineH*$lines)
-    $rect=New-Object System.Drawing.RectangleF $script:BAR_PAD,((S 34)-($boxH/2)),([math]::Max($room,0)),$boxH
+    $rect=New-Object System.Drawing.RectangleF $script:BAR_PAD,(($s.Height/2)-($boxH/2)),([math]::Max($room,0)),$boxH
     $fmt=New-Object System.Drawing.StringFormat $script:SF
     $fmt.Trimming=[System.Drawing.StringTrimming]::EllipsisWord
     $fmt.FormatFlags=[System.Drawing.StringFormatFlags]::LineLimit
@@ -1695,7 +1710,35 @@ $bar.Add_Paint({
     if($room -gt 0){ $g.DrawString($script:statusText,$script:capFont,$b,$rect,$fmt) }
     $b.Dispose(); $fmt.Dispose()
 })
-function Set-Status([string]$t){ $script:statusText=$t; $bar.Invalidate() }
+$script:BAR_MAX_LINES=4
+function Set-Status([string]$t){
+    # The bar grows to fit its message rather than hiding the tail behind a
+    # hover: after Apply, the part that says "close Brave and run this again"
+    # is exactly the part that used to end up as "...". Up to four lines; the
+    # page above gives up the room (it is AutoScroll, nothing is lost) and the
+    # buttons stay centred. At two lines or fewer the bar is its usual S 68,
+    # so ordinary messages change nothing.
+    $script:statusText=$t
+    $room=$script:barButtonsLeft-(2*$script:BAR_PAD)
+    $need=S 68
+    if($room -gt 0){
+        $g=$bar.CreateGraphics()
+        $fmt=New-Object System.Drawing.StringFormat $script:SF
+        $lineH=$g.MeasureString("Ag",$script:capFont,10000,$script:SF).Height
+        $fit=0; $nl=0
+        [void]$g.MeasureString($t,$script:capFont,(New-Object System.Drawing.SizeF $room,10000),$fmt,[ref]$fit,[ref]$nl)
+        $fmt.Dispose(); $g.Dispose()
+        $nl=[math]::Max(1,[math]::Min($script:BAR_MAX_LINES,$nl))
+        $need=[math]::Max((S 68),([int][math]::Ceiling($nl*$lineH)+(S 24)))
+    }
+    if($bar.Height -ne $need){
+        $bar.Top=$form.ClientSize.Height-$need
+        $bar.Height=$need
+        foreach($c in $bar.Controls){ $c.Top=[int](($need-$c.Height)/2) }
+        if($null -ne $page){ $page.Height=$bar.Top-$page.Top-(S 4) }
+    }
+    $bar.Invalidate()
+}
 
 function New-BarButton([string]$label,[bool]$accent){
     $b=New-Object System.Windows.Forms.Panel

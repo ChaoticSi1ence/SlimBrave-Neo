@@ -2517,3 +2517,26 @@ def test_ps1_gui_fonts_follow_the_layout_factor():
         "the factor must be clamped before the first S() call"
     )
 
+
+def test_ps1_status_bar_grows_to_its_message_instead_of_hiding_it():
+    """After Apply, the sentence telling the user to close Brave so leaked
+    prefs can be cleared used to end up as "..." with the rest behind a
+    hover. Critical text must be visible without a mouse: Set-Status sizes
+    the bar from the measured line count (up to a cap), re-centres the
+    buttons and gives the page the remainder, and the note that needs acting
+    on leads the message."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    start = text.index("function Set-Status(")
+    body = text[start:text.index("\n}\n", start)]
+    assert "MeasureString" in body and "[ref]$nl" in body, "Set-Status does not measure the message's lines"
+    assert re.search(r"\$bar\.Height\s*=\s*\$need", body), "Set-Status does not resize the bar"
+    assert re.search(r"\$page\.Height\s*=", body), "the page does not yield the bar's extra height"
+    assert re.search(r"\$c\.Top\s*=", body), "buttons are not re-centred in a taller bar"
+    assert re.search(r"^\$script:BAR_MAX_LINES\s*=\s*[3-6]\s*$", text, re.MULTILINE), "no sane line cap"
+
+    js = text[text.index("function Join-Status("):]
+    js = js[:js.index("\n}\n")]
+    assert re.search(r"if\s*\(\s*\$repair\.Skipped\s*\)\s*\{\s*return\s+\"\$n \$lead\"", js), (
+        "the skipped-repair note does not lead the message"
+    )
+
