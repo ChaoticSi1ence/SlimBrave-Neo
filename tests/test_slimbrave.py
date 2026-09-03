@@ -2540,3 +2540,18 @@ def test_ps1_status_bar_grows_to_its_message_instead_of_hiding_it():
         "the skipped-repair note does not lead the message"
     )
 
+
+def test_ps1_search_word_set_is_not_a_hashtable():
+    """PowerShell resolves $table.Keys to the entry named "keys" when the
+    table has one - and "registry keys" is in several descriptions - so the
+    word set came back as $true and Test-SearchHit threw on every keystroke.
+    The set must be a HashSet, and nothing may read .Keys off it."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    start = text.index("function Get-SearchWords(")
+    words = text[start:text.index("\n}\n", start)]
+    assert "HashSet[string]" in words, "the search word set is not a HashSet"
+    assert re.search(r"return\s+,\$out", words), "the HashSet is unrolled on return (needs the unary comma)"
+    start = text.index("function Test-SearchHit(")
+    hit = text[start:text.index("\n}\n", start)]
+    assert ".Keys" not in hit and "ContainsKey" not in hit, "Test-SearchHit still treats the word set as a hashtable"
+

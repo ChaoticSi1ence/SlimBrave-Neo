@@ -2359,20 +2359,25 @@ function Get-SearchWords([string]$text){
     # keys are CamelCase, so they are split at case changes too - a user who
     # types "blocklist" should find ExtensionInstallBlocklist - and kept whole
     # as well, so a pasted key still matches by prefix.
-    $out=@{}
+    # A HashSet, not a hashtable. PowerShell resolves $table.Keys to the ENTRY
+    # named "keys" when one exists - and "registry keys" appears in several
+    # descriptions - so the key collection came back as $true and every prefix
+    # test on those rows threw into the console. The unary comma keeps the set
+    # from being unrolled into strings on return.
+    $out=New-Object System.Collections.Generic.HashSet[string]
     $spaced=$text -creplace '([a-z0-9])([A-Z])','$1 $2'
     foreach($w in (("$text $spaced").ToLower() -split '[^a-z0-9]+')){
-        if($w){ $out[$w]=$true; $out[(Get-SearchStem $w)]=$true }
+        if($w){ [void]$out.Add($w); [void]$out.Add((Get-SearchStem $w)) }
     }
-    return $out
+    return ,$out
 }
 function Test-SearchHit($words,[string]$tok,[string]$stem){
     # A token hits when it IS a word (or a word's stem), or when it is the
     # start of one and long enough to mean something - three characters, so
     # "tel" finds telemetry but "is" cannot match every row that has an "i".
-    if($words.ContainsKey($tok) -or $words.ContainsKey($stem)){ return $true }
+    if($words.Contains($tok) -or $words.Contains($stem)){ return $true }
     if($stem.Length -ge 3){
-        foreach($w in $words.Keys){ if($w.StartsWith($stem)){ return $true } }
+        foreach($w in $words){ if($w.StartsWith($stem)){ return $true } }
     }
     return $false
 }
