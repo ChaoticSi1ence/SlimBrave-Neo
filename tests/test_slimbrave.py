@@ -2321,25 +2321,53 @@ def test_ps1_action_bar_row_is_right_anchored_and_status_is_bounded():
     ran off the form above 100%, and the status text - drawn with no width
     bound - ran under the buttons and showed through the gaps between them.
 
-    Neither shows in a diff, and neither shows on a 100% display, so pin the
-    two properties that fix them: the row is laid out from the bar's right
-    edge, and the status paint fits its text (with the same Fit-Text the row
-    captions use) to the room before wherever the leftmost button landed.
+    The row overrun never shows at 100% and neither defect shows in a diff,
+    so pin the RELATIONS that fix them rather than the spelling of any one
+    line: the running x starts at the bar's right edge, a button is placed
+    only after its width is subtracted, the specs are walked last-first so
+    Apply Settings lands rightmost, and the status paint takes its budget
+    from wherever the leftmost button actually landed and trims on a word
+    boundary with the full text in a tooltip. The as-written predecessor of
+    this test passed three one-line breakages that reintroduced the defects.
     """
     text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
 
-    assert re.search(r"^\$bx=\$bar\.Width-\$script:BAR_PAD", text, re.MULTILINE), (
+    def const(name):  # same shape as the row-geometry test above
+        m = re.search(r"^\$script:" + name + r"\s*=\s*(\d+)", text, re.MULTILINE)
+        assert m, f"layout constant {name} is missing from SlimBrave.ps1"
+        return int(m.group(1))
+
+    assert const("BAR_PAD") > 0 and const("BAR_GAP") > 0
+
+    m = re.search(r"^# -+ action bar\n(.*?)^# -+ rows", text, re.MULTILINE | re.DOTALL)
+    assert m, "the action-bar section is no longer delimited where this test looks"
+    bar = m.group(1)
+
+    assert re.search(r"^\$bx\s*=\s*\$bar\.Width\s*-\s*\$script:BAR_PAD", bar, re.M), (
         "the button row no longer starts from the bar's right edge"
     )
-    assert not re.search(r"^\$bx=\d+", text, re.MULTILINE), (
-        "the button row is packed from a fixed x again"
+    assert not re.search(r"^\$bx\s*=\s*\d+", bar, re.M), "the button row is packed from a fixed x again"
+    assert re.search(r"for\s*\(\s*\$i\s*=\s*\$specs\.Count\s*-\s*1\s*;.*\$i--\s*\)", bar), (
+        "the specs are not walked last-first, so Apply Settings would not land rightmost"
     )
-    assert re.search(r"^\$script:barButtonsLeft=\$bx", text, re.MULTILINE), (
+    # a newline may separate the two statements as well as a semicolon
+    assert re.search(r"\$bx\s*-=\s*\$btn\.Width\s*;?\s*\$btn\.Left\s*=\s*\$bx", bar), (
+        "a button is placed before its width is subtracted, so the row overruns the bar"
+    )
+    assert re.search(r"^\$script:barButtonsLeft\s*=\s*\$bx\s*\+\s*\$script:BAR_GAP", bar, re.M), (
         "the leftmost button's x is not recorded where the row is built"
     )
 
-    start = text.index("$bar.Add_Paint(")
-    paint = text[start:text.index("function Set-Status", start)]
-    assert "Fit-Text $g $script:statusText" in paint, "the status text is drawn unbounded"
-    assert "$script:barButtonsLeft" in paint, "the status budget is not taken from the button row"
-    assert "$script:barTip.SetToolTip" in paint, "a truncated status has no tooltip carrying the full text"
+    m = re.search(r"\$bar\.Add_Paint\((.*?)^function Set-Status", bar, re.M | re.S)
+    assert m, "the bar's Paint handler is no longer where this test looks"
+    paint = m.group(1)
+    assert re.search(
+        r"\$room\s*=\s*\$script:barButtonsLeft\s*-\s*\(\s*2\s*\*\s*\$script:BAR_PAD\s*\)", paint
+    ), "the status budget is not the room before the leftmost button, minus padding both sides"
+    assert "EllipsisWord" in paint, "the status text is not trimmed on a word boundary"
+    assert re.search(r"\$script:barTip\.SetToolTip\(", paint), (
+        "a truncated status has no tooltip carrying the full text"
+    )
+    assert re.search(r"if\s*\(\s*\$room\s*-gt\s*0\s*\)\s*\{[^}]*DrawString", paint), (
+        "the status is drawn even when there is no room for it"
+    )

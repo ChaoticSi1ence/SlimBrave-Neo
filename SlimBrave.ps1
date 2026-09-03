@@ -1812,14 +1812,30 @@ $bar.Add_Paint({
     $g.DrawLine($p,0,0,$s.Width,0); $p.Dispose()
     # The buttons are child panels, so status text drawn past the leftmost
     # one lands on the bar behind them and shows through the gaps between
-    # them (issue #20). Fit it to the room before that button; the full
-    # message goes to a tooltip so a truncated repair note is still readable.
+    # them (issue #20). Draw it into the room before that button instead.
+    # Fonts are in points, so from 125% scaling a single line no longer holds
+    # the part of an Apply message the user has to act on - but the 68 px bar
+    # fits two lines through 175%, so wrap to two when they fit and trim on a
+    # word boundary otherwise. The full message goes to a tooltip whenever
+    # any of it was cut. At 100% every one-line message paints as before.
     $room=$script:barButtonsLeft-(2*$script:BAR_PAD)
-    $t=Fit-Text $g $script:statusText $script:capFont $room
-    $tip=""; if($t -ne $script:statusText){ $tip=$script:statusText }
+    $lineH=$g.MeasureString("Ag",$script:capFont,10000,$script:SF).Height
+    $lines=2; if((2*$lineH) -gt ($s.Height-6)){ $lines=1 }
+    $boxH=[int][math]::Ceiling($lineH*$lines)
+    $rect=New-Object System.Drawing.RectangleF $script:BAR_PAD,(34-($boxH/2)),([math]::Max($room,0)),$boxH
+    $fmt=New-Object System.Drawing.StringFormat $script:SF
+    $fmt.Trimming=[System.Drawing.StringTrimming]::EllipsisWord
+    $fmt.FormatFlags=[System.Drawing.StringFormatFlags]::LineLimit
+    $fmt.LineAlignment=[System.Drawing.StringAlignment]::Center
+    # A zero-width rect makes MeasureString report everything as fitted,
+    # hence the explicit $room guard.
+    $fit=0; $nl=0
+    [void]$g.MeasureString($script:statusText,$script:capFont,$rect.Size,$fmt,[ref]$fit,[ref]$nl)
+    $tip=""; if($room -le 0 -or $fit -lt $script:statusText.Length){ $tip=$script:statusText }
     if($script:barTip.GetToolTip($s) -ne $tip){ $script:barTip.SetToolTip($s,$tip) }
     $b=New-Object System.Drawing.SolidBrush $script:F.TextSub
-    $g.DrawString($t,$script:capFont,$b,$script:BAR_PAD,26,$script:SF); $b.Dispose()
+    if($room -gt 0){ $g.DrawString($script:statusText,$script:capFont,$b,$rect,$fmt) }
+    $b.Dispose(); $fmt.Dispose()
 })
 function Set-Status([string]$t){ $script:statusText=$t; $bar.Invalidate() }
 
@@ -1895,6 +1911,15 @@ function New-BarButton([string]$label,[bool]$accent){
                 if($dlg.ShowDialog() -eq "OK"){
                     try{
                         $cfg=Get-Content $dlg.FileName -Raw | ConvertFrom-Json
+                        # ConvertFrom-Json only throws on malformed JSON. Any other
+                        # .json - a bookmarks dump, "[]", a bare string - parses fine,
+                        # and Import-PresetIntoState clears every staged row BEFORE it
+                        # looks for Features, so without this guard a wrong file wiped
+                        # the selections and still reported "Imported". The throw lands
+                        # in the catch below, which is the honest message.
+                        if(-not ($cfg -is [System.Management.Automation.PSCustomObject]) -or
+                           $null -eq $cfg.PSObject.Properties['Features'] -or
+                           $null -eq $cfg.Features){ throw "no Features block" }
                         Import-PresetIntoState @{features=$cfg.Features;dns=$cfg.DnsMode;tmpl=$cfg.DnsTemplates}
                         Select-Page $script:sel
                         Set-Status "Imported from $([System.IO.Path]::GetFileName($dlg.FileName))"
