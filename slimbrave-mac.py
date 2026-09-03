@@ -458,6 +458,7 @@ def detect_brave():
 # Features with a `group` key are mutually exclusive within that group:
 # checking one silently unchecks the others. Used for policies where two
 # rows set conflicting values for the same key (IncognitoModeAvailability,
+# HardwareAccelerationModeEnabled,
 # DefaultBraveReferrersSetting, ChromeVariations), for the Shields URL
 # lists, and for the two spellcheck rows — upstream states the enhanced
 # spell check policy has no effect once SpellcheckEnabled is false.
@@ -592,7 +593,8 @@ CATEGORIES = [
         "name": "Performance & Bloat",
         "features": [
             {"name": "Enable Memory Saver", "key": "HighEfficiencyModeEnabled", "value": True},
-            {"name": "Force Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": True},
+            {"name": "Force Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": True, "group": "hwaccel"},
+            {"name": "Disable Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": False, "group": "hwaccel"},
             {"name": "Disable Media Router (Cast)", "key": "EnableMediaRouter", "value": False},
             {"name": "Disable Media Recommendations", "key": "MediaRecommendationsEnabled", "value": False},
             {"name": "Disable Shopping List", "key": "ShoppingListEnabled", "value": False},
