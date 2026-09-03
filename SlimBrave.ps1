@@ -1802,19 +1802,31 @@ $bar.Location=New-Object System.Drawing.Point 250,692
 $bar.Size=New-Object System.Drawing.Size 930,68
 $bar.BackColor=$F.Bar; Enable-DoubleBuffer $bar; $form.Controls.Add($bar)
 $script:statusText="Ready"
+$script:BAR_PAD=20   # status text left margin, button row right margin
+$script:BAR_GAP=8    # between buttons
+$script:barButtonsLeft=$bar.Width   # x of the leftmost button, set once the row is built
+$script:barTip=New-Object System.Windows.Forms.ToolTip
 $bar.Add_Paint({
     param($s,$e); $g=$e.Graphics
     $p=New-Object System.Drawing.Pen $script:F.RowEdge
     $g.DrawLine($p,0,0,$s.Width,0); $p.Dispose()
+    # The buttons are child panels, so status text drawn past the leftmost
+    # one lands on the bar behind them and shows through the gaps between
+    # them (issue #20). Fit it to the room before that button; the full
+    # message goes to a tooltip so a truncated repair note is still readable.
+    $room=$script:barButtonsLeft-(2*$script:BAR_PAD)
+    $t=Fit-Text $g $script:statusText $script:capFont $room
+    $tip=""; if($t -ne $script:statusText){ $tip=$script:statusText }
+    if($script:barTip.GetToolTip($s) -ne $tip){ $script:barTip.SetToolTip($s,$tip) }
     $b=New-Object System.Drawing.SolidBrush $script:F.TextSub
-    $g.DrawString($script:statusText,$script:capFont,$b,20,26,$script:SF); $b.Dispose()
+    $g.DrawString($t,$script:capFont,$b,$script:BAR_PAD,26,$script:SF); $b.Dispose()
 })
 function Set-Status([string]$t){ $script:statusText=$t; $bar.Invalidate() }
 
-function New-BarButton([string]$label,[bool]$accent,[int]$x){
+function New-BarButton([string]$label,[bool]$accent){
     $b=New-Object System.Windows.Forms.Panel
     $w=[int]([System.Windows.Forms.TextRenderer]::MeasureText($label,$script:btnFont).Width+34)
-    $b.Location=New-Object System.Drawing.Point $x,18
+    $b.Location=New-Object System.Drawing.Point 0,18   # x is placed by the caller once the width is known
     $b.Size=New-Object System.Drawing.Size $w,32
     $b.BackColor=$F.Bar; $b.Tag=@{L=$label;A=$accent;Hot=$false}
     Enable-DoubleBuffer $b
@@ -1894,10 +1906,18 @@ function New-BarButton([string]$label,[bool]$accent,[int]$x){
     $b.Cursor=[System.Windows.Forms.Cursors]::Hand
     $bar.Controls.Add($b); return $b
 }
-$bx=430
-foreach($spec in @(@("Export",$false),@("Import",$false),@("Re-sync",$false),@("Reset",$false),@("Apply Settings",$true))){
-    $btn=New-BarButton $spec[0] $spec[1] $bx; $bx+=$btn.Width+8
+# Packed from the bar's right edge leftward. Button widths come from the
+# rendered label and the fonts are in points, so the row grows with display
+# scaling while the bar stays 930 px wide - laid out left-to-right from a
+# fixed x it ran off the form above 100% (issue #20). Anchored right it grows
+# into the free middle instead, and the status text takes whatever is left.
+$specs=@(@("Export",$false),@("Import",$false),@("Re-sync",$false),@("Reset",$false),@("Apply Settings",$true))
+$bx=$bar.Width-$script:BAR_PAD
+for($i=$specs.Count-1;$i -ge 0;$i--){
+    $btn=New-BarButton $specs[$i][0] $specs[$i][1]
+    $bx-=$btn.Width; $btn.Left=$bx; $bx-=$script:BAR_GAP
 }
+$script:barButtonsLeft=$bx+$script:BAR_GAP
 
 # --------------------------------------------------------------- rows
 $script:rowPanels=@()

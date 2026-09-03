@@ -2307,3 +2307,39 @@ def test_ps1_row_control_columns_do_not_collide():
     # a chevron must clear the control to its right on its own row type
     assert exp_choice + chevron_w <= dd_x, "the expander overlaps the dropdown"
     assert exp_x + chevron_w <= tg_x, "the expander overlaps the toggle"
+
+
+# ---------------------------------------------------------------------------
+# Windows GUI: the action bar must survive display scaling
+# ---------------------------------------------------------------------------
+
+
+def test_ps1_action_bar_row_is_right_anchored_and_status_is_bounded():
+    """Issue #20. The bar is a fixed 930 px wide, but every button takes its
+    width from its rendered label and the fonts are in points, so the row
+    grows with display scaling. Packed left-to-right from a hardcoded x it
+    ran off the form above 100%, and the status text - drawn with no width
+    bound - ran under the buttons and showed through the gaps between them.
+
+    Neither shows in a diff, and neither shows on a 100% display, so pin the
+    two properties that fix them: the row is laid out from the bar's right
+    edge, and the status paint fits its text (with the same Fit-Text the row
+    captions use) to the room before wherever the leftmost button landed.
+    """
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+
+    assert re.search(r"^\$bx=\$bar\.Width-\$script:BAR_PAD", text, re.MULTILINE), (
+        "the button row no longer starts from the bar's right edge"
+    )
+    assert not re.search(r"^\$bx=\d+", text, re.MULTILINE), (
+        "the button row is packed from a fixed x again"
+    )
+    assert re.search(r"^\$script:barButtonsLeft=\$bx", text, re.MULTILINE), (
+        "the leftmost button's x is not recorded where the row is built"
+    )
+
+    start = text.index("$bar.Add_Paint(")
+    paint = text[start:text.index("function Set-Status", start)]
+    assert "Fit-Text $g $script:statusText" in paint, "the status text is drawn unbounded"
+    assert "$script:barButtonsLeft" in paint, "the status budget is not taken from the button row"
+    assert "$script:barTip.SetToolTip" in paint, "a truncated status has no tooltip carrying the full text"
