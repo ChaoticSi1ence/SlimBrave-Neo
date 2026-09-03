@@ -2276,22 +2276,354 @@ def test_startup_collapse_leaves_every_selectable_row_visible(mod):
 # ---------------------------------------------------------------------------
 
 
-def test_ps1_rows_fit_inside_scrolled_panel_width():
-    """No control's right edge may cross 389px.
+def test_ps1_row_control_columns_do_not_collide():
+    """The interface's row geometry must stay internally consistent.
 
-    Each column panel is 414px wide and its client area measures 391px once
-    the vertical scrollbar appears. A row reaching past that grows a 2px
-    horizontal scrollbar on every column, which also eats 21px of column
-    height. Regression: shipped in v2.0.0-v2.0.2 as 28+365=393.
+    Every control in a settings row is placed from a script-scope constant.
+    They are independent numbers, so nothing but this stops an edit to one
+    from overlapping another - which is how the expander chevron ended up
+    under the "Not managed" hint during development. Bounds are checked
+    against the row width rather than eyeballed, because a collision is
+    invisible in a diff and obvious only on screen.
     """
     text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
-    budget = 389
-    pairs = re.findall(
-        r"Location = New-Object System\.Drawing\.Point\((\d+), [^)]*\)\s*\n"
-        r"(?:[^\n]*\n)?\s*\$\w+\.Size = New-Object System\.Drawing\.Size\((\d+), \d+\)",
-        text,
+
+    # Constants are 96-DPI design pixels, written either bare or as `S n`
+    # (the display-scale helper, which is the identity at 100%). The
+    # relations below hold in design units whichever way they are spelt.
+    def const(name):
+        m = re.search(r"^\$script:" + name + r"\s*=\s*(?:S\s+)?(\d+)", text, re.MULTILINE)
+        assert m, f"layout constant {name} is missing from SlimBrave.ps1"
+        return int(m.group(1))
+
+    m = re.search(
+        r"\$p\.Size=New-Object System\.Drawing\.Size (?:\(S (\d+)\)|(\d+)),\$script:COLLAPSED", text
     )
-    assert pairs, "no Location/Size pairs parsed from SlimBrave.ps1"
-    offenders = [(int(x), int(w)) for x, w in pairs
-                 if int(x) < 400 and int(x) + int(w) > budget]
-    assert not offenders, f"rows exceed the {budget}px right-edge budget: {offenders}"
+    assert m, "the settings-row width is no longer declared where this test looks"
+    row_w = int(m.group(1) or m.group(2))
+
+    exp_x, exp_choice = const("EXP_X"), const("EXP_X_CHOICE")
+    dd_x, dd_w = const("DD_X"), const("DD_W")
+    tg_x, tg_w = const("TG_X"), const("TG_W")
+    chevron_w = 26
+
+    assert dd_x + dd_w <= row_w, "the dropdown runs past the row"
+    assert tg_x + tg_w <= row_w, "the toggle runs past the row"
+    # a chevron must clear the control to its right on its own row type
+    assert exp_choice + chevron_w <= dd_x, "the expander overlaps the dropdown"
+    assert exp_x + chevron_w <= tg_x, "the expander overlaps the toggle"
+
+
+# ---------------------------------------------------------------------------
+# Windows GUI: the action bar must survive display scaling
+# ---------------------------------------------------------------------------
+
+
+def test_ps1_action_bar_row_is_right_anchored_and_status_is_bounded():
+    """Issue #20. The bar is a fixed 930 px wide, but every button takes its
+    width from its rendered label and the fonts are in points, so the row
+    grows with display scaling. Packed left-to-right from a hardcoded x it
+    ran off the form above 100%, and the status text - drawn with no width
+    bound - ran under the buttons and showed through the gaps between them.
+
+    The row overrun never shows at 100% and neither defect shows in a diff,
+    so pin the RELATIONS that fix them rather than the spelling of any one
+    line: the running x starts at the bar's right edge, a button is placed
+    only after its width is subtracted, the specs are walked last-first so
+    Apply Settings lands rightmost, and the status paint takes its budget
+    from wherever the leftmost button actually landed and trims on a word
+    boundary with the full text in a tooltip. The as-written predecessor of
+    this test passed three one-line breakages that reintroduced the defects.
+    """
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+
+    def const(name):  # same shape as the row-geometry test above
+        m = re.search(r"^\$script:" + name + r"\s*=\s*(?:S\s+)?(\d+)", text, re.MULTILINE)
+        assert m, f"layout constant {name} is missing from SlimBrave.ps1"
+        return int(m.group(1))
+
+    assert const("BAR_PAD") > 0 and const("BAR_GAP") > 0
+
+    m = re.search(r"^# -+ action bar\n(.*?)^# -+ rows", text, re.MULTILINE | re.DOTALL)
+    assert m, "the action-bar section is no longer delimited where this test looks"
+    bar = m.group(1)
+
+    assert re.search(r"^\$bx\s*=\s*\$bar\.Width\s*-\s*\$script:BAR_PAD", bar, re.M), (
+        "the button row no longer starts from the bar's right edge"
+    )
+    assert not re.search(r"^\$bx\s*=\s*\d+", bar, re.M), "the button row is packed from a fixed x again"
+    assert re.search(r"for\s*\(\s*\$i\s*=\s*\$specs\.Count\s*-\s*1\s*;.*\$i--\s*\)", bar), (
+        "the specs are not walked last-first, so Apply Settings would not land rightmost"
+    )
+    # a newline may separate the two statements as well as a semicolon
+    assert re.search(r"\$bx\s*-=\s*\$btn\.Width\s*;?\s*\$btn\.Left\s*=\s*\$bx", bar), (
+        "a button is placed before its width is subtracted, so the row overruns the bar"
+    )
+    assert re.search(r"^\$script:barButtonsLeft\s*=\s*\$bx\s*\+\s*\$script:BAR_GAP", bar, re.M), (
+        "the leftmost button's x is not recorded where the row is built"
+    )
+
+    m = re.search(r"\$bar\.Add_Paint\((.*?)^function Set-Status", bar, re.M | re.S)
+    assert m, "the bar's Paint handler is no longer where this test looks"
+    paint = m.group(1)
+    assert re.search(
+        r"\$room\s*=\s*\$script:barButtonsLeft\s*-\s*\(\s*2\s*\*\s*\$script:BAR_PAD\s*\)", paint
+    ), "the status budget is not the room before the leftmost button, minus padding both sides"
+    assert "EllipsisWord" in paint, "the status text is not trimmed on a word boundary"
+    assert re.search(r"\$script:barTip\.SetToolTip\(", paint), (
+        "a truncated status has no tooltip carrying the full text"
+    )
+    assert re.search(r"if\s*\(\s*\$room\s*-gt\s*0\s*\)\s*\{[^}]*DrawString", paint), (
+        "the status is drawn even when there is no room for it"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Hazards the Fluent review uncovered
+# ---------------------------------------------------------------------------
+
+
+def test_ps1_no_function_is_defined_twice():
+    """PowerShell silently binds the LATER of two same-named function
+    definitions. The prototype engine survived graduation as a full second
+    copy of four functions, dead at runtime - while every grep-based test in
+    this file still matched it. A guard removed from the live copy would have
+    passed as long as the dead copy kept it."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    names = re.findall(r"^function\s+([A-Za-z][\w-]*)", text, re.MULTILINE)
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    assert not dupes, f"defined more than once (later definition wins silently): {dupes}"
+
+
+def test_ps1_user_scope_registry_path_is_sid_aware():
+    """Under over-the-shoulder UAC the elevated process's HKCU is the approving
+    admin's hive. The invoking user's hive is addressed by SID under
+    HKEY_USERS instead. 94a736a restored the $OriginalSid parameter but the
+    live $script:userReg still hard-coded HKCU - only the dead engine used the
+    SID-aware path. Pin both halves."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    assert re.search(r"^\s*\[string\]\s*\$OriginalSid", text, re.MULTILINE), (
+        "$OriginalSid is not a parameter"
+    )
+    assert re.search(r"HKEY_USERS\\\$OriginalSid\\", text), "no SID-addressed user hive path"
+    assert re.search(r"^\$script:userReg\s*=\s*\$userRegistryPath", text, re.MULTILINE), (
+        "$script:userReg is not derived from the SID-aware $userRegistryPath"
+    )
+    assert not re.search(r"^\$script:userReg\s*=\s*\"HKCU:", text, re.MULTILINE), (
+        "$script:userReg hard-codes HKCU again"
+    )
+
+
+def test_ps1_row_mousedown_uses_zone_of_for_the_expander():
+    """The expander click used a bare rectangle that ignored whether the row
+    has a chevron, so empty row space toggled rows with no expander. Click,
+    hover and highlight must share the one resolver, Zone-Of."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    start = text.index("function New-FluentRow")
+    body = text[start:text.index("\n}\n", start)]
+    md = body[body.index("Add_MouseDown"):]
+    assert re.search(r"\$zone\s*=\s*Zone-Of \$s \$ev\.X \$ev\.Y", md), (
+        "MouseDown does not resolve the zone through Zone-Of"
+    )
+    assert not re.search(r"\$ev\.Y\s*-le\s*\(?S?\s*50", md), (
+        "the expander is hit-tested with a bare rectangle again"
+    )
+    z = md.find("Zone-Of $s $ev.X $ev.Y")
+    e = md.find('"exp"')
+    assert 0 <= z < e, "MouseDown does not resolve the zone before testing for the expander"
+
+
+# ---------------------------------------------------------------------------
+# Windows GUI: every layout number is a 96-DPI design pixel and goes through S()
+# ---------------------------------------------------------------------------
+#
+# The process is per-monitor DPI aware, so Windows lays the window out at the
+# literal pixel sizes while the point-size fonts grow with the display. The
+# grid therefore scales itself: S() maps a design pixel to a device pixel and
+# every layout literal in the GUI is wrapped in it. S() is the identity at
+# 100%, which is exactly the hazard - a literal that escapes the wrap is
+# invisible on the developer's screen and shows up only as a collision at
+# 125% and above. These two tests are the mechanical half of the discipline.
+
+
+def _gui_text():
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    return text[text.index("$form = New-Object System.Windows.Forms.Form") :]
+
+
+def _strip_parens(s):
+    """Drop every parenthesised group, innermost first, so `(S 18)` and
+    arithmetic such as `($s.Width-1)` vanish and only bare tokens remain.
+
+    Known gap: a bare literal inside arithmetic, `($script:COLLAPSED+776)`,
+    vanishes with it. No constructor in the file does that today, and keeping
+    the 1 px hairline insets and the placement math exempt matters more."""
+    while True:
+        new = re.sub(r"\([^()]*\)", "", s)
+        if new == s:
+            return s
+        s = new
+
+
+def test_ps1_gui_constructors_take_no_bare_pixel_literal():
+    """Every Point / Size / RectangleF built from the form onward must be made
+    of S() calls, script-scope constants (themselves S'd once at definition)
+    or values derived from them. Zero is exempt; the 1 and 2 px hairline
+    insets live inside parentheses and are stripped with everything else."""
+    bad = []
+    for m in re.finditer(r"New-Object System\.Drawing\.(?:Point|Size|RectangleF) ([^\r\n]*)", _gui_text()):
+        args = _strip_parens(m.group(1).split("#")[0])
+        if re.search(r"(?<![\w$.])[1-9]\d*\b", args):
+            bad.append(m.group(0).strip())
+    assert not bad, "bare pixel literal(s) in GUI constructors - wrap each in S():\n" + "\n".join(bad)
+
+
+def test_ps1_gui_paint_calls_take_no_bare_pixel_literal():
+    """The same rule for what the Paint handlers hand to GDI+: DrawString /
+    DrawLine / FillEllipse / FillRectangle coordinates, Fill-Round and
+    Stroke-Round radii and PointF vertices. Here the arithmetic is not
+    stripped, so `($wcol-30)` fails and `($s.Width-1)` passes: exempt are
+    `(S n)`, the scaled pen widths, colours, string literals, `/2` centring
+    ratios and the 1 and 2 px hairline insets."""
+    verbs = re.compile(
+        r"\.(?:DrawString|DrawLine|DrawLines|FillEllipse|FillRectangle)\(|Fill-Round |Stroke-Round |PointF\]::new\("
+    )
+    bad = []
+    for line in _gui_text().splitlines():
+        if not verbs.search(line):
+            continue
+        s = line.split("#")[0]
+        s = re.sub(r'"[^"]*"', '""', s)
+        s = re.sub(r"\(S [\d.]+\)", "", s)
+        s = re.sub(r"\[float\]\([^()]*\$script:DPI\)", "", s)
+        s = re.sub(r"FromArgb\([^()]*\)", "", s)
+        if re.search(r"(?<![\w$.*/])(?:[3-9]|[1-9]\d+)\b", s):
+            bad.append(line.strip())
+    assert not bad, "bare pixel literal(s) in GUI paint calls - wrap each in S():\n" + "\n".join(bad)
+
+
+def test_ps1_dark_title_bar_is_actually_requested():
+    """DwmSetWindowAttribute was declared in the DPI block and never called,
+    so the dark UI opened under Windows' light title bar. Same class as the
+    ownership guard that was defined and never used: pin the call."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    live = re.sub(r"(?m)^\s*#.*$", "", text)   # a commented-out call is not a call
+    calls = re.findall(r"::DwmSetWindowAttribute\(", live)
+    assert len(calls) >= 1, "DwmSetWindowAttribute is declared but never called"
+    assert "Add_HandleCreated" in text, "the dark-mode attribute must be set once the handle exists"
+
+
+def test_ps1_gui_fonts_follow_the_layout_factor():
+    """Fonts are built through New-UiFont in pixel units from $script:DPI, so
+    that when the factor is clamped to the screen width the glyphs shrink
+    with the grid. A point-unit font in the GUI region would outgrow its row
+    on exactly the screens the clamp exists for."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    body = text[text.index("function New-UiFont"):]
+    body = body[:body.index("\n}\n")]
+    gui = text[text.index("$form = New-Object System.Windows.Forms.Form"):]
+    assert "GraphicsUnit]::Pixel" in body and "$script:DPI" in body, (
+        "New-UiFont no longer builds pixel-unit fonts from the layout factor"
+    )
+    outside = gui.replace(body, "")   # New-UiFont itself is where a Font is built
+    assert not re.search(r"New-Object System\.Drawing\.Font\b", outside), (
+        "a GUI font is built directly, bypassing the factor"
+    )
+    assert re.search(r"if\(\$fitDpi -lt \$script:DPI\)\{\s*\$script:DPI=", text), (
+        "the width-factor clamp is missing or disabled"
+    )
+    assert text.index("$fitDpi") < text.index("$clientH=[math]::Max"), (
+        "the factor must be clamped before the first S() call"
+    )
+
+
+def test_ps1_status_bar_grows_to_its_message_instead_of_hiding_it():
+    """After Apply, the sentence telling the user to close Brave so leaked
+    prefs can be cleared used to end up as "..." with the rest behind a
+    hover. Critical text must be visible without a mouse: Set-Status sizes
+    the bar from the measured line count (up to a cap), re-centres the
+    buttons and gives the page the remainder, and the note that needs acting
+    on leads the message."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    start = text.index("function Set-Status(")
+    body = text[start:text.index("\n}\n", start)]
+    assert "MeasureString" in body and "[ref]$nl" in body, "Set-Status does not measure the message's lines"
+    live = re.sub(r"(?m)^\s*#.*$", "", body)   # a commented-out assignment is not one
+    assert re.search(r"\$bar\.Height\s*=\s*\$need", live), "Set-Status does not resize the bar"
+    assert re.search(r"\$page\.Height\s*=", body), "the page does not yield the bar's extra height"
+    assert re.search(r"\$c\.Top\s*=", body), "buttons are not re-centred in a taller bar"
+    assert re.search(r"^\$script:BAR_MAX_LINES\s*=\s*[3-6]\s*$", text, re.MULTILINE), "no sane line cap"
+
+    js = text[text.index("function Join-Status("):]
+    js = js[:js.index("\n}\n")]
+    assert re.search(r"if\s*\(\s*\$repair\.Skipped\s*\)\s*\{\s*return\s+\"\$n \$lead\"", js), (
+        "the skipped-repair note does not lead the message"
+    )
+
+
+def test_ps1_search_word_set_is_not_a_hashtable():
+    """PowerShell resolves $table.Keys to the entry named "keys" when the
+    table has one - and "registry keys" is in several descriptions - so the
+    word set came back as $true and Test-SearchHit threw on every keystroke.
+    The set must be a HashSet, and nothing may read .Keys off it."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    start = text.index("function Get-SearchWords(")
+    words = text[start:text.index("\n}\n", start)]
+    assert "HashSet[string]" in words, "the search word set is not a HashSet"
+    assert re.search(r"return\s+,\$out", words), "the HashSet is unrolled on return (needs the unary comma)"
+    start = text.index("function Test-SearchHit(")
+    hit = text[start:text.index("\n}\n", start)]
+    assert ".Keys" not in hit and "ContainsKey" not in hit, "Test-SearchHit still treats the word set as a hashtable"
+
+
+# ---------------------------------------------------------------------------
+# Engine guards the GUI rewrite dropped once already
+# ---------------------------------------------------------------------------
+
+
+def test_ps1_engine_guards_are_wired_not_merely_defined():
+    """94a736a restored four guards main had and the rewrite lost, and its own
+    message says they were lost because no test covered these paths. That is
+    still the risk: each of these is a call site, not a definition."""
+    text = re.sub(r"(?m)^\s*#.*$", "", (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8"))
+
+    apply_body = text[text.index("function Invoke-ApplyPolicy"):text.index("function Invoke-ResetPolicy")]
+    reset_body = text[text.index("function Invoke-ResetPolicy"):]
+    reset_body = reset_body[:reset_body.index("\n}\n")]
+    for name, body in (("Apply", apply_body), ("Reset", reset_body)):
+        assert "Remove-OwnedListPolicy" in body, (
+            f"{name} deletes list policies without the ownership guard"
+        )
+
+    assert re.search(r"^\$script:userReg\s*=\s*\$userRegistryPath", text, re.MULTILINE), (
+        "the user hive is not the SID-aware one"
+    )
+
+    imp = text[text.index("function Import-PresetIntoState"):]
+    imp = imp[:imp.index("\n}\n")]
+    assert "Compare-Object" in imp, "Import stages a list row without comparing its value"
+    assert "Enforce-ExclusionGroups" in imp, "Import can stage two members of one exclusion group"
+
+    sync = text[text.index("function Sync-FromRegistry"):]
+    sync = sync[:sync.index("\n}\n")]
+    assert "Enforce-ExclusionGroups" in sync, "Re-sync can stage two members of one exclusion group"
+
+    relaunch = text[text.index("$relaunchArgs"):]
+    relaunch = relaunch[:relaunch.index("Start-Process")]
+    assert '`"$($script:selfPath)`"' in relaunch, "the relaunch path is unquoted again"
+
+
+def test_ps1_legacy_array_import_takes_the_first_row_per_key():
+    """Several policy keys carry two rows with opposite values (Force vs
+    Disable Incognito, the two Variations rows, the two Referrers rows). The
+    legacy-array branch guarded against staging both by testing the row's own
+    state - which the function had just cleared, so it never fired."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    imp = text[text.index("function Import-PresetIntoState"):]
+    imp = imp[:imp.index("\n}\n")]
+    branch = imp[imp.index("$feat -is [array]"):]
+    assert "$handled" in branch, "the legacy-array branch has no handled-keys set"
+    assert re.search(r"\$handled\.ContainsKey\(\$row\.key\)", branch), (
+        "the first-row-per-key guard does not key on $row.key"
+    )
+

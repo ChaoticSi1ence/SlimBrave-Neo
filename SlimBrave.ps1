@@ -1,61 +1,66 @@
-# Forwarded by the elevation relaunch below, never passed by hand. Under
-# over-the-shoulder UAC (standard user + separate admin credentials) the
-# elevated process runs as the ADMIN, so $env:LOCALAPPDATA and HKCU point at
-# the wrong account and the profile scrub silently cleans nothing. These
-# carry the invoking user's identity across the relaunch. This param block
-# must stay the literal first statement of the file.
+
+# Forwarded by the elevation relaunch below, never passed by hand. After
+# elevation $env:LOCALAPPDATA and HKCU belong to whichever account approved
+# UAC, which under over-the-shoulder UAC is the admin and not the user whose
+# Brave profile holds the leaked prefs. These carry the invoking user's path
+# and SID across. $OriginalSid is read further down; dropping it from this
+# block does not fail loudly, it silently scrubs the wrong hive.
+# Must stay the literal first statement of the file.
 param (
     [string] $OriginalLocalAppData,
     [string] $OriginalSid
 )
 
-# Loaded before the elevation check so the failure paths below can report
-# through a MessageBox instead of exiting silently.
+# SlimBrave Neo - debloat and harden Brave Browser on Windows.
+# https://github.com/ChaoticSi1ence/SlimBrave-Neo
+#
+# One self-contained script. Writes Chromium enterprise managed policy to
+# HKLM\SOFTWARE\Policies\BraveSoftware\Brave; Brave reads it at startup.
+#
+# Relaunches itself elevated so Apply and
+# Reset can write machine policy. Capture the path BEFORE anything else: under
+# `iex (irm ...)` or an unsaved buffer $MyInvocation.MyCommand.Path is empty,
+# and -File "" dies instantly with no diagnostic.
+$script:selfPath = $MyInvocation.MyCommand.Path
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-# $MyInvocation.MyCommand.Path is empty when the script runs from a pipe
-# (iex (irm ...)) or an unsaved editor buffer, so capture it before anything
-# can shadow it and refuse to relaunch with -File "" — that starts a process
-# which dies instantly with no diagnostic.
-$scriptPath = $MyInvocation.MyCommand.Path
-
-if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    if ([string]::IsNullOrWhiteSpace($scriptPath)) {
-        [System.Windows.Forms.MessageBox]::Show(
-            "SlimBrave Neo needs to run from a saved .ps1 file so it can relaunch itself elevated.`n`nSave the script to disk and run it with:`n  powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1",
-            "Cannot Elevate",
+$isAdmin = (New-Object Security.Principal.WindowsPrincipal(
+    [Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    if ([string]::IsNullOrWhiteSpace($script:selfPath)) {
+        [void][System.Windows.Forms.MessageBox]::Show(
+            "Run this from a saved .ps1 file so it can relaunch itself as Administrator.",
+            "Cannot determine script path",
             [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
-        )
+            [System.Windows.Forms.MessageBoxIcon]::Error)
         exit 1
     }
-
-    # Carry -ExecutionPolicy Bypass into the elevated instance: the user
-    # often launches via "powershell -ExecutionPolicy Bypass -File ..." and
-    # the relaunch would otherwise revert to the machine default policy and
-    # silently fail to start. The two -Original* arguments hand the elevated
-    # instance the current (unelevated) user's profile path and SID.
-    $currentSid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
-    $relaunchArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`"" +
-        " -OriginalLocalAppData `"$env:LOCALAPPDATA`" -OriginalSid `"$currentSid`""
     try {
-        # -ErrorAction Stop is required: a declined UAC prompt is a
-        # non-terminating error, so without it the catch never runs and the
-        # user gets no feedback at all.
-        Start-Process powershell -ArgumentList $relaunchArgs -Verb RunAs -ErrorAction Stop
+        # ONE quoted string, not an array: Start-Process joins an array with
+        # spaces and quotes nothing, so any path containing a space (OneDrive,
+        # "John Smith") silently launches the wrong thing. -NoProfile keeps the
+        # elevating admin's PowerShell profile out of this process.
+        $currentSid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+        $relaunchArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$($script:selfPath)`"" +
+            " -OriginalLocalAppData `"$env:LOCALAPPDATA`" -OriginalSid `"$currentSid`""
+        Start-Process -FilePath "powershell.exe" -Verb RunAs -ErrorAction Stop `
+            -ArgumentList $relaunchArgs
     } catch {
-        [System.Windows.Forms.MessageBox]::Show(
-            "SlimBrave Neo could not restart with administrator rights: $_`n`nIt writes machine-wide policy, so it cannot continue without elevation.",
-            "Elevation Failed",
+        # A declined UAC prompt is non-terminating without -ErrorAction Stop,
+        # so without this the original would exit silently and look broken.
+        # Report the actual error: a blocked or missing powershell.exe is not
+        # the user clicking No, and a wrapper needs a non-zero exit either way.
+        [void][System.Windows.Forms.MessageBox]::Show(
+            "Could not relaunch as Administrator: $($_.Exception.Message)`n`nApply and Reset need elevation to write machine policy.",
+            "Not elevated",
             [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
-        )
+            [System.Windows.Forms.MessageBoxIcon]::Warning)
         exit 1
     }
     exit
 }
-
 # ---------------------------------------------------------------------------
 # High DPI & Visual Styles Support
 # Fixes blurry window / text rendering on displays with >100% DPI scaling
@@ -97,6 +102,26 @@ public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int va
     [SlimBrave.DpiHelper]::EnableDpiAwareness()
 } catch {}
 
+# Layout scale. The process is per-monitor-DPI-aware (above), so Windows does
+# not bitmap-scale the window: every pixel literal in the GUI is laid out as
+# written, while the fonts are in points and grow with the display. S() maps
+# a 96-DPI design pixel to a device pixel so the grid grows with the glyphs.
+# Read once, AFTER the awareness call - before it the screen DC reports a
+# virtualised 96 - and kept for the life of the window (see the form below).
+# It is the system DPI at startup: nothing here handles WM_DPICHANGED, so a
+# scaling change after launch, or a drag to a monitor of a different DPI,
+# keeps this factor (relaunch to pick up the new one).
+$script:DPI = 1.0
+try {
+    $g0 = [System.Drawing.Graphics]::FromHwnd([IntPtr]::Zero)
+    $script:DPI = [double]$g0.DpiX / 96.0
+    $g0.Dispose()
+} catch {}
+function S([double]$px){
+    # AwayFromZero: [math]::Round alone is banker's rounding, 22.5 -> 22.
+    return [int][math]::Round($px*$script:DPI,[System.MidpointRounding]::AwayFromZero)
+}
+
 $machineRegistryPath = "HKLM:\SOFTWARE\Policies\BraveSoftware\Brave"
 # HKCU inside the elevated process is the admin's hive, which is the wrong
 # one under over-the-shoulder UAC. The invoking user is interactively logged
@@ -108,243 +133,13 @@ if ([string]::IsNullOrWhiteSpace($OriginalSid)) {
 } else {
     $userRegistryPath = "Registry::HKEY_USERS\$OriginalSid\SOFTWARE\Policies\BraveSoftware\Brave"
 }
-$registryPath       = $machineRegistryPath
 
 Clear-Host
 
-# ---------------------------------------------------------------------------
-# DNS helper - handles both DnsOverHttpsMode and DnsOverHttpsTemplates
-# ---------------------------------------------------------------------------
-
-function Set-DnsSettings {
-    param (
-        [string] $dnsMode,
-        [string] $dnsTemplates,
-        [string] $MachinePath,
-        [string] $UserPath
-    )
-    # "secure" (and "custom", which resolves to it) with no template breaks
-    # every hostname lookup: Chromium applies the mode anyway, blanks the
-    # template pref, and secure mode has no plaintext fallback. The user
-    # can't undo it in brave://settings either, because the policy is
-    # machine-managed. "off"/"automatic" are fine without a template.
-    if ($dnsMode -in @("custom", "secure") -and [string]::IsNullOrWhiteSpace($dnsTemplates)) {
-        [System.Windows.Forms.MessageBox]::Show(
-            "'secure' and 'custom' DoH require a template URL (e.g. https://cloudflare-dns.com/dns-query).",
-            "Missing DoH Template",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
-        )
-        return $false
-    }
-
-    $resolvedMode = $dnsMode
-
-    if ($dnsMode -eq "custom" -or $dnsMode -eq "secure") {
-        # Chromium has no "custom" mode - a pinned resolver IS "secure" plus
-        # a template. Writing the template for a plain "secure" selection too
-        # keeps parity with the Linux/macOS scripts, so cross-platform
-        # configs with DnsMode=secure + DnsTemplates don't lose their
-        # resolver here.
-        $resolvedMode = "secure"
-        Set-ItemProperty -Path $MachinePath -Name "DnsOverHttpsTemplates" -Value $dnsTemplates -Type String -Force
-    } else {
-        # Remove the templates key when no template applies
-        if (Get-ItemProperty -Path $MachinePath -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue) {
-            Remove-ItemProperty -Path $MachinePath -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
-        }
-    }
-
-    Set-ItemProperty -Path $MachinePath -Name "DnsOverHttpsMode" -Value $resolvedMode -Type String -Force
-
-    # Scrub the user-scope twin whichever branch ran, so Brave never merges a
-    # stale HKCU DNS policy with the machine one. Per-branch placement would
-    # miss the template path.
-    if (Test-Path -Path $UserPath) {
-        Remove-ItemProperty -Path $UserPath -Name "DnsOverHttpsMode"      -ErrorAction SilentlyContinue
-        Remove-ItemProperty -Path $UserPath -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
-    }
-
-    return $true
-}
-
-# ---------------------------------------------------------------------------
-# List-policy helpers
-#
-# Chromium list policies on Windows live in a subkey with numbered REG_SZ
-# values (e.g. ...\BraveShieldsDisabledForUrls\1 = "https://*"). Writing the
-# list as a single REG_SZ holding a JSON array has no effect — Chromium
-# won't parse it, and the corresponding policy silently stays at its
-# default.
-# ---------------------------------------------------------------------------
-
-function Set-ListPolicy {
-    param (
-        [string]   $RegistryPath,
-        [string]   $Name,
-        [string[]] $Values
-    )
-    $listKey = Join-Path $RegistryPath $Name
-    # Drop any stale subkey and any legacy REG_SZ that used to live at the
-    # parent with the same name, so old broken SlimBrave writes are cleaned.
-    if (Test-Path $listKey) {
-        Remove-Item -Path $listKey -Recurse -Force
-    }
-    if (Get-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue) {
-        Remove-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue
-    }
-    New-Item -Path $listKey -Force | Out-Null
-    for ($i = 0; $i -lt $Values.Count; $i++) {
-        Set-ItemProperty -Path $listKey -Name ($i + 1) -Value $Values[$i] -Type String -Force
-    }
-}
-
-function Remove-ListPolicy {
-    param (
-        [string] $RegistryPath,
-        [string] $Name
-    )
-    $listKey = Join-Path $RegistryPath $Name
-    if (Test-Path $listKey) {
-        Remove-Item -Path $listKey -Recurse -Force
-    }
-    if (Get-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue) {
-        Remove-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue
-    }
-}
-
-function Repair-OneBravePrefs {
-    param ([string] $pref)
-    # Scrub one profile's Preferences file; returns the number of leaked
-    # Shields exceptions removed. Safe when the file or keys do not exist.
-    if (-not (Test-Path $pref)) { return 0 }
-
-    try {
-        $j = Get-Content $pref -Raw -Encoding UTF8 | ConvertFrom-Json
-    } catch {
-        return 0
-    }
-
-    $bs = $null
-    if ($j.profile -and $j.profile.content_settings -and $j.profile.content_settings.exceptions) {
-        $bs = $j.profile.content_settings.exceptions.braveShields
-    }
-    if (-not $bs) { return 0 }
-
-    $removed = 0
-    foreach ($pattern in @('http://*,*', 'https://*,*')) {
-        if ($bs.PSObject.Properties.Name -contains $pattern) {
-            $bs.PSObject.Properties.Remove($pattern)
-            $removed++
-        }
-    }
-
-    if ($removed -eq 0) { return 0 }
-
-    # Brave reads Preferences as compact UTF-8 JSON without BOM. Out-File
-    # default would write UTF-16/BOM and break Brave on next launch.
-    $json = $j | ConvertTo-Json -Depth 100 -Compress
-    $tmp = "$pref.slimbrave-tmp"
-    try {
-        [System.IO.File]::WriteAllText($tmp, $json, (New-Object System.Text.UTF8Encoding $false))
-        Move-Item -Force $tmp $pref
-    } catch {
-        if (Test-Path $tmp) { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
-        return 0
-    }
-
-    return $removed
-}
-
-function Repair-BravePrefs {
-    <#
-    .SYNOPSIS
-    Scrubs SlimBrave-leaked Shields exceptions from the user's Brave profiles.
-
-    .DESCRIPTION
-    Brave/Chromium writes managed *ForUrls content-setting policies through
-    to each profile's Preferences file. Removing the policy from the
-    registry does NOT roll those entries back — the profile keeps the
-    per-URL exceptions, so unchecking "Disable Brave Shields" leaves
-    shields stuck off. The exceptions land in every profile that was used
-    while the policy was active (Default, Profile 1, Profile 2, ...) and
-    in every installed channel (Stable, Beta, Nightly, Dev — the registry
-    policy applies to all of them), so every profile directory of every
-    channel is scrubbed, not just Stable's Default.
-
-    Returns a hashtable @{ Removed = N; Running = $true/$false; Skipped = $true/$false }.
-    Safe to call when files or keys do not exist.
-    #>
-    # Every Brave channel runs as brave.exe on Windows.
-    $running = ($null -ne (Get-Process brave -ErrorAction SilentlyContinue))
-    # Chromium serves prefs from an in-memory PrefService and rewrites the
-    # file on shutdown, so a scrub done now is thrown away the moment the
-    # user closes Brave - which is exactly what we tell them to do next.
-    # Skip the write and report it rather than claiming a clean that won't
-    # survive.
-    if ($running) {
-        return @{ Removed = 0; Running = $true; Skipped = $true }
-    }
-
-    # Prefer the invoking user's profile root over the elevated process's
-    # own, which under over-the-shoulder UAC belongs to the admin account.
-    $localAppData = $env:LOCALAPPDATA
-    if (-not [string]::IsNullOrWhiteSpace($script:OriginalLocalAppData)) {
-        $localAppData = $script:OriginalLocalAppData
-    }
-
-    $removed = 0
-    foreach ($channelDir in @('Brave-Browser', 'Brave-Browser-Beta', 'Brave-Browser-Nightly', 'Brave-Browser-Dev')) {
-        $userData = Join-Path $localAppData "BraveSoftware\$channelDir\User Data"
-        if (-not (Test-Path $userData)) { continue }
-        $profileDirs = Get-ChildItem -Path $userData -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' }
-        foreach ($dir in $profileDirs) {
-            $removed += Repair-OneBravePrefs (Join-Path $dir.FullName 'Preferences')
-        }
-    }
-
-    return @{ Removed = $removed; Running = $false; Skipped = $false }
-}
-
-function Test-FeatureValueMatches {
-    param($feature, $expected)
-    # List-typed features write a fixed canonical value (the Shields URL
-    # pattern list), so an imported list has to match it exactly. Accepting
-    # any list for the key would tick the row and then apply OUR wildcards -
-    # turning an imported single-site exception into Shields-off for the
-    # whole web, reported as a successful import.
-    if ($feature.Type -eq "List") {
-        $exp = @($expected      | ForEach-Object { [string]$_ })
-        $own = @($feature.Value | ForEach-Object { [string]$_ })
-        return (($exp.Count -eq $own.Count) -and -not (Compare-Object $exp $own))
-    }
-    if ($feature.Type -eq "DWord") {
-        try { return ([int]$feature.Value -eq [int]$expected) }
-        catch { return $false }
-    }
-    return ($feature.Value.ToString() -eq $expected.ToString())
-}
-
-function Test-ListPolicyMatches {
-    param (
-        [string]   $RegistryPath,
-        [string]   $Name,
-        [string[]] $Expected
-    )
-    $listKey = Join-Path $RegistryPath $Name
-    if (-not (Test-Path $listKey)) { return $false }
-    $props = Get-ItemProperty -Path $listKey -ErrorAction SilentlyContinue
-    if (-not $props) { return $false }
-    $actual = @()
-    foreach ($p in $props.PSObject.Properties) {
-        if ($p.Name -match '^\d+$') { $actual += [string]$p.Value }
-    }
-    foreach ($e in $Expected) {
-        if ($actual -notcontains $e) { return $false }
-    }
-    return $true
-}
+# The old three-column engine used to live here. Its functions were defined
+# a second time by the interface's engine further down, and PowerShell binds
+# the LATER definition - so this block was dead at runtime while still
+# matching every grep-based test. Removed; see test_ps1_no_function_is_defined_twice.
 
 function Test-ListPolicyIsExactly {
     param (
@@ -352,7 +147,7 @@ function Test-ListPolicyIsExactly {
         [string]   $Name,
         [string[]] $Expected
     )
-    # Ownership test, as opposed to the subset test above: is the list on
+    # Ownership test: is the list on
     # disk exactly the one SlimBrave writes? An admin's own blocklist is a
     # superset (or a different set entirely) and must not be deleted just
     # because the matching box is unchecked. Absent means nothing to
@@ -369,379 +164,6 @@ function Test-ListPolicyIsExactly {
     if ($actual.Count -eq 0) { return $true }
     return (($actual.Count -eq $Expected.Count) -and -not (Compare-Object $actual $Expected))
 }
-
-# ---------------------------------------------------------------------------
-# Feature row state
-#
-# A row is either a CheckBox (binary: write Tag.Value or nothing) or, when
-# its feature carries `Choices`, a ComboBox (write the selected choice's
-# value, or nothing when "Not managed" is selected). Everything that reads
-# or writes row state - Apply, Reset, Import, Export, Initialize - goes
-# through these three helpers so neither control type is special-cased at
-# the call sites.
-# ---------------------------------------------------------------------------
-
-function Get-RowValue {
-    <#
-    .SYNOPSIS
-    The policy value this row currently manages, or $null when it manages
-    nothing (unchecked box / "Not managed").
-    #>
-    param ($Control)
-    $feature = $Control.Tag
-    if ($null -ne $feature.Choices) {
-        $index = $Control.SelectedIndex
-        if ($index -lt 0) { return $null }
-        return $feature.Choices[$index].Value
-    }
-    if ($Control.Checked) {
-        # The unary comma keeps a List row's value a list: returning a
-        # one-element array unrolls it to a bare string, which would export
-        # ExtensionInstallBlocklist as "*" instead of ["*"].
-        if ($feature.Value -is [array]) { return ,$feature.Value }
-        return $feature.Value
-    }
-    return $null
-}
-
-function Reset-FeatureRow {
-    # Back to "manages nothing": unchecked, or the first choice, which is
-    # always ("Not managed", $null).
-    param ($Control)
-    if ($null -ne $Control.Tag.Choices) {
-        $Control.SelectedIndex = 0
-    } else {
-        $Control.Checked = $false
-    }
-}
-
-function Select-ChoiceValue {
-    <#
-    .SYNOPSIS
-    Select the entry of a choice row whose value is $Value. Returns $false
-    when the row cannot represent that value (including $null) and leaves it
-    on "Not managed", so callers can report the value they had to drop.
-    #>
-    param ($Control, $Value)
-    $choices = $Control.Tag.Choices
-    # Only a genuine integer can name an enum member. This has to be a type
-    # test, not a cast: [int]$true is 1, so a JSON `true` would otherwise
-    # select "Allow" on the three keys that have one and silently grant every
-    # site the permission the user never asked to grant. A quoted "1" is not
-    # a member either. Both drop to "Not managed" and are reported, matching
-    # the type-strict check in the two Python scripts.
-    $isInteger = ($Value -is [int]) -or ($Value -is [long]) -or
-                 ($Value -is [int16]) -or ($Value -is [byte]) -or ($Value -is [uint32])
-    if ($isInteger) {
-        for ($i = 0; $i -lt $choices.Count; $i++) {
-            $choiceValue = $choices[$i].Value
-            if ($null -eq $choiceValue) { continue }
-            # The registry hands us Int32, imported JSON Int32/Int64, so
-            # compare numerically once both sides are known to be integers.
-            $isMatch = $false
-            try { $isMatch = ([int]$choiceValue -eq [int]$Value) } catch { $isMatch = $false }
-            if ($isMatch) {
-                $Control.SelectedIndex = $i
-                return $true
-            }
-        }
-    }
-    $Control.SelectedIndex = 0
-    return $false
-}
-
-# ---------------------------------------------------------------------------
-# Theme palette
-#
-# The app follows the Windows "apps" light/dark setting. All colors live in
-# this one table so the two modes stay in sync — controls read from $theme
-# instead of hard-coding colors. Checkbox glyphs are custom-painted in
-# Add-FeatureRows because the stock flat glyph is nearly invisible on
-# dark backgrounds and follows the system theme on light ones.
-# ---------------------------------------------------------------------------
-
-$appsUseLightTheme = $true   # Windows defaults to light when the value is missing
-try {
-    $personalize = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -ErrorAction Stop
-    $appsUseLightTheme = ([int]$personalize.AppsUseLightTheme -ne 0)
-} catch {}
-
-if ($appsUseLightTheme) {
-    $theme = @{
-        FormBack     = [System.Drawing.Color]::FromArgb(255, 243, 243, 243)
-        PanelBack    = [System.Drawing.Color]::FromArgb(255, 252, 252, 252)
-        Text         = [System.Drawing.Color]::FromArgb(255, 30, 30, 30)
-        Accent       = [System.Drawing.Color]::FromArgb(255, 186, 70, 30)
-        HintText     = [System.Drawing.Color]::FromArgb(255, 120, 120, 120)
-        InputBack    = [System.Drawing.Color]::White
-        InputText    = [System.Drawing.Color]::FromArgb(255, 30, 30, 30)
-        BoxFill      = [System.Drawing.Color]::White
-        BoxBorder    = [System.Drawing.Color]::FromArgb(255, 120, 120, 125)
-        CheckFill    = [System.Drawing.Color]::FromArgb(255, 196, 80, 35)
-        CheckMark    = [System.Drawing.Color]::White
-        ButtonBack   = [System.Drawing.Color]::FromArgb(255, 230, 230, 232)
-        ButtonHover  = [System.Drawing.Color]::FromArgb(255, 218, 218, 222)
-        ButtonBorder = [System.Drawing.Color]::FromArgb(255, 165, 165, 170)
-        TipBack      = [System.Drawing.Color]::FromArgb(255, 250, 250, 250)
-        TipBorder    = [System.Drawing.Color]::FromArgb(255, 150, 150, 155)
-        TipText      = [System.Drawing.Color]::FromArgb(255, 35, 35, 35)
-        ExportText   = [System.Drawing.Color]::FromArgb(255, 186, 70, 30)
-        ImportText   = [System.Drawing.Color]::FromArgb(255, 40, 100, 160)
-        ApplyText    = [System.Drawing.Color]::FromArgb(255, 35, 120, 60)
-        ResetText    = [System.Drawing.Color]::FromArgb(255, 178, 45, 45)
-    }
-} else {
-    $theme = @{
-        FormBack     = [System.Drawing.Color]::FromArgb(255, 25, 25, 25)
-        PanelBack    = [System.Drawing.Color]::FromArgb(255, 35, 35, 35)
-        Text         = [System.Drawing.Color]::FromArgb(255, 230, 230, 230)
-        Accent       = [System.Drawing.Color]::LightSalmon
-        HintText     = [System.Drawing.Color]::FromArgb(255, 140, 140, 140)
-        InputBack    = [System.Drawing.Color]::FromArgb(255, 25, 25, 25)
-        InputText    = [System.Drawing.Color]::FromArgb(255, 230, 230, 230)
-        BoxFill      = [System.Drawing.Color]::FromArgb(255, 45, 45, 48)
-        BoxBorder    = [System.Drawing.Color]::FromArgb(255, 130, 130, 135)
-        CheckFill    = [System.Drawing.Color]::FromArgb(255, 225, 95, 50)
-        CheckMark    = [System.Drawing.Color]::White
-        ButtonBack   = [System.Drawing.Color]::FromArgb(255, 45, 45, 48)
-        ButtonHover  = [System.Drawing.Color]::FromArgb(255, 62, 62, 66)
-        ButtonBorder = [System.Drawing.Color]::FromArgb(255, 90, 90, 95)
-        TipBack      = [System.Drawing.Color]::FromArgb(255, 45, 45, 48)
-        TipBorder    = [System.Drawing.Color]::FromArgb(255, 110, 110, 115)
-        TipText      = [System.Drawing.Color]::Gainsboro
-        ExportText   = [System.Drawing.Color]::LightSalmon
-        ImportText   = [System.Drawing.Color]::LightSkyBlue
-        ApplyText    = [System.Drawing.Color]::LightGreen
-        ResetText    = [System.Drawing.Color]::LightCoral
-    }
-}
-
-# ---------------------------------------------------------------------------
-# Form setup
-# ---------------------------------------------------------------------------
-
-$form = New-Object System.Windows.Forms.Form
-$form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
-$form.Text = "SlimBrave Neo"
-# Segoe UI replaces the WinForms default (8.25pt Microsoft Sans Serif) and
-# is inherited by every control that doesn't set its own font.
-$form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-$form.ForeColor = $theme.Text
-# Form size (ClientSize) is set by the responsive column builder below, once
-# the column count and the tallest column height are known.
-$form.StartPosition = "CenterScreen"
-$form.BackColor = $theme.FormBack
-$form.MaximizeBox = $false
-$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
-
-# Ask DWM for a dark title bar to match the dark theme; without this the
-# window chrome stays system-light. Best-effort: silently skipped on
-# Windows builds that don't support the attribute.
-if (-not $appsUseLightTheme) {
-    try {
-        $form.Add_HandleCreated({
-            $darkMode = 1
-            # 20 = DWMWA_USE_IMMERSIVE_DARK_MODE; pre-20H1 Windows 10 used 19
-            if ([SlimBrave.DpiHelper]::DwmSetWindowAttribute($this.Handle, 20, [ref]$darkMode, 4) -ne 0) {
-                [void] [SlimBrave.DpiHelper]::DwmSetWindowAttribute($this.Handle, 19, [ref]$darkMode, 4)
-            }
-        })
-    } catch {}
-}
-
-$allFeatures = @()
-
-# ---------------------------------------------------------------------------
-# Theme + hover tooltips
-#
-# One shared ToolTip serves every control. The stock WinForms tooltip is a
-# black-on-cream system balloon that clashes with the dark theme, so it is
-# owner-drawn: dark background, subtle border, word-wrapped Segoe UI text.
-# Popup measures the wrapped text so the bubble fits multi-line tips.
-# ---------------------------------------------------------------------------
-
-$sectionFont = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-$tipFont     = New-Object System.Drawing.Font("Segoe UI", 9)
-$tipFlags    = [System.Windows.Forms.TextFormatFlags]::WordBreak
-
-$tooltip = New-Object System.Windows.Forms.ToolTip
-$tooltip.OwnerDraw    = $true
-$tooltip.InitialDelay = 350
-$tooltip.ReshowDelay  = 100
-$tooltip.AutoPopDelay = 30000   # the 5s default cuts off the longer descriptions
-
-$tooltip.Add_Popup({
-    param($s, $e)
-    $text = $s.GetToolTip($e.AssociatedControl)
-    $proposed = New-Object System.Drawing.Size(340, 0)
-    $size = [System.Windows.Forms.TextRenderer]::MeasureText($text, $tipFont, $proposed, $tipFlags)
-    $e.ToolTipSize = New-Object System.Drawing.Size(($size.Width + 14), ($size.Height + 12))
-})
-
-$tooltip.Add_Draw({
-    param($s, $e)
-    $backBrush = New-Object System.Drawing.SolidBrush $script:theme.TipBack
-    $borderPen = New-Object System.Drawing.Pen $script:theme.TipBorder
-    try {
-        $e.Graphics.FillRectangle($backBrush, $e.Bounds)
-        $e.Graphics.DrawRectangle($borderPen, $e.Bounds.X, $e.Bounds.Y, ($e.Bounds.Width - 1), ($e.Bounds.Height - 1))
-        $textRect = New-Object System.Drawing.Rectangle(($e.Bounds.X + 7), ($e.Bounds.Y + 6), ($e.Bounds.Width - 14), ($e.Bounds.Height - 12))
-        [System.Windows.Forms.TextRenderer]::DrawText($e.Graphics, $e.ToolTipText, $tipFont, $textRect, $script:theme.TipText, $tipFlags)
-    } finally {
-        $backBrush.Dispose()
-        $borderPen.Dispose()
-    }
-})
-
-function Add-SectionLabel {
-    param ($Panel, [string] $Text, [int] $Y)
-    $label = New-Object System.Windows.Forms.Label
-    $label.Text = $Text
-    $label.UseMnemonic = $false   # render the & in "Telemetry & Reporting" literally
-    $label.Font = $sectionFont
-    $label.Location = New-Object System.Drawing.Point(25, $Y)
-    # Stays clear of the column's vertical scrollbar: a control that reaches
-    # past the panel's usable width makes it grow a horizontal scrollbar too.
-    $label.Size = New-Object System.Drawing.Size(350, 20)
-    $label.ForeColor = $theme.Accent
-    $Panel.Controls.Add($label)
-}
-
-function Add-ChoiceRow {
-    # One tri-state (or wider) content setting: a caption plus a dropdown
-    # holding the policy's legal values, "Not managed" first and selected.
-    # The ComboBox is the row's control, so it goes into $allFeatures exactly
-    # where a CheckBox would.
-    param ($Panel, $Feature, [int] $Y)
-
-    $caption = New-Object System.Windows.Forms.Label
-    $caption.Text = $Feature.Name
-    $caption.UseMnemonic = $false
-    $caption.Location = New-Object System.Drawing.Point(28, ($Y + 5))
-    # 190 clears the longest caption ("Local Font Enumeration", ~130px at
-    # 9pt Segoe UI) with room to spare, and hands the rest of the row to
-    # the dropdown.
-    $caption.Size = New-Object System.Drawing.Size(190, 18)
-    $caption.ForeColor = $theme.Text
-    $Panel.Controls.Add($caption)
-
-    $combo = New-Object System.Windows.Forms.ComboBox
-    $combo.Tag = $Feature
-    # DropDownList: the value set is closed, and a free-text edit field would
-    # let a typo turn into "no matching choice" on Apply.
-    $combo.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
-    # Every dropdown in a column lines up at the same X, clear of the
-    # captions and inside the panel's usable width (see $layoutPanelW).
-    $combo.Location = New-Object System.Drawing.Point(224, ($Y + 2))
-    # 224 + 157 = 381: deliberately 8px short of the 389 budget so the
-    # dropdown edge doesn't ride against the panel's vertical scrollbar.
-    $combo.Size = New-Object System.Drawing.Size(157, 21)
-    $combo.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $combo.BackColor = $theme.InputBack
-    $combo.ForeColor = $theme.InputText
-    foreach ($choice in $Feature.Choices) {
-        [void] $combo.Items.Add($choice.Label)
-    }
-    $combo.SelectedIndex = 0
-    $Panel.Controls.Add($combo)
-
-    if ($Feature.Tip) {
-        # Spell out the enum rather than a single value: which members are
-        # legal differs per key, and that is the thing to cross-check
-        # against brave://policy.
-        $legal = @()
-        foreach ($choice in $Feature.Choices) {
-            if ($null -ne $choice.Value) { $legal += "$($choice.Label)=$($choice.Value)" }
-        }
-        $tip = "$($Feature.Tip)`n`nPolicy: $($Feature.Key) ($($legal -join ', ')). Not managed writes nothing and removes any value SlimBrave wrote."
-        $tooltip.SetToolTip($caption, $tip)
-        $tooltip.SetToolTip($combo, $tip)
-    }
-
-    $script:allFeatures += $combo
-}
-
-function Add-FeatureRows {
-    # Lays out one row per feature starting at $Y and returns the next free
-    # Y. A feature carrying `Choices` becomes a dropdown row, everything else
-    # a checkbox. Each feature's Tip becomes a hover tooltip, suffixed with
-    # the exact policy it writes so power users can cross-check
-    # brave://policy. $Step is the per-row vertical advance.
-    param ($Panel, [array] $Features, [int] $Y, [int] $Step = 25)
-    foreach ($feature in $Features) {
-        if ($null -ne $feature.Choices) {
-            Add-ChoiceRow $Panel $feature $Y
-            # Taller pitch than a checkbox row: the dropdown is a ~24px box,
-            # and eight of them at the checkbox step read as one solid block.
-            $Y += ($Step + 5)
-            continue
-        }
-        $checkbox = New-Object System.Windows.Forms.CheckBox
-        $checkbox.Text = $feature.Name
-        $checkbox.Tag = $feature
-        $checkbox.Location = New-Object System.Drawing.Point(28, ($Y + 4))
-        # Right edge must stay under 391 - the panel's client width once
-        # its vertical scrollbar appears - or every column grows a 2px
-        # horizontal scrollbar. 28 + 361 = 389. Never add AutoEllipsis
-        # here: on a Flat checkbox whose text overflows it paints NO text
-        # at all (v2.0.3 shipped an invisible row that way) - the layout
-        # probe measures PreferredSize on every checkbox instead, so an
-        # overlong label fails loudly before it ships.
-        $checkbox.Size = New-Object System.Drawing.Size(361, 20)
-        $checkbox.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-        # The stock flat glyph is a thin system-colored check that is nearly
-        # invisible on the dark theme, so paint over it: checked = accent
-        # box with a white checkmark, unchecked = themed box and border.
-        $checkbox.Add_Paint({
-            param($s, $e)
-            $g = $e.Graphics
-            $boxY = [int](($s.ClientSize.Height - 12) / 2)
-            $clearBrush = New-Object System.Drawing.SolidBrush $s.BackColor
-            $g.FillRectangle($clearBrush, 0, 0, 16, $s.ClientSize.Height)
-            $clearBrush.Dispose()
-            if ($s.Checked) {
-                $fillBrush = New-Object System.Drawing.SolidBrush $script:theme.CheckFill
-                $g.FillRectangle($fillBrush, 1, $boxY, 12, 12)
-                $fillBrush.Dispose()
-                $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-                $checkPen = New-Object System.Drawing.Pen($script:theme.CheckMark, 2)
-                $checkPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-                $checkPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-                $points = [System.Drawing.PointF[]]@(
-                    [System.Drawing.PointF]::new(3.6, ($boxY + 6.2)),
-                    [System.Drawing.PointF]::new(6.0, ($boxY + 8.6)),
-                    [System.Drawing.PointF]::new(10.4, ($boxY + 3.4))
-                )
-                $g.DrawLines($checkPen, $points)
-                $checkPen.Dispose()
-                $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::Default
-            } else {
-                $fillBrush = New-Object System.Drawing.SolidBrush $script:theme.BoxFill
-                $g.FillRectangle($fillBrush, 1, $boxY, 12, 12)
-                $fillBrush.Dispose()
-                $borderPen = New-Object System.Drawing.Pen $script:theme.BoxBorder
-                $g.DrawRectangle($borderPen, 1, $boxY, 12, 12)
-                $borderPen.Dispose()
-            }
-        })
-        if ($feature.Tip) {
-            $valueText = if ($feature.Type -eq "List") { $feature.Value -join ", " } else { $feature.Value }
-            $tooltip.SetToolTip($checkbox, "$($feature.Tip)`n`nPolicy: $($feature.Key) = $valueText")
-        }
-        $Panel.Controls.Add($checkbox)
-        $script:allFeatures += $checkbox
-        $Y += $Step
-    }
-    return $Y
-}
-
-# ---------------------------------------------------------------------------
-# Feature definitions
-#
-# Each category is a section header plus its feature checkboxes. The
-# categories are arranged into columns further below; the column count adapts
-# to the screen height so the window never runs off the bottom of the display.
-# ---------------------------------------------------------------------------
 
 $telemetryFeatures = @(
     @{ Name = "Disable Metrics Reporting"; Key = "MetricsReportingEnabled"; Value = 0; Type = "DWord"
@@ -1224,20 +646,12 @@ $script:embeddedPresets = [ordered]@{
 }
 
 # ---------------------------------------------------------------------------
-# Column layout
+# Adapter
 #
-# Three fixed columns, always. The window is a fixed size that fits on a
-# 1366x768 display; each column is its own AutoScroll panel, so a column
-# whose categories are taller than the panel scrolls on its own and the DNS
-# row and the button row below never move.
-#
-# This deliberately replaces the old height heuristic (measure the natural
-# two-column window, compare it against the working area, reflow to three
-# columns if it doesn't fit, and cap the form height as a last resort). That
-# constant was wrong by a few pixels in both directions across DPI scales,
-# and its safety net then produced the whole-window scrollbar it existed to
-# prevent. Nothing measures the screen any more, so there is no constant to
-# drift: adding rows makes a column scroll instead of resizing the window.
+# Reshapes the feature tables above into the rows the interface reads. The
+# tables stay verbatim - they are the single source of truth, shared with the
+# Python ports and parsed by the test suite - and nothing below is a second
+# copy of a policy. Each row's description is its existing Tip.
 # ---------------------------------------------------------------------------
 
 $categories = @(
@@ -1249,883 +663,1825 @@ $categories = @(
     @{ Name = "Brave Features";               Features = $braveFeatures },
     @{ Name = "Performance & Bloat";          Features = $perfFeatures }
 )
-$categoryByName = @{}
-foreach ($cat in $categories) { $categoryByName[$cat.Name] = $cat }
-
-# The six categories, paired into the three columns. Pairing keeps related
-# categories together; the columns do not have to come out the same length,
-# because each one scrolls on its own.
-$columnLayout = @(
-    @("Privacy & Security", "Telemetry & Reporting"),
-    @("Site Permissions", "Access Controls", "Brave Features"),
-    @("Shields & Content Protection", "Performance & Bloat")
-)
-
-# Row metrics. 25px comfortably clears both row controls (a 20px checkbox
-# and a 21px dropdown), so one step serves every row type.
-$rowHeight = 28; $rowGap = 12; $colStartY = 10
-
 # ---------------------------------------------------------------------------
-# Build the columns
-# ---------------------------------------------------------------------------
-
-$layoutMargin   = 14
-# 414 is the narrowest column that fits the widest row - the longest choice
-# caption plus its dropdown - without clipping or a horizontal scrollbar,
-# and still leaves the three-column window ~50px of slack on a 1366px-wide
-# display. Usable width inside a column is 414 - 2 (border) - 17 (its
-# scrollbar) = 395, which every row control stays inside.
-$layoutPanelW   = 414
-$layoutPanelGap = 14
-# The top bar occupies the 28px this used to leave as plain margin, and
-# $layoutPanelH hands the same 28px back, so the columns start lower but end
-# - and the window ends - exactly where they did before.
-$layoutPanelTop = 48
-# Fixed viewport height for every column. With $layoutPanelTop this puts the
-# bottom of the columns at 520; the DNS row, the button row and the margins
-# below that put the whole window at ~700px tall at 96 DPI, which clears the
-# ~728px working area of a 1366x768 display. Anything taller than this
-# inside a column is reached with that column's own scrollbar, so this
-# number is a comfort knob, not a correctness one.
-$layoutPanelH   = 472
-
-$panels = @()
-for ($col = 0; $col -lt $columnLayout.Count; $col++) {
-    $panelX = $layoutMargin + $col * ($layoutPanelW + $layoutPanelGap)
-
-    $panel = New-Object System.Windows.Forms.Panel
-    $panel.Location = New-Object System.Drawing.Point($panelX, $layoutPanelTop)
-    $panel.Size = New-Object System.Drawing.Size($layoutPanelW, $layoutPanelH)
-    $panel.BackColor = $theme.PanelBack
-    $panel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
-    # Per-column scrolling. The panel is the scroll viewport, so a long
-    # column scrolls without moving anything else on the form.
-    $panel.AutoScroll = $true
-    $form.Controls.Add($panel)
-    $panels += $panel
-
-    $y = $colStartY
-    foreach ($catName in $columnLayout[$col]) {
-        $category = $categoryByName[$catName]
-        Add-SectionLabel $panel $category.Name $y
-        $y += $rowHeight
-        $y = Add-FeatureRows $panel $category.Features $y $rowHeight
-        $y += $rowGap
-    }
-    # Bottom padding below the last row, so it isn't flush against the
-    # panel edge when scrolled to the end.
-    $spacer = New-Object System.Windows.Forms.Label
-    $spacer.Location = New-Object System.Drawing.Point(0, $y)
-    $spacer.Size = New-Object System.Drawing.Size(1, 5)
-    $panel.Controls.Add($spacer)
-}
-
-$layoutContentWidth = (2 * $layoutMargin) + ($columnLayout.Count * $layoutPanelW) + (($columnLayout.Count - 1) * $layoutPanelGap)
-$layoutPanelBottom  = $layoutPanelTop + $layoutPanelH
-# The DNS row and the button row are ~933px wide (five action buttons at
-# min 120px each, sized up to their text, spaced 193 apart from fixed
-# offsets); centre that block under the three columns.
-$layoutContentOffsetX = [int](($layoutContentWidth - 933) / 2)
-$dnsRowTop            = $layoutPanelBottom + 15
-$buttonRowTop         = $dnsRowTop + 75
-
-# Fixed for the life of the window: nothing below reflows, resizes or
-# measures the screen.
-$form.ClientSize = New-Object System.Drawing.Size($layoutContentWidth, ($buttonRowTop + 32 + 18))
-
-# ---------------------------------------------------------------------------
-# Top bar
+# ADAPTER - native feature tables to the shape the interface reads
 #
-# One compact row above the columns: a button per embedded preset, and a
-# status line naming what the last action did. A preset button only fills in
-# the controls - nothing reaches the registry until Apply Settings - and it
-# does that through Import-SettingsObject (defined with the Import button
-# below), so mutual-exclusion groups, tri-state rows and the DNS fields all
-# behave exactly as they do for an imported file.
+# The interface wants a lowercase row shape with a description and an ordered
+# choices list. The tables above are the single source of truth and stay in the
+# form the test suite parses, so the translation happens here at startup rather
+# than by maintaining a second copy of all 78 policies.
 #
-# The row has to stay one row tall: the height below it is already spoken
-# for by the three columns, the DNS row and the button row.
+# Ids are index-based because a few policy keys legitimately appear on two rows
+# (incognito, referrers). State is keyed by id, never by key.
 # ---------------------------------------------------------------------------
+$script:state = @{}
+$script:cats = @()
+$script:dnsModes = @("unmanaged", "automatic", "off", "secure", "custom")
 
-$topBarTop = 14
-# Button widths are measured from the rendered text at runtime, so a DPI
-# scale that rounds fonts differently can never clip a name again. The
-# " Preset" suffix is dropped from the display - the row is already
-# captioned "Quick Presets" - which keeps all five short of the status line.
-$presetButtonGap = 8
-$presetButtonX   = 140
-
-$presetsLabel = New-Object System.Windows.Forms.Label
-$presetsLabel.Text = "Quick Presets"
-$presetsLabel.UseMnemonic = $false
-$presetsLabel.Font = $sectionFont
-$presetsLabel.ForeColor = $theme.Accent
-$presetsLabel.Location = New-Object System.Drawing.Point($layoutMargin, ($topBarTop + 4))
-$presetsLabel.AutoSize = $true
-$form.Controls.Add($presetsLabel)
-
-foreach ($presetName in $script:embeddedPresets.Keys) {
-    $presetButton = New-Object System.Windows.Forms.Button
-    $presetButton.Text = ($presetName -replace ' Preset$', '')
-    # The click handler runs long after this loop has finished, and a
-    # scriptblock closes over the variable rather than over the value it held
-    # when the handler was attached - so the name travels on the button.
-    $presetButton.Tag = $presetName
-    $presetButtonW = [System.Windows.Forms.TextRenderer]::MeasureText($presetButton.Text, $form.Font).Width + 26
-    $presetButton.Location = New-Object System.Drawing.Point($presetButtonX, $topBarTop)
-    $presetButton.Size = New-Object System.Drawing.Size($presetButtonW, 26)
-    $presetButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $presetButton.FlatAppearance.BorderSize = 1
-    $presetButton.FlatAppearance.BorderColor = $theme.ButtonBorder
-    $presetButton.FlatAppearance.MouseOverBackColor = $theme.ButtonHover
-    $presetButton.BackColor = $theme.ButtonBack
-    # Import's blue: like Import, these buttons only load selections.
-    $presetButton.ForeColor = $theme.ImportText
-    $tooltip.SetToolTip($presetButton, "Load the $presetName selections into the controls below. Nothing is written until you click Apply Settings, so you can untick anything you don't want first.")
-    $presetButton.Add_Click({
-        $name = $this.Tag
-        try {
-            $note = Import-SettingsObject ($script:embeddedPresets[$name] | ConvertFrom-Json)
-        } catch {
-            # Out of reach short of a corrupted script file, but a handler
-            # that throws puts an unhandled-exception dialog on screen.
-            $statusLabel.Text = "$($this.Text) failed to load"
-            return
+$ci = 0
+foreach ($cat in $categories) {
+    $rows = @()
+    $ri = 0
+    foreach ($f in $cat.Features) {
+        $tip = [string]$f.Tip
+        $short = $tip
+        $dot = $tip.IndexOf(". ")
+        if ($dot -gt 0) { $short = $tip.Substring(0, $dot) }
+        $choices = $null
+        if ($null -ne $f.Choices) {
+            $choices = @()
+            foreach ($c in $f.Choices) { $choices += ,@($c.Label, $c.Value) }
         }
-        $statusLabel.Text = "$($this.Text) loaded"
-        # Only when a row could not be represented - none of the five bundled
-        # presets does that today, so this normally stays silent.
-        if ($note) {
-            [System.Windows.Forms.MessageBox]::Show(
-                "$name loaded.$note",
-                "Preset Loaded",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Information
-            )
+        $group = ""
+        if ($f.ContainsKey("Group")) { $group = [string]$f.Group }
+        $row = [pscustomobject]@{
+            Id      = "$ci.$ri"
+            name    = [string]$f.Name
+            key     = [string]$f.Key
+            value   = $f.Value
+            type    = [string]$f.Type
+            full    = $tip
+            short   = $short
+            group   = $group
+            choices = $choices
         }
-    })
-    $form.Controls.Add($presetButton)
-    $presetButtonX += $presetButtonW + $presetButtonGap
+        if ($null -eq $choices) { $row.PSObject.Properties.Remove('choices') }
+        $rows += $row
+        $script:state["$ci.$ri"] = @{ On = $false; Sel = 0 }
+        $ri++
+    }
+    $script:cats += [pscustomobject]@{ name = [string]$cat.Name; rows = $rows }
+    $ci++
 }
 
-# Right-aligned so it reads as the row's trailing status rather than a label
-# for the button beside it.
-$statusLabel = New-Object System.Windows.Forms.Label
-$statusLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
-$statusLabel.ForeColor = $theme.Text
-$statusLabel.Location = New-Object System.Drawing.Point(($layoutContentWidth - 214), ($topBarTop + 4))
-$statusLabel.Size = New-Object System.Drawing.Size(200, 20)
-$form.Controls.Add($statusLabel)
-$tooltip.SetToolTip($statusLabel, "What the last action did. Loading a preset, importing a file and re-syncing only change the controls on screen - Apply Settings and Reset All Settings are the two that touch the registry.")
-
-# Open every column at its first row. A scrollable container will scroll
-# itself to reveal whichever child control it decides is active, which can
-# otherwise show a column mid-list on launch.
-$form.Add_Shown({
-    foreach ($panel in $script:panels) {
-        $panel.AutoScrollPosition = New-Object System.Drawing.Point(0, 0)
+# Preset cards read the embedded presets, so there is no second copy of those
+# either. Blurbs are presentation, not data.
+$script:presetBlurbs = @{
+    "Maximum Privacy Preset"          = "Everything privacy-related, at the cost of convenience."
+    "Balanced Privacy Preset"         = "Strong privacy that keeps the conveniences most people want."
+    "Performance Focused Preset"      = "Speed and clutter, not privacy extremes."
+    "Developer Preset"                = "Telemetry off, dev tools and the network stack untouched."
+    "Strict Parental Controls Preset" = "Lockdown: filtered, no incognito, no extensions."
+    "Brave Origin Preset"             = "Clones Brave Origin's enforced policy set."
+}
+$script:presets = @()
+foreach ($name in $script:embeddedPresets.Keys) {
+    $obj = $script:embeddedPresets[$name] | ConvertFrom-Json
+    $count = @($obj.Features.PSObject.Properties).Count
+    $blurb = ""
+    if ($script:presetBlurbs.ContainsKey($name)) { $blurb = $script:presetBlurbs[$name] }
+    $script:presets += [pscustomobject]@{
+        name     = ($name -replace ' Preset$', '')
+        blurb    = $blurb
+        count    = $count
+        features = $obj.Features
+        dns      = [string]$obj.DnsMode
+        tmpl     = [string]$obj.DnsTemplates
     }
-})
+}
+# Policy engine - registry read/write, DNS, leaked-prefs repair. Same
+# semantics as v2.0.x main: scoped Reset, and DNS "secure" requiring a template.
+
+$script:dnsState = @{ Mode = 0; Tmpl = "" }
 
 # ---------------------------------------------------------------------------
-# Mutual-exclusion groups
+# REGISTRY
+# ---------------------------------------------------------------------------
+# The user-scope path is the SID-aware one computed at the top of the file.
+# A literal HKCU here is the elevated process's OWN hive, which under
+# over-the-shoulder UAC belongs to the approving admin, not the user whose
+# policy is being scrubbed. This assignment was the missing half of the
+# $OriginalSid restoration in 94a736a.
+$script:machineReg = $machineRegistryPath
+$script:userReg    = $userRegistryPath
+
+function Test-Elevated {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    (New-Object Security.Principal.WindowsPrincipal $id).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Get-AllRows {
+    $out = @()
+    foreach ($cat in $script:cats) { foreach ($row in $cat.rows) { $out += $row } }
+    return $out
+}
+
+function Test-IsChoiceRow($row) {
+    return ($null -ne $row.PSObject.Properties['choices'])
+}
+
+function Get-RowPolicyValue($row) {
+    # $null means "this row manages nothing" - unticked, or a choice row left
+    # on "Not managed". Those fall into Apply's removal branch.
+    $st = $script:state[$row.Id]
+    if (Test-IsChoiceRow $row) {
+        if ($st.Sel -le 0) { return $null }
+        return $row.choices[$st.Sel][1]
+    }
+    if (-not $st.On) { return $null }
+    # Unary comma: PowerShell unrolls a one-element array on return, which turns
+    # ExtensionInstallBlocklist = @("*") into a bare string, so Get-RowRegType
+    # calls it String and it is written as REG_SZ instead of a policy list.
+    # Chromium then ignores it while the UI reports success.
+    if ($row.value -is [array]) { return ,$row.value }
+    return $row.value
+}
+
+function Get-DeclaredListValues {
+    # Every List row's declared value, keyed by policy key. Used as the
+    # ownership baseline when deciding whether a list on disk is ours.
+    $map = @{}
+    foreach ($row in Get-AllRows) {
+        if ($row.value -is [array]) { $map[$row.key] = [string[]]$row.value }
+    }
+    return $map
+}
+
+function Remove-OwnedListPolicy([string]$Scope, [string]$Key, $DeclaredLists) {
+    # An unticked List row does NOT mean "no list is set". Re-sync only ticks
+    # the box on a match, so an admin's own - or a GPO's, or Intune's -
+    # ExtensionInstallBlocklist leaves it unticked, and removing the subkey
+    # would destroy a policy SlimBrave never wrote. Only remove a list that is
+    # exactly ours. Non-list keys are unaffected.
+    if (-not (Test-Path $Scope)) { return $false }
+    if ($DeclaredLists.ContainsKey($Key) -and
+        -not (Test-ListPolicyIsExactly -RegistryPath $Scope -Name $Key `
+                                       -Expected $DeclaredLists[$Key])) {
+        return $false
+    }
+    Remove-ListPolicy $Scope $Key
+    return $true
+}
+
+function Get-RowRegType($value) {
+    if ($value -is [array])  { return "List" }
+    if ($value -is [string]) { return "String" }
+    return "DWord"
+}
+
+function ConvertTo-RegValue($value) {
+    if ($value -is [bool]) { if ($value) { return 1 } else { return 0 } }
+    return $value
+}
+
+# ---------------------------------------------------------------------------
+# List-policy helpers
 #
-# Features tagged with a `Group` are mutually exclusive: either they share a
-# single policy key that can only take one value at a time
-# (IncognitoModeAvailability, DefaultBraveReferrersSetting, ChromeVariations)
-# or checking one makes the other inert (the Shields URL lists, and the two
-# spellcheck rows). The handler below mirrors the Python TUI's
-# toggle_feature_row: checking one group member unchecks the others,
-# preventing the silent force-incognito bug that happened when a preset
-# enabled both IncognitoModeAvailability rows and the later one won.
+# Chromium list policies on Windows live in a subkey with numbered REG_SZ
+# values (e.g. ...\BraveShieldsDisabledForUrls\1 = "https://*"). Writing the
+# list as a single REG_SZ holding a JSON array has no effect - Chromium
+# won't parse it, and the corresponding policy silently stays at its
+# default.
 # ---------------------------------------------------------------------------
+function Set-ListPolicy([string]$RegistryPath, [string]$Name, [string[]]$Values) {
+    $listKey = Join-Path $RegistryPath $Name
+    if (Test-Path $listKey) { Remove-Item -Path $listKey -Recurse -Force }
+    if (Get-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue) {
+        Remove-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue
+    }
+    New-Item -Path $listKey -Force | Out-Null
+    for ($i = 0; $i -lt $Values.Count; $i++) {
+        Set-ItemProperty -Path $listKey -Name ($i + 1) -Value $Values[$i] -Type String -Force
+    }
+}
 
-$script:groupSuppress = $false
-foreach ($cb in $allFeatures) {
-    # Choice rows can't collide: each owns its key outright and holds one
-    # value at a time. They also have no CheckedChanged to hook.
-    if ($null -ne $cb.Tag.Choices) { continue }
-    if ($null -ne $cb.Tag.Group) {
-        $cb.Add_CheckedChanged({
-            if ($script:groupSuppress) { return }
-            $self = $this
-            if (-not $self.Checked) { return }
-            $group = $self.Tag.Group
-            $script:groupSuppress = $true
-            try {
-                foreach ($other in $allFeatures) {
-                    if ($other -eq $self) { continue }
-                    if ($other.Tag.Group -eq $group -and $other.Checked) {
-                        $other.Checked = $false
-                    }
-                }
-            } finally {
-                $script:groupSuppress = $false
-            }
-        })
+function Remove-ListPolicy([string]$RegistryPath, [string]$Name) {
+    $listKey = Join-Path $RegistryPath $Name
+    if (Test-Path $listKey) { Remove-Item -Path $listKey -Recurse -Force }
+    if (Get-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue) {
+        Remove-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue
     }
 }
 
 # ---------------------------------------------------------------------------
-# DNS controls
+# DoH TEMPLATE VALIDATION
+# The only free-text input in the tool, and the only place a keystroke reaches
+# a policy value. A malformed template with mode "secure" leaves Brave unable
+# to resolve any hostname, and the user cannot undo it from brave://settings
+# because the policy is machine-managed. Validate before writing, never after.
 # ---------------------------------------------------------------------------
-
-# Both DNS fields sit in one column that starts past the wider of the two
-# measured labels - AutoSize labels and fixed field offsets cannot coexist,
-# as the v2.0.3 polish pass proved by parking a label under this dropdown.
-$dnsFieldX = $layoutContentOffsetX + 20 + 12 + [Math]::Max(
-    [System.Windows.Forms.TextRenderer]::MeasureText("DNS Over HTTPS Mode:", $form.Font).Width,
-    [System.Windows.Forms.TextRenderer]::MeasureText("Custom DoH template URL:", $form.Font).Width)
-
-$dnsLabel = New-Object System.Windows.Forms.Label
-$dnsLabel.Text = "DNS Over HTTPS Mode:"
-$dnsLabel.Location = New-Object System.Drawing.Point(($layoutContentOffsetX + 20), ($dnsRowTop + 5))
-$dnsLabel.AutoSize = $true
-$form.Controls.Add($dnsLabel)
-
-$dnsDropdown = New-Object System.Windows.Forms.ComboBox
-$dnsDropdown.Location = New-Object System.Drawing.Point($dnsFieldX, $dnsRowTop)
-$dnsDropdown.Size = New-Object System.Drawing.Size(150, 20)
-# "unmanaged" (the default) writes no DNS policy at all, leaving Brave's
-# DNS settings user-controlled. The other four are managed-policy values —
-# including "off", which actively force-disables DoH as policy.
-$dnsDropdown.Items.AddRange(@("unmanaged", "automatic", "off", "secure", "custom"))
-$dnsDropdown.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$dnsDropdown.BackColor = $theme.InputBack
-$dnsDropdown.ForeColor = $theme.InputText
-$form.Controls.Add($dnsDropdown)
-$tooltip.SetToolTip($dnsDropdown, "unmanaged - write no DNS policy; Brave's own DNS settings stay user-controlled.`noff - force-disable DNS over HTTPS as policy.`nautomatic - use DoH when the current resolver supports it, plain DNS otherwise.`nsecure - always resolve over DoH, with no plaintext fallback; needs the template URL below.`ncustom - same as secure, kept so configs from the Linux/macOS scripts round-trip.")
-
-$hoverHint = New-Object System.Windows.Forms.Label
-$hoverHint.Text = "Hover over any option for details"
-$hoverHint.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Italic)
-$hoverHint.ForeColor = $theme.HintText
-$hoverHint.Location = New-Object System.Drawing.Point(($layoutContentWidth - 360), ($dnsRowTop + 5))
-$hoverHint.Size = New-Object System.Drawing.Size(340, 20)
-$hoverHint.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
-$form.Controls.Add($hoverHint)
-
-$dnsTemplateLabel = New-Object System.Windows.Forms.Label
-$dnsTemplateLabel.Text = "Custom DoH template URL:"
-$dnsTemplateLabel.Location = New-Object System.Drawing.Point(($layoutContentOffsetX + 20), ($dnsRowTop + 35))
-$dnsTemplateLabel.AutoSize = $true
-$form.Controls.Add($dnsTemplateLabel)
-
-$dnsTemplateBox = New-Object System.Windows.Forms.TextBox
-$dnsTemplateBox.Location = New-Object System.Drawing.Point($dnsFieldX, ($dnsRowTop + 35))
-$dnsTemplateBox.Size = New-Object System.Drawing.Size(510, 20)
-$dnsTemplateBox.BackColor = $theme.InputBack
-$dnsTemplateBox.ForeColor = $theme.InputText
-$dnsTemplateBox.Enabled = $false
-$form.Controls.Add($dnsTemplateBox)
-$tooltip.SetToolTip($dnsTemplateBox, "DoH resolver template, e.g. https://cloudflare-dns.com/dns-query. Required for 'custom' and 'secure'; optional for 'automatic'.")
-
-$dnsDropdown.Add_SelectedIndexChanged({
-    $dnsTemplateBox.Enabled = ($dnsDropdown.SelectedItem -in @("custom", "secure"))
-})
-
-# ---------------------------------------------------------------------------
-# Buttons
-# ---------------------------------------------------------------------------
-
-function New-ActionButton {
-    # Solid themed buttons replace the old semi-transparent ARGB(150,...)
-    # backgrounds, which WinForms blends unpredictably against the form.
-    param (
-        [string] $Text,
-        [int]    $X,
-        [System.Drawing.Color] $TextColor,
-        [string] $Tip
-    )
-    $button = New-Object System.Windows.Forms.Button
-    $button.Text = $Text
-    $button.Location = New-Object System.Drawing.Point(($script:layoutContentOffsetX + $X), $script:buttonRowTop)
-    # Width follows the rendered text so no DPI scale can clip a caption;
-    # 120 stays the floor so the five buttons read as one family.
-    $buttonW = [Math]::Max(120, [System.Windows.Forms.TextRenderer]::MeasureText($Text, $form.Font).Width + 24)
-    $button.Size = New-Object System.Drawing.Size($buttonW, 32)
-    $button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $button.FlatAppearance.BorderSize = 1
-    $button.FlatAppearance.BorderColor = $theme.ButtonBorder
-    $button.FlatAppearance.MouseOverBackColor = $theme.ButtonHover
-    $button.BackColor = $theme.ButtonBack
-    $button.ForeColor = $TextColor
-    $tooltip.SetToolTip($button, $Tip)
-    $form.Controls.Add($button)
-    return $button
+function Test-DohTemplate([string]$Raw) {
+    $v = [string]$Raw
+    # Control characters in a registry string are a corrupted policy, not a
+    # validation error, so strip rather than reject.
+    $v = ($v -replace '[\x00-\x1F\x7F]', '').Trim()
+    if ([string]::IsNullOrWhiteSpace($v)) {
+        return @{ Ok = $false; Value = ""; Reason = "The template is empty." }
+    }
+    if ($v.Length -gt 2048) {
+        return @{ Ok = $false; Value = $v; Reason = "The template is unreasonably long (over 2048 characters)." }
+    }
+    $uri = $null
+    if (-not [System.Uri]::TryCreate($v, [System.UriKind]::Absolute, [ref]$uri)) {
+        return @{ Ok = $false; Value = $v; Reason = "That is not a complete URL. A DoH template looks like https://cloudflare-dns.com/dns-query." }
+    }
+    if ($uri.Scheme -ne "https") {
+        return @{ Ok = $false; Value = $v; Reason = "DoH templates must use https. Chromium rejects '$($uri.Scheme)', which would leave secure DNS with no working resolver." }
+    }
+    if ([string]::IsNullOrWhiteSpace($uri.Host)) {
+        return @{ Ok = $false; Value = $v; Reason = "The URL has no hostname." }
+    }
+    return @{ Ok = $true; Value = $v; Reason = "" }
 }
 
-$exportButton = New-ActionButton "Export Settings" 20 $theme.ExportText `
-    "Save the current selections to a JSON file. The format is shared with the Linux and macOS versions."
-$importButton = New-ActionButton "Import Settings" 213 $theme.ImportText `
-    "Load selections from a JSON file or one of the bundled presets. Nothing is written until you click Apply Settings."
-# Import's blue again: Re-sync only reads.
-$resyncButton = New-ActionButton "Re-sync Registry" 407 $theme.ImportText `
-    "Read the policy currently in the registry back into the controls, discarding any selections on screen you have not applied. Nothing is written."
-$saveButton = New-ActionButton "Apply Settings" 600 $theme.ApplyText `
-    "Write every checked policy to the registry and remove unchecked ones. Restart Brave (close all brave.exe processes) for changes to take effect."
-$resetButton = New-ActionButton "Reset All Settings" 793 $theme.ResetText `
-    "Remove every policy SlimBrave Neo manages from machine and user scope - policies set by group policy or another tool are left alone - and scrub leaked Shields entries from your Brave profiles."
-
 # ---------------------------------------------------------------------------
-# Apply - sets checked keys AND removes unchecked keys (fixes #25, #27, #19)
+# LEAKED SHIELDS EXCEPTIONS
+# Brave writes managed *ForUrls content-setting policies through to each
+# profile's Preferences file. Removing the policy from the registry does NOT
+# roll those entries back, so unticking "Disable Brave Shields" leaves shields
+# stuck off. They land in every profile of every installed channel, because the
+# registry policy applies to all of them.
 # ---------------------------------------------------------------------------
-
-$saveButton.Add_Click({
-    # Validate DNS settings up-front. Writing features first and then
-    # bailing out on a bad DNS config would leave the policy store in a
-    # half-applied state, which is what the original "custom with no
-    # template" bug looked like in practice. Mirrors the guard in
-    # Set-DnsSettings - "secure" without a template is just as fatal.
-    if ($dnsDropdown.SelectedItem -in @("custom", "secure") -and
-        [string]::IsNullOrWhiteSpace($dnsTemplateBox.Text)) {
-        [System.Windows.Forms.MessageBox]::Show(
-            "'secure' and 'custom' DoH require a template URL (e.g. https://cloudflare-dns.com/dns-query).",
-            "Missing DoH Template",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
-        )
-        return
+function Repair-OneBravePrefs([string]$pref) {
+    if (-not (Test-Path $pref)) { return 0 }
+    try { $j = Get-Content $pref -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return 0 }
+    $bs = $null
+    if ($j.profile -and $j.profile.content_settings -and $j.profile.content_settings.exceptions) {
+        $bs = $j.profile.content_settings.exceptions.braveShields
     }
-
-    # Created lazily here rather than at launch, so merely opening the app
-    # never writes to the registry.
-    if (-not (Test-Path -Path $registryPath)) {
-        New-Item -Path $registryPath -Force | Out-Null
-    }
-
-    # Build a hashtable of the values to write, keyed by policy key name.
-    # Group exclusivity (above) ensures at most one entry per key, so this
-    # is just a key lookup. A row that manages nothing - unchecked box, or a
-    # choice row left on "Not managed" - contributes no entry and so falls
-    # into the removal branch below.
-    #
-    # The value is carried explicitly rather than by handing on the feature:
-    # on a choice row the feature's own Value is the legacy checkbox value,
-    # not the user's selection.
-    $selectedFeatures = @{}
-    foreach ($control in $allFeatures) {
-        $rowValue = Get-RowValue $control
-        if ($null -eq $rowValue) { continue }
-        $feature = $control.Tag
-        $selectedFeatures[$feature.Key] = @{
-            Key   = $feature.Key
-            Type  = $feature.Type
-            Value = $rowValue
+    if (-not $bs) { return 0 }
+    $removed = 0
+    foreach ($pattern in @('http://*,*', 'https://*,*')) {
+        if ($bs.PSObject.Properties.Name -contains $pattern) {
+            $bs.PSObject.Properties.Remove($pattern)
+            $removed++
         }
     }
-
-    # Get every unique policy key across all features
-    $uniqueKeys = $allFeatures | ForEach-Object { $_.Tag.Key } | Select-Object -Unique
-
-    # List-typed features by key, so the removal branch below can tell our
-    # own list from one an admin or another tool wrote.
-    $listFeatures = @{}
-    foreach ($checkbox in $allFeatures) {
-        if ($checkbox.Tag.Type -eq "List") { $listFeatures[$checkbox.Tag.Key] = $checkbox.Tag }
+    if ($removed -eq 0) { return 0 }
+    # Brave reads Preferences as compact UTF-8 without BOM. Out-File would
+    # write UTF-16 with a BOM and break Brave on next launch.
+    $json = $j | ConvertTo-Json -Depth 100 -Compress
+    $tmp = "$pref.slimbrave-tmp"
+    try {
+        [System.IO.File]::WriteAllText($tmp, $json, (New-Object System.Text.UTF8Encoding $false))
+        Move-Item -Force $tmp $pref
+    } catch {
+        if (Test-Path $tmp) { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
+        return 0
     }
-    $skippedListKeys = @()
+    return $removed
+}
 
-    foreach ($key in $uniqueKeys) {
-        if ($selectedFeatures.ContainsKey($key)) {
-            $feature = $selectedFeatures[$key]
-            try {
-                if ($feature.Type -eq "List") {
-                    Set-ListPolicy -RegistryPath $registryPath -Name $feature.Key -Values $feature.Value
-                    Write-Host "Set $($feature.Key) to [$(($feature.Value) -join ', ')]"
-                    # Clear any conflicting user-scope value / subkey so Brave
-                    # does not merge machine and user policies.
-                    Remove-ListPolicy -RegistryPath $userRegistryPath -Name $feature.Key
-                } else {
-                    Set-ItemProperty -Path $registryPath -Name $feature.Key -Value $feature.Value -Type $feature.Type -Force
-                    Write-Host "Set $($feature.Key) to $($feature.Value)"
-                    # When enforcing a machine-level policy, clear any conflicting
-                    # user-scope value so Brave does not merge the two.
-                    if ((Test-Path -Path $userRegistryPath) -and
-                        (Get-ItemProperty -Path $userRegistryPath -Name $key -ErrorAction SilentlyContinue)) {
-                        Remove-ItemProperty -Path $userRegistryPath -Name $key -ErrorAction SilentlyContinue
-                    }
-                }
-            } catch {
-                Write-Host "Failed to set $($feature.Key): $_"
+function Get-UserAppDataRoots {
+    <#
+      Which LOCALAPPDATA roots hold a Brave profile worth scrubbing.
+
+      The single-user case is the fast path and comes first: the invoking
+      user's own root. But the policy this tool writes lives in HKLM and
+      applies to every account on the machine, so on a shared PC the leaked
+      Shields exceptions land in every profile that opened Brave while it was
+      active - not just the one running this.
+
+      Other users' roots come from the ProfileList registry key rather than by
+      globbing C:\Users, because that key is the authoritative mapping and it
+      lets us filter to real interactive accounts (S-1-5-21-*), skipping
+      SYSTEM, service accounts, Default and Public.
+    #>
+    $roots = New-Object System.Collections.ArrayList
+    $primary = $env:LOCALAPPDATA
+    if (-not [string]::IsNullOrWhiteSpace($script:OriginalLocalAppData)) {
+        $primary = $script:OriginalLocalAppData
+    }
+    if (-not [string]::IsNullOrWhiteSpace($primary)) {
+        [void]$roots.Add(@{ Path = $primary; Label = "this user" })
+    }
+
+    $profileList = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
+    if (Test-Path $profileList) {
+        foreach ($sk in (Get-ChildItem $profileList -ErrorAction SilentlyContinue)) {
+            $sid = $sk.PSChildName
+            if ($sid -notlike "S-1-5-21-*") { continue }
+            $img = (Get-ItemProperty $sk.PSPath -ErrorAction SilentlyContinue).ProfileImagePath
+            if ([string]::IsNullOrWhiteSpace($img)) { continue }
+            $local = Join-Path $img "AppData\Local"
+            # Another user's profile is unreadable when this is running
+            # unelevated, and Test-Path surfaces that as a visible error even
+            # though the miss is handled. Silence it: an unreadable root is
+            # simply one we cannot repair.
+            if (-not (Test-Path $local -ErrorAction SilentlyContinue)) { continue }
+            $already = $false
+            foreach ($r in $roots) {
+                if ($r.Path -and ($r.Path.TrimEnd('\') -ieq $local.TrimEnd('\'))) { $already = $true; break }
             }
-        } else {
-            # Remove the policy from both machine and user scopes so
-            # Brave falls back to its built-in default. Remove-ListPolicy
-            # handles both REG_SZ values and list subkeys, so it is safe to
-            # call without knowing the feature's Type here.
-            #
-            # Exception: an unchecked List row does not mean "no list is
-            # set". Initialize-CurrentSettings only ticks the box on a
-            # subset match, so an admin's own ExtensionInstallBlocklist
-            # leaves it unchecked - and blowing the subkey away would delete
-            # a policy SlimBrave never wrote. Only remove a list that is
-            # exactly ours.
-            $listFeature = $listFeatures[$key]
-            try {
-                foreach ($scope in @($registryPath, $userRegistryPath)) {
-                    if ($listFeature -and
-                        -not (Test-ListPolicyIsExactly -RegistryPath $scope -Name $key -Expected $listFeature.Value)) {
-                        $skippedListKeys += $key
-                        Write-Host "Skipped $key (externally managed list)"
-                        continue
-                    }
-                    Remove-ListPolicy -RegistryPath $scope -Name $key
-                }
-                Write-Host "Removed $key"
-            } catch {
-                Write-Host "Failed to remove ${key}: $_"
-            }
+            if ($already) { continue }
+            # only bother with accounts that actually have Brave data
+            if (-not (Test-Path (Join-Path $local "BraveSoftware") -ErrorAction SilentlyContinue)) { continue }
+            [void]$roots.Add(@{ Path = $local; Label = (Split-Path $img -Leaf) })
         }
     }
+    return $roots
+}
 
-    # DNS settings. "unmanaged" removes the DNS policies from both scopes
-    # so Brave's own DNS settings stay user-controlled; every other mode is
-    # written as managed policy.
-    if ($dnsDropdown.SelectedItem -eq "unmanaged") {
-        foreach ($scope in @($registryPath, $userRegistryPath)) {
-            if (Test-Path -Path $scope) {
-                Remove-ItemProperty -Path $scope -Name "DnsOverHttpsMode" -ErrorAction SilentlyContinue
-                Remove-ItemProperty -Path $scope -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
-            }
-        }
-    } elseif ($dnsDropdown.SelectedItem) {
-        $dnsUpdated = Set-DnsSettings -dnsMode $dnsDropdown.SelectedItem -dnsTemplates $dnsTemplateBox.Text `
-            -MachinePath $registryPath -UserPath $userRegistryPath
-        if (-not $dnsUpdated) {
-            return
+function Repair-OneUserRoot([string]$localAppData) {
+    # One unreadable or locked profile must not abort the sweep - the other
+    # users on the machine still deserve their repair.
+    $removed = 0
+    foreach ($channelDir in @('Brave-Browser', 'Brave-Browser-Beta', 'Brave-Browser-Nightly', 'Brave-Browser-Dev')) {
+        $userData = Join-Path $localAppData "BraveSoftware\$channelDir\User Data"
+        if (-not (Test-Path $userData)) { continue }
+        $profileDirs = Get-ChildItem -Path $userData -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' }
+        foreach ($dir in $profileDirs) {
+            try { $removed += Repair-OneBravePrefs (Join-Path $dir.FullName 'Preferences') } catch { }
         }
     }
+    return $removed
+}
 
-    # Scrub Chromium's per-URL pref leak (BraveShieldsDisabledForUrls writes
-    # exceptions into the user profile that survive policy removal).
-    $repair = Repair-BravePrefs
+function Repair-BravePrefs {
+    # Every Brave channel runs as brave.exe on Windows.
+    $running = ($null -ne (Get-Process brave -ErrorAction SilentlyContinue))
+    # Chromium serves prefs from an in-memory PrefService and rewrites the file
+    # on shutdown, so a scrub done now is discarded the moment the user closes
+    # Brave - which is exactly what we tell them to do next. Report it instead
+    # of claiming a clean that will not survive.
+    if ($running) { return @{ Removed = 0; Running = $true; Skipped = $true; Users = 0 } }
 
-    $msg = "Settings applied successfully! Restart Brave to see changes."
+    $removed = 0
+    $users = 0
+    foreach ($root in Get-UserAppDataRoots) {
+        $n = Repair-OneUserRoot $root.Path
+        if ($n -gt 0) { $users++ }
+        $removed += $n
+    }
+    return @{ Removed = $removed; Running = $false; Skipped = $false; Users = $users }
+}
+
+function Join-Status([string]$lead, $repair) {
+    # The repair note follows the routine result - unless it needs the user
+    # to act (Brave was running, nothing was cleared), in which case it leads.
+    $n = (Get-RepairNote $repair).Trim()
+    if (-not $n) { return $lead }
+    if ($repair.Skipped) { return "$n $lead" }
+    return "$lead $n"
+}
+
+function Get-RepairNote($repair) {
     if ($repair.Skipped) {
-        $msg += "`n`nBrave is running, so leaked profile prefs were left alone - Brave keeps prefs in memory and would overwrite the fix the moment it next saves. Fully close it (taskkill /IM brave.exe /F or end all brave.exe in Task Manager), then click Apply Settings again."
-    } elseif ($repair.Removed -gt 0) {
-        $plural = if ($repair.Removed -ne 1) { "s" } else { "" }
-        $msg = "Settings applied. Cleaned $($repair.Removed) leaked profile pref$plural. Restart Brave to see changes."
+        # Leads with the action: this is the one line the user has to do
+        # something about, so it goes first (see Join-Status) and says so.
+        return " Close Brave fully and run this again to clear leaked profile prefs - Brave is running, and it would overwrite the fix on its next save."
     }
-    if ($skippedListKeys.Count -gt 0) {
-        $msg += "`n`nLeft alone because the list on disk is not the one SlimBrave writes: $(($skippedListKeys | Select-Object -Unique) -join ', ')."
+    if ($repair.Removed -gt 0) {
+        $plural = ""
+        if ($repair.Removed -ne 1) { $plural = "s" }
+        # Machine policy applies to every account, so say when the repair
+        # reached beyond the person sitting here.
+        if ($repair.Users -gt 1) {
+            return " Also cleaned $($repair.Removed) leaked profile pref$plural across $($repair.Users) user profiles on this PC."
+        }
+        return " Also cleaned $($repair.Removed) leaked profile pref$plural that earlier SlimBrave versions wrote into your Brave profile."
     }
+    return ""
+}
 
-    $statusLabel.Text = "Changes applied"
-
-    [System.Windows.Forms.MessageBox]::Show(
-        $msg,
-        "SlimBrave Neo",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Information
-    )
-})
-
-# ---------------------------------------------------------------------------
-# Reset
-# ---------------------------------------------------------------------------
-
-function Reset-AllSettings {
-    $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "Warning: This will erase all settings SlimBrave Neo manages and restore them to their default state. Policies set by group policy or another tool are left alone. Do you wish to continue?",
-        "Confirm SlimBrave Neo Reset",
-        [System.Windows.Forms.MessageBoxButtons]::YesNo,
-        [System.Windows.Forms.MessageBoxIcon]::Warning
-    )
-
-    if ($confirm -eq "Yes") {
-        try {
-            # Scoped to our own keys, exactly like Apply. The Brave policy
-            # hive is shared: a Remove-Item -Recurse here would also destroy
-            # a GPO's ExtensionInstallForcelist, URLBlocklist, ProxySettings
-            # and anything else another tool put there.
-            $uniqueKeys = $allFeatures | ForEach-Object { $_.Tag.Key } | Select-Object -Unique
-            foreach ($scope in @($registryPath, $userRegistryPath)) {
-                if (-not (Test-Path -Path $scope)) { continue }
-                foreach ($key in $uniqueKeys) {
-                    Remove-ListPolicy -RegistryPath $scope -Name $key
-                }
-                Remove-ItemProperty -Path $scope -Name "DnsOverHttpsMode"      -ErrorAction SilentlyContinue
-                Remove-ItemProperty -Path $scope -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
-            }
-
-            # Scrub the per-URL exceptions Brave caches in the user profile.
-            # Without this, "Disable Brave Shields" leaves shields stuck off
-            # even after the registry policy is gone.
-            $repair = Repair-BravePrefs
-
-            $msg = "Every policy SlimBrave Neo manages has been reset to its default value."
-            if ($repair.Skipped) {
-                $msg += "`n`nBrave is running, so leaked profile prefs were left alone - Brave would overwrite the fix the moment it next saves. Fully close it (Task Manager: end all brave.exe), then run Reset again to clear them."
-            } elseif ($repair.Removed -gt 0) {
-                $plural = if ($repair.Removed -ne 1) { "s" } else { "" }
-                $msg += "`n`nAlso cleaned $($repair.Removed) leaked profile pref$plural that previous SlimBrave versions wrote to your Brave profile."
-            }
-
-            [System.Windows.Forms.MessageBox]::Show(
-                $msg,
-                "Reset Successful",
+function Invoke-ApplyPolicy {
+    # DNS is validated first. Writing features and then bailing out would
+    # leave the store half-applied, which is what the v1.9.5 critical bug
+    # looked like in practice - "secure" with no template is as fatal as
+    # "custom" with none.
+    $mode = $script:dnsModes[$script:dnsState.Mode]
+    $needsTemplate = ($mode -eq "custom" -or $mode -eq "secure")
+    if ($needsTemplate) {
+        $check = Test-DohTemplate $script:dnsState.Tmpl
+        if (-not $check.Ok) {
+            [void][System.Windows.Forms.MessageBox]::Show(
+                "$($check.Reason)`n`nMode '$mode' sends DNS over HTTPS only - with no working resolver, nothing resolves at all, and the setting cannot be changed from brave://settings because it is machine policy.",
+                "Check the DoH template",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-            return $true
-        } catch {
-            [System.Windows.Forms.MessageBox]::Show(
-                "An error occurred while resetting the settings: $_",
-                "Reset Failed",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Error
-            )
+                [System.Windows.Forms.MessageBoxIcon]::Warning)
             return $false
         }
+        # write the sanitised value, not the raw keystrokes
+        $script:dnsState.Tmpl = $check.Value
+    }
+    # No check in the other modes: the template is not written there, and the
+    # box is disabled, so refusing over a held value was an unrecoverable
+    # block - pick custom, mistype, switch to off, and Apply died with the
+    # only remedy behind a greyed-out control.
+    if (-not (Test-Elevated)) {
+        [void][System.Windows.Forms.MessageBox]::Show(
+            "Writing machine policy needs Administrator. Relaunch elevated to apply.",
+            "Not elevated",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning)
+        return $false
+    }
+    if (-not (Test-Path $script:machineReg)) {
+        New-Item -Path $script:machineReg -Force | Out-Null
     }
 
+    $selected = @{}
+    foreach ($row in Get-AllRows) {
+        $v = Get-RowPolicyValue $row
+        if ($null -eq $v) { continue }
+        $selected[$row.key] = @{ Key = $row.key; Value = $v; Type = (Get-RowRegType $v) }
+    }
+    $declaredLists = Get-DeclaredListValues
+    $skippedLists = @{}
+    $uniqueKeys = (Get-AllRows | ForEach-Object { $_.key } | Select-Object -Unique)
+    $written = 0
+    foreach ($key in $uniqueKeys) {
+        if ($selected.ContainsKey($key)) {
+            $f = $selected[$key]
+            try {
+                if ($f.Type -eq "List") {
+                    Set-ListPolicy $script:machineReg $f.Key ([string[]]$f.Value)
+                    Remove-ListPolicy $script:userReg $f.Key
+                } else {
+                    Set-ItemProperty -Path $script:machineReg -Name $f.Key `
+                        -Value (ConvertTo-RegValue $f.Value) -Type $f.Type -Force
+                    if ((Test-Path $script:userReg) -and
+                        (Get-ItemProperty -Path $script:userReg -Name $key -ErrorAction SilentlyContinue)) {
+                        Remove-ItemProperty -Path $script:userReg -Name $key -ErrorAction SilentlyContinue
+                    }
+                }
+                $written++
+            } catch { }
+        } else {
+            foreach ($scope in @($script:machineReg, $script:userReg)) {
+                if (-not (Remove-OwnedListPolicy $scope $key $declaredLists)) {
+                    if ($declaredLists.ContainsKey($key)) { $skippedLists[$key] = $true }
+                }
+            }
+        }
+    }
+
+    # Clear BOTH scopes first, unconditionally. The managed branch below used
+    # to write HKLM only and never touch the user-scope twin, unlike every other
+    # key here - so a leftover HKCU DnsOverHttpsTemplates from an older tool
+    # survived, stayed invisible to Read-LivePolicy (machine scope only), and
+    # could still be the template Chromium honoured.
+    foreach ($scope in @($script:machineReg, $script:userReg)) {
+        if (Test-Path $scope) {
+            Remove-ItemProperty -Path $scope -Name "DnsOverHttpsMode" -ErrorAction SilentlyContinue
+            Remove-ItemProperty -Path $scope -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
+        }
+    }
+    if ($mode -eq "unmanaged") {
+        # nothing further: the scrub above is the whole action
+    } else {
+        # "custom" is Chromium's "secure" plus a template; the UI keeps them
+        # apart so the template field can be required for one and not the other.
+        $writeMode = $mode
+        if ($mode -eq "custom") { $writeMode = "secure" }
+        Set-ItemProperty -Path $script:machineReg -Name "DnsOverHttpsMode" -Value $writeMode -Type String -Force
+        # Chromium does honour a template in "automatic" mode, but this UI
+        # greys the template box out there and captions it "Only used by the
+        # custom and secure modes". Writing it anyway pinned a resolver the
+        # interface said was inactive, with the box disabled so it could not be
+        # cleared. Match what the user is shown; "custom" is the way to pair a
+        # template with a mode here.
+        $wantsTemplate = ($mode -eq "custom" -or $mode -eq "secure")
+        if ($wantsTemplate -and -not [string]::IsNullOrWhiteSpace($script:dnsState.Tmpl)) {
+            Set-ItemProperty -Path $script:machineReg -Name "DnsOverHttpsTemplates" `
+                -Value $script:dnsState.Tmpl -Type String -Force
+        } else {
+            Remove-ItemProperty -Path $script:machineReg -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
+        }
+        $written++
+    }
+    $repair = Repair-BravePrefs
+    $lead = "Applied $written policies. Restart Brave, then check brave://policy."
+    if ($skippedLists.Count -gt 0) {
+        $lead += " Left alone because the list on disk is not the one SlimBrave writes: " +
+                 (($skippedLists.Keys | Sort-Object) -join ", ") + "."
+    }
+    Set-Status (Join-Status $lead $repair)
+    return $true
+}
+
+function Invoke-ResetPolicy {
+    # Scoped to keys this tool manages. A recursive delete of the hive would
+    # take out GPO-set policies SlimBrave never wrote - the v2.0.0 bug.
+    if (-not (Test-Elevated)) {
+        [void][System.Windows.Forms.MessageBox]::Show(
+            "Removing machine policy needs Administrator. Relaunch elevated to reset.",
+            "Not elevated",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning)
+        return $false
+    }
+    $uniqueKeys = (Get-AllRows | ForEach-Object { $_.key } | Select-Object -Unique)
+    $declaredLists = Get-DeclaredListValues
+    $skippedLists = @{}
+    foreach ($scope in @($script:machineReg, $script:userReg)) {
+        if (-not (Test-Path $scope)) { continue }
+        foreach ($key in $uniqueKeys) {
+            if (-not (Remove-OwnedListPolicy $scope $key $declaredLists)) {
+                if ($declaredLists.ContainsKey($key)) { $skippedLists[$key] = $true }
+            }
+        }
+        Remove-ItemProperty -Path $scope -Name "DnsOverHttpsMode" -ErrorAction SilentlyContinue
+        Remove-ItemProperty -Path $scope -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
+    }
+    foreach ($id in @($script:state.Keys)) { $script:state[$id].On = $false; $script:state[$id].Sel = 0 }
+    $script:dnsState.Mode = 0
+    $script:dnsState.Tmpl = ""
+    $repair = Repair-BravePrefs
+    $note = "Reset. Only keys SlimBrave Neo manages were removed."
+    if ($skippedLists.Count -gt 0) {
+        $note += " Left $($skippedLists.Count) externally-managed list policy" +
+                 $(if ($skippedLists.Count -eq 1) { "" } else { "s" }) + " alone."
+    }
+    Set-Status (Join-Status $note $repair)
+    return $true
+}
+
+function Read-LivePolicy {
+    $live = @{}
+    if (Test-Path $script:machineReg) {
+        foreach ($pr in (Get-ItemProperty $script:machineReg).PSObject.Properties) {
+            if ($pr.Name -notlike "PS*") { $live[$pr.Name] = $pr.Value }
+        }
+        foreach ($sk in (Get-ChildItem $script:machineReg -ErrorAction SilentlyContinue)) {
+            $vals = @()
+            foreach ($pr in (Get-ItemProperty $sk.PSPath).PSObject.Properties) {
+                if ($pr.Name -match '^[0-9]+$') { $vals += [string]$pr.Value }
+            }
+            if ($vals.Count -gt 0) { $live[$sk.PSChildName] = $vals }
+        }
+    }
+    return $live
+}
+
+function Sync-FromRegistry {
+    $live = Read-LivePolicy
+    foreach ($id in @($script:state.Keys)) { $script:state[$id].On = $false; $script:state[$id].Sel = 0 }
+    foreach ($row in Get-AllRows) {
+        if (-not $live.ContainsKey($row.key)) { continue }
+        $lv = $live[$row.key]
+        if (Test-IsChoiceRow $row) {
+            for ($i = 1; $i -lt $row.choices.Count; $i++) {
+                if ([string]$row.choices[$i][1] -eq [string]$lv) { $script:state[$row.Id].Sel = $i; break }
+            }
+        } elseif ($row.value -is [array]) {
+            if (($lv -is [array]) -and ((($lv) -join ",") -eq (($row.value) -join ","))) {
+                $script:state[$row.Id].On = $true
+            }
+        } else {
+            if ([string]$lv -eq [string](ConvertTo-RegValue $row.value)) { $script:state[$row.Id].On = $true }
+        }
+    }
+    $script:dnsState.Mode = 0
+    $script:dnsState.Tmpl = ""
+    if ($live.ContainsKey("DnsOverHttpsMode")) {
+        $m = [string]$live["DnsOverHttpsMode"]
+        $tm = ""
+        if ($live.ContainsKey("DnsOverHttpsTemplates")) { $tm = [string]$live["DnsOverHttpsTemplates"] }
+        # A stored "secure" with a template is what this UI calls "custom".
+        if ($m -eq "secure" -and $tm) { $m = "custom" }
+        $idx = [Array]::IndexOf($script:dnsModes, $m)
+        if ($idx -ge 0) { $script:dnsState.Mode = $idx }
+        $script:dnsState.Tmpl = $tm
+    }
+    Enforce-ExclusionGroups
+    Set-Status "Policy read from registry - $($live.Count) values found"
+}
+
+function Enforce-ExclusionGroups {
+    # The toggle handler collapses a group as you click, but Import and
+    # Re-sync write $script:state directly and never ran that rule - so two
+    # members of one group could be staged together and Apply wrote both.
+    # main collapsed groups through CheckedChanged; the Python ports do it in
+    # _enforce_groups. First row of a group wins, deterministically.
+    $seen = @{}
+    foreach ($row in Get-AllRows) {
+        if (-not $row.group) { continue }
+        if (-not $script:state[$row.Id].On) { continue }
+        if ($seen.ContainsKey($row.group)) { $script:state[$row.Id].On = $false; continue }
+        $seen[$row.group] = $true
+    }
+}
+
+function Import-PresetIntoState($preset) {
+    $script:importNotes = @()
+    foreach ($id in @($script:state.Keys)) { $script:state[$id].On = $false; $script:state[$id].Sel = 0 }
+    $feat = $preset.features
+    if ($feat -is [array]) {
+        # Legacy pre-2026 export: Features was a bare ARRAY of policy key names,
+        # not an object of key/value pairs. main carried an explicit branch for
+        # this; without one, PSObject.Properties[$key] is $null for every row,
+        # so the import staged nothing and still reported success - after having
+        # already cleared the user's selections above.
+        $names = @()
+        foreach ($n in $feat) { $names += [string]$n }
+        # First row per KEY wins. Several keys carry two rows with opposite
+        # values (Force Incognito vs Disable Incognito, the two Variations
+        # rows, the two Referrers rows), and the guard here used to test the
+        # row's own state - which this function had just cleared, so it never
+        # fired and BOTH rows of every pair were staged. Apply then wrote the
+        # second one's value.
+        $handled = @{}
+        foreach ($row in Get-AllRows) {
+            if ($names -notcontains $row.key) { continue }
+            if ($handled.ContainsKey($row.key)) { continue }
+            $handled[$row.key] = $true
+            if (Test-IsChoiceRow $row) {
+                for ($i = 1; $i -lt $row.choices.Count; $i++) {
+                    if ([string]$row.choices[$i][1] -eq [string]$row.value) {
+                        $script:state[$row.Id].Sel = $i; break
+                    }
+                }
+            } else {
+                # A bare key in the legacy format means "apply this row's own
+                # declared value", which is what the row is ticked to write.
+                $script:state[$row.Id].On = $true
+            }
+        }
+        $feat = $null
+    }
+    foreach ($row in Get-AllRows) {
+        if ($null -eq $feat) { continue }
+        if ($null -eq $feat.PSObject.Properties[$row.key]) { continue }
+        $want = $feat.$($row.key)
+        if (Test-IsChoiceRow $row) {
+            # Type-strict, as main and both Python ports are: a quoted "1" is
+            # not a member of the enum, and neither is $true.
+            $ok = ($want -is [int] -or $want -is [long] -or $want -is [byte] -or $want -is [double])
+            $matched = $false
+            if ($ok) {
+                for ($i = 1; $i -lt $row.choices.Count; $i++) {
+                    if ([string]$row.choices[$i][1] -eq [string][int]$want) {
+                        $script:state[$row.Id].Sel = $i; $matched = $true; break
+                    }
+                }
+            }
+            if (-not $matched) { $script:importNotes += "$($row.key)=$want" }
+        } elseif ($row.value -is [array]) {
+            # Match the VALUE, not merely the key. Ticking on key presence alone
+            # means an imported single-site exception such as
+            # BraveShieldsDisabledForUrls = ["https://intranet.example"] stages
+            # this row, and Apply then writes SlimBrave's own wildcard - turning
+            # one site into the whole web.
+            $wantList = @(); foreach ($x in @($want)) { $wantList += [string]$x }
+            $mine = @();     foreach ($x in $row.value) { $mine += [string]$x }
+            if ($wantList.Count -eq $mine.Count -and
+                -not (Compare-Object $wantList $mine)) {
+                $script:state[$row.Id].On = $true
+            } else { $script:importNotes += $row.key }
+        } else {
+            if ([string](ConvertTo-RegValue $want) -eq [string](ConvertTo-RegValue $row.value)) {
+                $script:state[$row.Id].On = $true
+            }
+        }
+    }
+    $script:dnsState.Mode = 0
+    $script:dnsState.Tmpl = ""
+    if ($preset.tmpl) { $script:dnsState.Tmpl = [string]$preset.tmpl }
+    if ($preset.dns) {
+        # Case-insensitive, as main was: a hand-edited "Automatic" must not
+        # silently land on unmanaged and drop the resolver the file asked for.
+        $want = [string]$preset.dns
+        $canon = @($script:dnsModes | Where-Object { $_ -eq $want })
+        if ($canon.Count -gt 0) {
+            $script:dnsState.Mode = [Array]::IndexOf($script:dnsModes, $canon[0])
+        } else { $script:importNotes += "DnsMode=$want" }
+    } elseif ($script:dnsState.Tmpl) {
+        # A template with no mode means custom - main and the Python ports
+        # both take it that way; leaving it unmanaged deletes the resolver.
+        $script:dnsState.Mode = [Array]::IndexOf($script:dnsModes, "custom")
+    }
+    Enforce-ExclusionGroups
+}
+
+$F = @{
+    Bg=[System.Drawing.Color]::FromArgb(32,32,32);      Rail=[System.Drawing.Color]::FromArgb(27,27,27)
+    Row=[System.Drawing.Color]::FromArgb(45,45,45);     RowHot=[System.Drawing.Color]::FromArgb(51,51,51)
+    RowEdge=[System.Drawing.Color]::FromArgb(56,56,56); RowTopHi=[System.Drawing.Color]::FromArgb(64,64,64)
+    Text=[System.Drawing.Color]::FromArgb(255,255,255); TextSub=[System.Drawing.Color]::FromArgb(160,160,160)
+    Accent=[System.Drawing.Color]::FromArgb(76,194,255);AccentDim=[System.Drawing.Color]::FromArgb(40,76,194,255)
+    ThumbOn=[System.Drawing.Color]::FromArgb(27,27,27); ThumbOff=[System.Drawing.Color]::FromArgb(206,206,206)
+    OutlineOff=[System.Drawing.Color]::FromArgb(154,154,154)
+    NavHot=[System.Drawing.Color]::FromArgb(41,41,41);  NavSel=[System.Drawing.Color]::FromArgb(48,48,48)
+    Bar=[System.Drawing.Color]::FromArgb(39,39,39)
+}
+
+
+# Segoe MDL2 Assets glyphs, one per nav page
+$script:navGlyphs = @([char]0xE9D9, [char]0xE72E, [char]0xE71D, [char]0xE8D7,
+                      [char]0xE734, [char]0xE83D, [char]0xE9D2)
+
+# StringFormat that renders "&" literally instead of eating it as a mnemonic
+$script:SF = New-Object System.Drawing.StringFormat
+$script:SF.HotkeyPrefix = [System.Drawing.Text.HotkeyPrefix]::None
+$script:SFw = New-Object System.Drawing.StringFormat
+$script:SFw.HotkeyPrefix = [System.Drawing.Text.HotkeyPrefix]::None
+$script:SFw.Trimming = [System.Drawing.StringTrimming]::Word
+
+function Add-RoundedPath([System.Drawing.Drawing2D.GraphicsPath]$path,[System.Drawing.RectangleF]$r,[float]$rad){
+    $d=$rad*2
+    $path.AddArc($r.X,$r.Y,$d,$d,180,90); $path.AddArc($r.Right-$d,$r.Y,$d,$d,270,90)
+    $path.AddArc($r.Right-$d,$r.Bottom-$d,$d,$d,0,90); $path.AddArc($r.X,$r.Bottom-$d,$d,$d,90,90)
+    $path.CloseFigure()
+}
+function Enable-DoubleBuffer($c){
+    $c.GetType().GetProperty("DoubleBuffered",[System.Reflection.BindingFlags]"Instance,NonPublic").SetValue($c,$true)
+}
+function Fill-Round([System.Drawing.Graphics]$g,[System.Drawing.RectangleF]$r,[float]$rad,[System.Drawing.Color]$c){
+    $p=New-Object System.Drawing.Drawing2D.GraphicsPath; Add-RoundedPath $p $r $rad
+    $b=New-Object System.Drawing.SolidBrush $c; $g.FillPath($b,$p); $b.Dispose(); $p.Dispose()
+}
+function Stroke-Round([System.Drawing.Graphics]$g,[System.Drawing.RectangleF]$r,[float]$rad,[System.Drawing.Color]$c){
+    $p=New-Object System.Drawing.Drawing2D.GraphicsPath; Add-RoundedPath $p $r $rad
+    $pen=New-Object System.Drawing.Pen $c; $g.DrawPath($pen,$p); $pen.Dispose(); $p.Dispose()
+}
+
+Add-Type -TypeDefinition @"
+using System.Drawing;
+using System.Windows.Forms;
+public class DarkMenuColors : ProfessionalColorTable {
+    public override Color ToolStripDropDownBackground { get { return Color.FromArgb(51,51,51); } }
+    public override Color MenuBorder { get { return Color.FromArgb(70,70,70); } }
+    public override Color MenuItemBorder { get { return Color.FromArgb(76,194,255); } }
+    public override Color MenuItemSelected { get { return Color.FromArgb(62,62,62); } }
+    public override Color MenuItemSelectedGradientBegin { get { return Color.FromArgb(62,62,62); } }
+    public override Color MenuItemSelectedGradientEnd { get { return Color.FromArgb(62,62,62); } }
+    public override Color ImageMarginGradientBegin { get { return Color.FromArgb(51,51,51); } }
+    public override Color ImageMarginGradientMiddle { get { return Color.FromArgb(51,51,51); } }
+    public override Color ImageMarginGradientEnd { get { return Color.FromArgb(51,51,51); } }
+}
+"@ -ReferencedAssemblies System.Drawing, System.Windows.Forms
+
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "SlimBrave Neo"
+# Design size is 1180x760 at 96 DPI; scaled it is 1770x1140 at 150%, taller
+# than a 1080p work area, so the HEIGHT yields to the screen (the page is
+# AutoScroll and absorbs it; the bar keeps the bottom edge). Width cannot
+# yield - the columns do not reflow - so it is S'd and may overhang.
+$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedSingle
+$form.MaximizeBox = $false
+# The palette is dark but .NET Framework never asks DWM for a dark title bar,
+# so the window opened under Windows' light frame - the P/Invoke for this has
+# been declared since the DPI block and never called. Attribute 20 is
+# DWMWA_USE_IMMERSIVE_DARK_MODE on Windows 10 20H1+ and 11; builds 1809-1903
+# used 19. Best effort: any failure just leaves the light frame.
+$form.Add_HandleCreated({
+    try {
+        $on=1
+        if([SlimBrave.DpiHelper]::DwmSetWindowAttribute($this.Handle,20,[ref]$on,4) -ne 0){
+            [void][SlimBrave.DpiHelper]::DwmSetWindowAttribute($this.Handle,19,[ref]$on,4)
+        }
+    } catch {}
+})
+# Non-client height of THIS window style, from the same AdjustWindowRectEx
+# WinForms sizes the window with. SystemInformation.CaptionHeight +
+# 2*FixedFrameBorderSize.Height says 29 on Windows 11 where the frame is 39.
+$chromeH=$form.Height-$form.ClientSize.Height
+# Primary screen on purpose: $script:DPI is the system DPI, i.e. the primary
+# monitor's, and the window is placed there below, so size, factor and
+# position come from one monitor. Never grows past the design; never
+# shrinks below ~4 rows (then it overhangs rather than the page vanishing).
+$wa=[System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+# Width has no fallback - the columns do not reflow - so on a screen too
+# narrow for S(1180) the FACTOR yields instead: it is clamped to what fits,
+# and the fonts, built from the same factor below, shrink with the grid.
+# 1920-wide at 175%+ and 1366-wide at 125% are the real cases. Floor 0.75:
+# below that the text is unreadable and overhanging is the lesser evil.
+# This must run before the first S() call, which is the line after it.
+$chromeW=$form.Width-$form.ClientSize.Width
+$fitDpi=[double]($wa.Width-$chromeW)/1180.0
+if($fitDpi -lt $script:DPI){ $script:DPI=[math]::Max(0.75,$fitDpi) }
+$clientH=[math]::Max((S 300),[math]::Min((S 760),($wa.Height-$chromeH)))
+$form.ClientSize = New-Object System.Drawing.Size (S 1180), $clientH
+# Windows' default placement keeps a window inside the MONITOR, not the work
+# area: a work-area-tall window lands with its bottom on the screen edge and
+# the action bar under the taskbar (measured: y=48 on 1080p / Windows 11).
+# Place it ourselves, centred in the work area the height was clamped to;
+# a clamped window gets y = $wa.Y, a shorter one is centred.
+$form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+$form.Location = New-Object System.Drawing.Point ($wa.X+[math]::Max(0,[int](($wa.Width-$form.Width)/2))),($wa.Y+[math]::Max(0,[int](($wa.Height-$form.Height)/2)))
+$form.BackColor = $F.Bg
+Enable-DoubleBuffer $form
+
+# Fonts are authored in points but built in PIXELS at pt*96/72*$script:DPI -
+# exactly what a point font renders as at the system DPI, so at any normal
+# scale nothing changes - except that the size follows $script:DPI. That only
+# matters when the factor was clamped below the display's own DPI to keep the
+# window inside the screen width (form block above): grid and glyphs then
+# shrink together instead of the text outgrowing its rows.
+function New-UiFont($family,[double]$pt){
+    return New-Object System.Drawing.Font($family,[float]($pt*96.0/72.0*$script:DPI),
+        [System.Drawing.FontStyle]::Regular,[System.Drawing.GraphicsUnit]::Pixel)
+}
+$script:titleFont=New-UiFont "Segoe UI Semibold" 16
+$script:crumbFont=New-UiFont "Segoe UI" 9
+$script:navFont  =New-UiFont "Segoe UI" 10
+$script:rowFont  =New-UiFont "Segoe UI" 10
+$script:capFont  =New-UiFont "Segoe UI" 8.5
+$script:btnFont  =New-UiFont "Segoe UI" 9.5
+$script:pTitle   =New-UiFont "Segoe UI Semibold" 11
+try { $script:iconFont = New-UiFont "Segoe MDL2 Assets" 11 }
+catch { $script:iconFont = New-UiFont "Segoe UI" 10 }
+
+# --------------------------------------------------------------- nav rail
+$rail=New-Object System.Windows.Forms.Panel
+$rail.Location=New-Object System.Drawing.Point 0,0
+$rail.Size=New-Object System.Drawing.Size (S 250),$form.ClientSize.Height
+# Anchored: WinForms caps Form.Height at MaxWindowTrackSize in the setter while
+# ClientSize still reports the request, so the derived sizes must follow the
+# client the OS actually grants, not the one asked for.
+$rail.Anchor=[System.Windows.Forms.AnchorStyles]"Top,Bottom,Left"
+$rail.BackColor=$F.Rail; Enable-DoubleBuffer $rail; $form.Controls.Add($rail)
+
+$script:railTitleFont=New-UiFont "Segoe UI Semibold" 15
+$script:railSubFont=New-UiFont "Segoe UI" 9
+
+$railHead=New-Object System.Windows.Forms.Panel
+$railHead.Location=New-Object System.Drawing.Point 0,(S 14)
+$railHead.Size=New-Object System.Drawing.Size (S 250),(S 60)
+$railHead.BackColor=$F.Rail
+Enable-DoubleBuffer $railHead
+$railHead.Add_Paint({
+    param($s,$e); $g=$e.Graphics
+    $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $g.TextRenderingHint=[System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
+    $g.Clear($script:F.Rail)
+    # accent-tinted app tile with the shield glyph, the same language the nav
+    # items use, so the header reads as part of the list rather than a banner
+    $tile=New-Object System.Drawing.RectangleF (S 16),(S 8),(S 32),(S 32)
+    Fill-Round $g $tile (S 8) $script:F.AccentDim
+    $ib=New-Object System.Drawing.SolidBrush $script:F.Accent
+    $glyphFont=New-UiFont $script:iconFont.FontFamily 14
+    $gl=[char]0xE72E
+    $sz=$g.MeasureString($gl,$glyphFont,1000,$script:SF)
+    $g.DrawString($gl,$glyphFont,$ib,($tile.X+($tile.Width-$sz.Width)/2),($tile.Y+($tile.Height-$sz.Height)/2),$script:SF)
+    $glyphFont.Dispose(); $ib.Dispose()
+    $tb=New-Object System.Drawing.SolidBrush $script:F.Text
+    $g.DrawString("SlimBrave Neo",$script:railTitleFont,$tb,(S 58),(S 6),$script:SF); $tb.Dispose()
+    $sb=New-Object System.Drawing.SolidBrush $script:F.TextSub
+    $g.DrawString("Policy manager",$script:railSubFont,$sb,(S 60),(S 31),$script:SF); $sb.Dispose()
+})
+$rail.Controls.Add($railHead)
+
+# page 0 = Presets, 1..7 = categories, 8 = DNS
+$script:pages=@("Quick Presets","All Options")
+foreach($c in $script:cats){ $script:pages+=$c.name }
+$script:pages+="DNS Over HTTPS"
+$script:navItems=@(); $script:sel=0
+
+function New-NavItem([int]$idx,[string]$name,[int]$y){
+    $it=New-Object System.Windows.Forms.Panel
+    $it.Location=New-Object System.Drawing.Point (S 8),$y
+    $it.Size=New-Object System.Drawing.Size (S 234),(S 36)
+    $it.BackColor=$F.Rail; $it.Tag=@{Idx=$idx;Name=$name;Hot=$false}
+    Enable-DoubleBuffer $it
+    $it.Add_Paint({
+        param($s,$e); $g=$e.Graphics
+        $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $st=$s.Tag; $g.Clear($script:F.Rail)
+        $isSel=($st.Idx -eq $script:sel)
+        if($isSel -or $st.Hot){
+            $c=$script:F.NavHot; if($isSel){$c=$script:F.NavSel}
+            Fill-Round $g (New-Object System.Drawing.RectangleF 0,0,($s.Width-1),($s.Height-1)) (S 5) $c
+        }
+        if($isSel){ $b=New-Object System.Drawing.SolidBrush $script:F.Accent
+                    $g.FillRectangle($b,0,(S 10),(S 3),(S 16)); $b.Dispose() }
+        $glyph=[char]0xE713
+        if($st.Idx -eq 0){ $glyph=[char]0xE7BE }
+        elseif($st.Idx -eq 1){ $glyph=[char]0xE8FD }
+        elseif(($st.Idx-2) -lt $script:navGlyphs.Count){ $glyph=$script:navGlyphs[$st.Idx-2] }
+        else { $glyph=[char]0xE968 }
+        $ib=New-Object System.Drawing.SolidBrush $script:F.Accent
+        $g.DrawString($glyph,$script:iconFont,$ib,(S 14),(S 8),$script:SF); $ib.Dispose()
+        $ink=$script:F.TextSub; if($isSel){$ink=$script:F.Text}
+        $nb=New-Object System.Drawing.SolidBrush $ink
+        $g.DrawString($st.Name,$script:navFont,$nb,(S 44),(S 9),$script:SF); $nb.Dispose()
+    })
+    $it.Add_MouseEnter({$this.Tag.Hot=$true;$this.Invalidate()})
+    $it.Add_MouseLeave({$this.Tag.Hot=$false;$this.Invalidate()})
+    $it.Add_Click({
+        if($script:searchBox -and $script:searchBox.Text){ $script:searchBox.Text="" }
+        Select-Page $this.Tag.Idx
+    })
+    $it.Cursor=[System.Windows.Forms.Cursors]::Hand
+    $rail.Controls.Add($it); return $it
+}
+$yy=S 88
+for($i=0;$i -lt $script:pages.Count;$i++){
+    $script:navItems+=(New-NavItem $i $script:pages[$i] $yy); $yy+=S 40
+}
+
+# --------------------------------------------------------------- header
+$crumb=New-Object System.Windows.Forms.Label
+$crumb.Font=$script:crumbFont; $crumb.ForeColor=$F.TextSub; $crumb.BackColor=$F.Bg
+$crumb.Location=New-Object System.Drawing.Point (S 282),(S 18); $crumb.AutoSize=$true
+$crumb.UseMnemonic=$false; $form.Controls.Add($crumb)
+
+$pageTitle=New-Object System.Windows.Forms.Label
+$pageTitle.Font=$script:titleFont; $pageTitle.ForeColor=$F.Text; $pageTitle.BackColor=$F.Bg
+$pageTitle.Location=New-Object System.Drawing.Point (S 280),(S 38); $pageTitle.AutoSize=$true
+$pageTitle.UseMnemonic=$false; $form.Controls.Add($pageTitle)
+
+# Search box. Sits in the header so it is reachable from any page, not just
+# All Options - a policy you cannot name is exactly the one you need to find.
+$searchHost=New-Object System.Windows.Forms.Panel
+$searchHost.Location=New-Object System.Drawing.Point (S 880),(S 34)
+$searchHost.Size=New-Object System.Drawing.Size (S 272),(S 32)
+$searchHost.BackColor=$F.Bg
+Enable-DoubleBuffer $searchHost
+$searchHost.Add_Paint({
+    param($s,$e); $g=$e.Graphics
+    $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $g.Clear($script:F.Bg)
+    $r=New-Object System.Drawing.RectangleF 0,0,($s.Width-1),($s.Height-1)
+    Fill-Round $g $r (S 4) $script:F.Row
+    $edge=$script:F.RowEdge
+    if($script:searchBox -and $script:searchBox.Focused){ $edge=$script:F.Accent }
+    Stroke-Round $g $r (S 4) $edge
+    $ib=New-Object System.Drawing.SolidBrush $script:F.TextSub
+    $gl=[char]0xE721
+    $g.DrawString($gl,$script:iconFont,$ib,(S 9),(S 7),$script:SF); $ib.Dispose()
+    if(-not $script:searchBox -or [string]::IsNullOrEmpty($script:searchBox.Text)){
+        $pb=New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(110,110,110))
+        $g.DrawString("Search policies and descriptions",$script:capFont,$pb,(S 34),(S 9),$script:SF)
+        $pb.Dispose()
+    }
+})
+$form.Controls.Add($searchHost)
+
+$script:searchBox=New-Object System.Windows.Forms.TextBox
+$script:searchBox.BorderStyle=[System.Windows.Forms.BorderStyle]::None
+$script:searchBox.Font=$script:rowFont
+$script:searchBox.BackColor=$F.Row
+$script:searchBox.ForeColor=$F.Text
+$script:searchBox.Location=New-Object System.Drawing.Point (S 34),(S 8)
+$script:searchBox.Size=New-Object System.Drawing.Size (S 228),(S 20)
+$searchHost.Controls.Add($script:searchBox)
+$script:searchBox.Add_GotFocus({ $searchHost.Invalidate() })
+$script:searchBox.Add_LostFocus({ $searchHost.Invalidate() })
+
+$page=New-Object System.Windows.Forms.Panel
+$page.Location=New-Object System.Drawing.Point (S 270),(S 80)
+$page.Size=New-Object System.Drawing.Size (S 900),($form.ClientSize.Height-(S 152))   # 80 above, 68 bar, 4 gap
+$page.Anchor=[System.Windows.Forms.AnchorStyles]"Top,Bottom,Left"
+$page.BackColor=$F.Bg; $page.AutoScroll=$true
+Enable-DoubleBuffer $page; $form.Controls.Add($page)
+
+# --------------------------------------------------------------- action bar
+$bar=New-Object System.Windows.Forms.Panel
+$bar.Location=New-Object System.Drawing.Point (S 250),($form.ClientSize.Height-(S 68))
+$bar.Size=New-Object System.Drawing.Size (S 930),(S 68)
+$bar.Anchor=[System.Windows.Forms.AnchorStyles]"Bottom,Left"
+$bar.BackColor=$F.Bar; Enable-DoubleBuffer $bar; $form.Controls.Add($bar)
+$script:statusText="Ready"
+$script:BAR_PAD=S 20   # status text left margin, button row right margin
+$script:BAR_GAP=S 8    # between buttons
+$script:barButtonsLeft=$bar.Width   # x of the leftmost button, set once the row is built
+$script:barTip=New-Object System.Windows.Forms.ToolTip
+# The tooltip carries the full status when the bar had to cut it. The 5 s
+# default hid a 161-character repair note before it could be read; 30 s is
+# just under the control's cap.
+$script:barTip.AutoPopDelay=30000; $script:barTip.InitialDelay=300; $script:barTip.ReshowDelay=100
+$bar.Add_Paint({
+    param($s,$e); $g=$e.Graphics
+    $p=New-Object System.Drawing.Pen $script:F.RowEdge
+    $g.DrawLine($p,0,0,$s.Width,0); $p.Dispose()
+    # The buttons are child panels, so status text drawn past the leftmost
+    # one lands on the bar behind them and shows through the gaps between
+    # them (issue #20). Draw it into the room before that button instead.
+    # Set-Status has already grown the bar to fit the message, so this draws
+    # into whatever height that produced and only ellipsises past the cap.
+    $room=$script:barButtonsLeft-(2*$script:BAR_PAD)
+    $lineH=$g.MeasureString("Ag",$script:capFont,10000,$script:SF).Height
+    # As many lines as the bar's CURRENT height holds - Set-Status has already
+    # grown the bar to fit the message, so this is normally all of it. The
+    # ellipsis and tooltip below are a last resort past the four-line cap,
+    # not the channel for anything a user has to act on.
+    $lines=[math]::Max(1,[math]::Min($script:BAR_MAX_LINES,[math]::Floor(($s.Height-(S 12))/$lineH)))
+    $boxH=[int][math]::Ceiling($lineH*$lines)
+    $rect=New-Object System.Drawing.RectangleF $script:BAR_PAD,(($s.Height/2)-($boxH/2)),([math]::Max($room,0)),$boxH
+    $fmt=New-Object System.Drawing.StringFormat $script:SF
+    $fmt.Trimming=[System.Drawing.StringTrimming]::EllipsisWord
+    $fmt.FormatFlags=[System.Drawing.StringFormatFlags]::LineLimit
+    $fmt.LineAlignment=[System.Drawing.StringAlignment]::Center
+    # A zero-width rect makes MeasureString report everything as fitted,
+    # hence the explicit $room guard.
+    $fit=0; $nl=0
+    [void]$g.MeasureString($script:statusText,$script:capFont,$rect.Size,$fmt,[ref]$fit,[ref]$nl)
+    $tip=""; if($room -le 0 -or $fit -lt $script:statusText.Length){ $tip=$script:statusText }
+    if($script:barTip.GetToolTip($s) -ne $tip){ $script:barTip.SetToolTip($s,$tip) }
+    $b=New-Object System.Drawing.SolidBrush $script:F.TextSub
+    if($room -gt 0){ $g.DrawString($script:statusText,$script:capFont,$b,$rect,$fmt) }
+    $b.Dispose(); $fmt.Dispose()
+})
+$script:BAR_MAX_LINES=4
+function Set-Status([string]$t){
+    # The bar grows to fit its message rather than hiding the tail behind a
+    # hover: after Apply, the part that says "close Brave and run this again"
+    # is exactly the part that used to end up as "...". Up to four lines; the
+    # page above gives up the room (it is AutoScroll, nothing is lost) and the
+    # buttons stay centred. At two lines or fewer the bar is its usual S 68,
+    # so ordinary messages change nothing.
+    $script:statusText=$t
+    $room=$script:barButtonsLeft-(2*$script:BAR_PAD)
+    $need=S 68
+    if($room -gt 0){
+        $g=$bar.CreateGraphics()
+        $fmt=New-Object System.Drawing.StringFormat $script:SF
+        $lineH=$g.MeasureString("Ag",$script:capFont,10000,$script:SF).Height
+        $fit=0; $nl=0
+        [void]$g.MeasureString($t,$script:capFont,(New-Object System.Drawing.SizeF $room,10000),$fmt,[ref]$fit,[ref]$nl)
+        $fmt.Dispose(); $g.Dispose()
+        $nl=[math]::Max(1,[math]::Min($script:BAR_MAX_LINES,$nl))
+        $need=[math]::Max((S 68),([int][math]::Ceiling($nl*$lineH)+(S 24)))
+    }
+    if($bar.Height -ne $need){
+        $bar.Top=$form.ClientSize.Height-$need
+        $bar.Height=$need
+        foreach($c in $bar.Controls){ $c.Top=[int](($need-$c.Height)/2) }
+        if($null -ne $page){ $page.Height=$bar.Top-$page.Top-(S 4) }
+    }
+    $bar.Invalidate()
+}
+
+function New-BarButton([string]$label,[bool]$accent){
+    $b=New-Object System.Windows.Forms.Panel
+    $w=[int]([System.Windows.Forms.TextRenderer]::MeasureText($label,$script:btnFont).Width+(S 34))
+    $b.Location=New-Object System.Drawing.Point 0,(S 18)   # x is placed by the caller once the width is known
+    $b.Size=New-Object System.Drawing.Size $w,(S 32)
+    $b.BackColor=$F.Bar; $b.Tag=@{L=$label;A=$accent;Hot=$false}
+    Enable-DoubleBuffer $b
+    $b.Add_Paint({
+        param($s,$e); $g=$e.Graphics
+        $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $g.Clear($script:F.Bar)
+        $r=New-Object System.Drawing.RectangleF 0,0,($s.Width-1),($s.Height-1)
+        if($s.Tag.A){
+            $c=$script:F.Accent; if($s.Tag.Hot){$c=[System.Drawing.Color]::FromArgb(96,205,255)}
+            Fill-Round $g $r (S 4) $c; $ink=[System.Drawing.Color]::FromArgb(27,27,27)
+        } else {
+            $c=$script:F.Row; if($s.Tag.Hot){$c=$script:F.RowHot}
+            Fill-Round $g $r (S 4) $c; Stroke-Round $g $r (S 4) $script:F.RowEdge; $ink=$script:F.Text
+        }
+        $tb=New-Object System.Drawing.SolidBrush $ink
+        $sz=$g.MeasureString($s.Tag.L,$script:btnFont,1000,$script:SF)
+        $g.DrawString($s.Tag.L,$script:btnFont,$tb,(($s.Width-$sz.Width)/2),(($s.Height-$sz.Height)/2),$script:SF)
+        $tb.Dispose()
+    })
+    $b.Add_MouseEnter({$this.Tag.Hot=$true;$this.Invalidate()})
+    $b.Add_MouseLeave({$this.Tag.Hot=$false;$this.Invalidate()})
+    $b.Add_Click({
+        switch($this.Tag.L){
+            "Apply Settings" { if(Invoke-ApplyPolicy){ Refresh-View } }
+            "Reset" {
+                $ans=[System.Windows.Forms.MessageBox]::Show(
+                    "Remove every policy SlimBrave Neo manages? Policies set by group policy or another tool are left alone.",
+                    "Confirm reset",[System.Windows.Forms.MessageBoxButtons]::YesNo,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning)
+                if($ans -eq "Yes"){ if(Invoke-ResetPolicy){ Refresh-View } }
+            }
+            "Re-sync" { Sync-FromRegistry; Refresh-View }
+            "Export" {
+                $dlg=New-Object System.Windows.Forms.SaveFileDialog
+                $dlg.Filter="JSON files (*.json)|*.json"
+                $dlg.FileName="SlimBraveNeoSettings.json"
+                if($dlg.ShowDialog() -eq "OK"){
+                    $feat=@{}
+                    foreach($row in Get-AllRows){
+                        $v=Get-RowPolicyValue $row
+                        if($null -ne $v){ $feat[$row.key]=$v }
+                    }
+                    $out=@{Features=$feat}
+                    $m=$script:dnsModes[$script:dnsState.Mode]
+                    if($m -ne "unmanaged"){
+                        $out.DnsMode=$m
+                        # Only the modes that actually write it. off/automatic
+                        # with a template is a combination Apply drops and the
+                        # Linux CLI rejects outright.
+                        if($script:dnsState.Tmpl -and ($m -eq "custom" -or $m -eq "secure")){ $out.DnsTemplates=$script:dnsState.Tmpl }
+                    }
+                    # Set-Content failure is NON-terminating, so without this
+                    # the success status ran even when nothing was written -
+                    # a locked, read-only or full target reported "Exported".
+                    try{
+                        [System.IO.File]::WriteAllText($dlg.FileName,
+                            ($out | ConvertTo-Json -Depth 5),
+                            (New-Object System.Text.UTF8Encoding $false))
+                        Set-Status "Exported $($feat.Count) policies"
+                    } catch {
+                        Set-Status "Export failed - $($_.Exception.Message)"
+                    }
+                }
+            }
+            "Import" {
+                $dlg=New-Object System.Windows.Forms.OpenFileDialog
+                $dlg.Filter="JSON files (*.json)|*.json"
+                if($dlg.ShowDialog() -eq "OK"){
+                    try{
+                        $cfg=Get-Content $dlg.FileName -Raw | ConvertFrom-Json
+                        # ConvertFrom-Json only throws on malformed JSON. Any other
+                        # .json - a bookmarks dump, "[]", a bare string - parses fine,
+                        # and Import-PresetIntoState clears every staged row BEFORE it
+                        # looks for Features, so without this guard a wrong file wiped
+                        # the selections and still reported "Imported". The throw lands
+                        # in the catch below, which is the honest message.
+                        if(-not ($cfg -is [System.Management.Automation.PSCustomObject]) -or
+                           $null -eq $cfg.PSObject.Properties['Features'] -or
+                           $null -eq $cfg.Features){ throw "no Features block" }
+                        Import-PresetIntoState @{features=$cfg.Features;dns=$cfg.DnsMode;tmpl=$cfg.DnsTemplates}
+                        Refresh-View
+                        $msg="Imported from $([System.IO.Path]::GetFileName($dlg.FileName))"
+                        if($script:importNotes.Count -gt 0){
+                            $msg+=" Left unmanaged, because the imported value is not one this policy accepts: "+(($script:importNotes | Sort-Object) -join ", ")+"."
+                        }
+                        Set-Status $msg
+                    } catch { Set-Status "Import failed - not a SlimBrave config" }
+                }
+            }
+        }
+    })
+    $b.Cursor=[System.Windows.Forms.Cursors]::Hand
+    $bar.Controls.Add($b); return $b
+}
+# Packed from the bar's right edge leftward. Button widths come from the
+# rendered label, so the row's width follows the text - laid out left-to-right
+# from a fixed x it ran off the form above 100% (issue #20). Anchored right it
+# grows into the free middle instead, and the status text takes what is left.
+$specs=@(@("Export",$false),@("Import",$false),@("Re-sync",$false),@("Reset",$false),@("Apply Settings",$true))
+$bx=$bar.Width-$script:BAR_PAD
+for($i=$specs.Count-1;$i -ge 0;$i--){
+    $btn=New-BarButton $specs[$i][0] $specs[$i][1]
+    $bx-=$btn.Width; $btn.Left=$bx; $bx-=$script:BAR_GAP
+}
+$script:barButtonsLeft=$bx+$script:BAR_GAP
+
+# --------------------------------------------------------------- rows
+$script:rowPanels=@()
+$script:COLLAPSED=S 64
+$script:EXP_X=S 690        # chevron column on toggle rows
+$script:EXP_X_CHOICE=S 596 # chevron column on dropdown rows
+$script:DD_X=S 640         # dropdown control left edge
+$script:DD_W=S 180         # dropdown control width
+$script:TG_X=S 768         # toggle pill left edge
+$script:TG_Y=S 22          # toggle pill top
+$script:TG_W=S 44
+$script:TG_H=S 20
+$script:TG_PAD=S 10        # generous hit padding around the pill
+
+function Get-CapWidth($isChoice){
+    # room a caption has before it reaches that row type's chevron column.
+    # Choice rows lose ~100px to the dropdown, so a fixed character count
+    # cannot serve both - it either wastes space on toggles or overruns
+    # into the dropdown on permissions rows.
+    if($isChoice){ return ($script:EXP_X_CHOICE-(S 34)) }
+    return ($script:EXP_X-(S 34))
+}
+
+function Fit-Text([System.Drawing.Graphics]$g,[string]$text,[System.Drawing.Font]$font,[int]$w){
+    if($g.MeasureString($text,$font,10000,$script:SF).Width -le $w){ return $text }
+    $lo=0; $hi=$text.Length
+    while($lo -lt $hi){
+        $mid=[int](($lo+$hi+1)/2)
+        $try=$text.Substring(0,$mid)+"..."
+        if($g.MeasureString($try,$font,10000,$script:SF).Width -le $w){ $lo=$mid } else { $hi=$mid-1 }
+    }
+    return $text.Substring(0,$lo)+"..."
+}
+
+function Zone-Of($panel,[int]$x,[int]$y){
+    $st=$panel.Tag
+    $ecol=$script:EXP_X; if($st.IsChoice){ $ecol=$script:EXP_X_CHOICE }
+    $g2=$panel.CreateGraphics()
+    $hasExp = ($st.Row.full -and ($st.Row.full -ne $st.Row.short -or
+        $g2.MeasureString($st.Row.short,$script:capFont,10000,$script:SF).Width -gt (Get-CapWidth $st.IsChoice)))
+    $g2.Dispose()
+    if($hasExp -and $x -ge $ecol -and $x -le ($ecol+(S 26)) -and $y -ge (S 14) -and $y -le (S 50)){ return "exp" }
+    if($st.IsChoice){
+        # bounded exactly like the toggle: clicking a label or empty space
+        # must do nothing on BOTH row types. Only the control is live.
+        $dl=$script:DD_X-$script:TG_PAD; $dr2=$script:DD_X+$script:DD_W+$script:TG_PAD
+        if($x -ge $dl -and $x -le $dr2 -and $y -ge ((S 17)-$script:TG_PAD) -and $y -le ((S 47)+$script:TG_PAD)){ return "ctl" }
+        return ""
+    }
+    $l=$script:TG_X-$script:TG_PAD; $r=$script:TG_X+$script:TG_W+$script:TG_PAD
+    $tp=$script:TG_Y-$script:TG_PAD;  $b=$script:TG_Y+$script:TG_H+$script:TG_PAD
+    if($x -ge $l -and $x -le $r -and $y -ge $tp -and $y -le $b){ return "ctl" }
+    return ""
+}
+
+function New-FluentRow($row,[int]$y){
+    $p=New-Object System.Windows.Forms.Panel
+    $p.Location=New-Object System.Drawing.Point (S 2),$y
+    $p.Size=New-Object System.Drawing.Size (S 840),$script:COLLAPSED
+    $p.BackColor=$F.Bg
+    $isChoice=($null -ne $row.PSObject.Properties['choices'])
+    $p.Tag=@{Row=$row;Hot=$false;IsChoice=$isChoice;Open=$false;Zone=''}
+    Enable-DoubleBuffer $p
+    $p.Add_Paint({
+        param($s,$e); $g=$e.Graphics
+        $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $g.TextRenderingHint=[System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
+        $st=$s.Tag; $g.Clear($script:F.Bg)
+        $r=New-Object System.Drawing.RectangleF 0,0,($s.Width-1),($s.Height-2)
+        $c=$script:F.Row; if($st.Hot){$c=$script:F.RowHot}
+        Fill-Round $g $r (S 6) $c; Stroke-Round $g $r (S 6) $script:F.RowEdge
+        $hi=New-Object System.Drawing.Pen $script:F.RowTopHi
+        $g.DrawLine($hi,(S 7),1,($s.Width-(S 8)),1); $hi.Dispose()
+        $tb=New-Object System.Drawing.SolidBrush $script:F.Text
+        $g.DrawString($st.Row.name,$script:rowFont,$tb,(S 18),(S 11),$script:SF); $tb.Dispose()
+        $cb=New-Object System.Drawing.SolidBrush $script:F.TextSub
+        if($st.Open){
+            $wcol=$script:EXP_X; if($st.IsChoice){ $wcol=$script:EXP_X_CHOICE }
+            $rect=New-Object System.Drawing.RectangleF (S 18),(S 33),($wcol-(S 30)),($s.Height-(S 42))
+            $g.DrawString($st.Row.full,$script:capFont,$cb,$rect,$script:SFw)
+        } else {
+            $avail=Get-CapWidth $st.IsChoice
+            $short=Fit-Text $g $st.Row.short $script:capFont $avail
+            $g.DrawString($short,$script:capFont,$cb,(S 18),(S 34),$script:SF)
+        }
+        $cb.Dispose()
+        # expander chevron, only when there is more to show
+        $avail2=Get-CapWidth $st.IsChoice
+        $truncated=($g.MeasureString($st.Row.short,$script:capFont,10000,$script:SF).Width -gt $avail2)
+        if($st.Row.full -and ($st.Row.full -ne $st.Row.short -or $truncated)){
+            $ecol=$script:EXP_X; if($st.IsChoice){ $ecol=$script:EXP_X_CHOICE }
+            $ex=New-Object System.Drawing.RectangleF $ecol,(S 18),(S 26),(S 26)
+            if($st.Zone -eq "exp"){ Fill-Round $g $ex (S 4) $script:F.RowTopHi }
+            $cp=New-Object System.Drawing.Pen $script:F.TextSub,([float](1.7*$script:DPI))
+            $cx=($ecol+(S 6)); $cy=S 29; $d2=S 2; $d4=S 4; $d7=S 7; $d14=S 14
+            if($st.Open){
+                $g.DrawLines($cp,[System.Drawing.PointF[]]@(
+                    [System.Drawing.PointF]::new($cx,($cy+$d4)),
+                    [System.Drawing.PointF]::new(($cx+$d7),($cy-$d2)),
+                    [System.Drawing.PointF]::new(($cx+$d14),($cy+$d4))))
+            } else {
+                $g.DrawLines($cp,[System.Drawing.PointF[]]@(
+                    [System.Drawing.PointF]::new($cx,($cy-$d2)),
+                    [System.Drawing.PointF]::new(($cx+$d7),($cy+$d4)),
+                    [System.Drawing.PointF]::new(($cx+$d14),($cy-$d2))))
+            }
+            $cp.Dispose()
+        }
+        if($st.IsChoice){
+            # owner-drawn dropdown: a stock ComboBox paints a light arrow
+            # button that no dark theme can reach, so draw the whole control
+            # and open a themed menu on click.
+            $dr=New-Object System.Drawing.RectangleF $script:DD_X,(S 17),$script:DD_W,(S 30)
+            $managed=($script:state[$st.Row.Id].Sel -gt 0)
+            $bg=$script:F.RowHot; if($managed){ $bg=$script:F.AccentDim }
+            if($st.Zone -eq "ctl"){ $bg=$script:F.RowTopHi; if($managed){ $bg=[System.Drawing.Color]::FromArgb(70,76,194,255) } }
+            Fill-Round $g $dr (S 4) $bg
+            $edge=$script:F.RowEdge; if($managed){ $edge=$script:F.Accent }
+            Stroke-Round $g $dr (S 4) $edge
+            $ink=$script:F.Text; if($managed){ $ink=$script:F.Accent }
+            $vb=New-Object System.Drawing.SolidBrush $ink
+            $g.DrawString($st.Row.choices[$script:state[$st.Row.Id].Sel][0],$script:rowFont,$vb,($dr.X+(S 12)),($dr.Y+(S 6)),$script:SF)
+            $vb.Dispose()
+            $ch=New-Object System.Drawing.Pen $ink,([float](1.6*$script:DPI))
+            $cx2=$dr.Right-(S 24); $cy2=$dr.Y+(S 13)
+            $g.DrawLines($ch,[System.Drawing.PointF[]]@(
+                [System.Drawing.PointF]::new($cx2,$cy2),
+                [System.Drawing.PointF]::new(($cx2+(S 5)),($cy2+(S 5))),
+                [System.Drawing.PointF]::new(($cx2+(S 10)),$cy2)))
+            $ch.Dispose()
+        } else {
+            $word="Off"; if($script:state[$st.Row.Id].On){$word="On"}
+            $wb=New-Object System.Drawing.SolidBrush $script:F.TextSub
+            $g.DrawString($word,$script:rowFont,$wb,(S 726),(S 21),$script:SF); $wb.Dispose()
+            $tx=$script:TG_X;$ty=$script:TG_Y
+            if($st.Zone -eq "ctl"){
+                $halo=New-Object System.Drawing.RectangleF ($tx-(S 6)),($ty-(S 6)),($script:TG_W+(S 12)),($script:TG_H+(S 12))
+                Fill-Round $g $halo (S 15) $script:F.RowTopHi
+            }
+            $track=New-Object System.Drawing.RectangleF $tx,$ty,$script:TG_W,$script:TG_H
+            if($script:state[$st.Row.Id].On){
+                Fill-Round $g $track (S 10) $script:F.Accent
+                $th=New-Object System.Drawing.SolidBrush $script:F.ThumbOn
+                $g.FillEllipse($th,($tx+(S 26)),($ty+(S 3)),(S 14),(S 14)); $th.Dispose()
+            } else {
+                Stroke-Round $g $track (S 10) $script:F.OutlineOff
+                $th=New-Object System.Drawing.SolidBrush $script:F.ThumbOff
+                $g.FillEllipse($th,($tx+(S 4)),($ty+(S 3)),(S 14),(S 14)); $th.Dispose()
+            }
+        }
+    })
+    $p.Add_MouseDown({
+        param($s,$ev)
+        $st=$s.Tag
+        $ecol=$script:EXP_X; if($st.IsChoice){ $ecol=$script:EXP_X_CHOICE }
+        # One hit-test for click, hover and highlight. The bare rectangle that
+        # used to sit here ignored whether the row HAS a chevron, so a click in
+        # empty row space flipped the expander on rows with no expander - and
+        # from 125% scaling visibly grew them. Zone-Of is what MouseMove uses.
+        $zone=Zone-Of $s $ev.X $ev.Y
+        if($zone -eq "exp"){
+            $st.Open=-not $st.Open
+            if($st.Open){
+                $g=$s.CreateGraphics()
+                $wc=$script:EXP_X; if($st.IsChoice){ $wc=$script:EXP_X_CHOICE }
+                $sz=$g.MeasureString($st.Row.full,$script:capFont,($wc-(S 30)),$script:SFw)
+                $g.Dispose()
+                $s.Height=[Math]::Max($script:COLLAPSED,[int]($sz.Height+(S 46)))
+            } else { $s.Height=$script:COLLAPSED }
+            Reflow-Page
+            $s.Invalidate(); return
+        }
+        if($st.IsChoice){
+            if($zone -eq "ctl"){
+                $menu=New-Object System.Windows.Forms.ContextMenuStrip
+                $menu.BackColor=$script:F.RowHot
+                $menu.ForeColor=$script:F.Text
+                $menu.Font=$script:rowFont
+                $menu.ShowImageMargin=$false
+                $menu.Renderer=New-Object System.Windows.Forms.ToolStripProfessionalRenderer(
+                    (New-Object DarkMenuColors))
+                $i=0
+                foreach($c in $st.Row.choices){
+                    $mi=$menu.Items.Add($c[0])
+                    $mi.Tag=@{Row=$s;Idx=$i}
+                    if($i -eq $script:state[$st.Row.Id].Sel){ $mi.ForeColor=$script:F.Accent }
+                    $mi.Add_Click({
+                        $d=$this.Tag
+                        $script:state[$d.Row.Tag.Row.Id].Sel=$d.Idx
+                        $d.Row.Invalidate()
+                    })
+                    $i++
+                }
+                $menu.Show($s,(New-Object System.Drawing.Point $script:DD_X,(S 47)))
+            }
+            return
+        }
+        else {
+            # toggles fire ONLY inside the pill (plus padding). Clicking a
+            # label should never silently flip a machine-wide policy.
+            if($zone -ne "ctl"){ return }
+            $script:state[$st.Row.Id].On = -not $script:state[$st.Row.Id].On
+            if($script:state[$st.Row.Id].On -and $st.Row.group){
+                # exclusivity applies to the MODEL, so it holds for group
+                # members that are not currently rendered on this page
+                foreach($other in Get-AllRows){
+                    if($other.Id -ne $st.Row.Id -and $other.group -eq $st.Row.group){
+                        $script:state[$other.Id].On=$false
+                    }
+                }
+                foreach($o in $script:rowPanels){ $o.Invalidate() }
+            }
+        }
+        $s.Invalidate()
+    })
+    $p.Add_MouseEnter({$this.Tag.Hot=$true;$this.Invalidate()})
+    $p.Add_MouseLeave({
+        $this.Tag.Hot=$false; $this.Tag.Zone=""
+        $this.Cursor=[System.Windows.Forms.Cursors]::Default
+        $this.Invalidate()
+    })
+    $p.Add_MouseMove({
+        param($s,$ev)
+        $z=Zone-Of $s $ev.X $ev.Y
+        if($z -ne $s.Tag.Zone){
+            $s.Tag.Zone=$z
+            if($z -eq ""){ $s.Cursor=[System.Windows.Forms.Cursors]::Default }
+            else { $s.Cursor=[System.Windows.Forms.Cursors]::Hand }
+            $s.Invalidate()
+        }
+    })
+
+    return $p
+}
+
+function Reflow-Page {
+    # AutoScroll makes child Location live in SCROLLED coordinates: a child at
+    # absolute y sits at y + AutoScrollPosition.Y, and that offset is negative
+    # when scrolled down. Lay every row out at its absolute y PLUS the current
+    # offset and leave the scroll alone. This used to park the scroll at zero
+    # and restore it afterwards - correct in the end, but each
+    # AutoScrollPosition write scrolls synchronously by blitting the old
+    # pixels, so the user saw the page jump and an after-image of the rows
+    # until the repaint caught up.
+    $off=$page.AutoScrollPosition.Y
+    $page.SuspendLayout()
+    # Same strides as Select-Page and Show-SearchResults lay the page out
+    # with: header S 38 + S 4, row S 64 + S 4, and on All Options an S 10 gap
+    # before each category after the first. This used to add S 6 under every
+    # header instead, so the first expand or collapse shifted every row on a
+    # page with section headers.
+    $inSearch=($script:searchBox -and -not [string]::IsNullOrWhiteSpace($script:searchBox.Text))
+    $y=S 4; $first=$true
+    foreach($p in $script:rowPanels){
+        if(($null -ne $p.Tag.T) -and -not $first -and -not $inSearch){ $y+=S 10 }
+        $p.Location=New-Object System.Drawing.Point (S 2),($y+$off)
+        $y+=$p.Height+(S 4)
+        $first=$false
+    }
+    $page.ResumeLayout()
+    # Moving children invalidates only their new bounds; the region they
+    # vacated keeps its old pixels. One repaint of the whole page, children
+    # included, and Update() so it happens now rather than after the click.
+    $page.Invalidate($true)
+    $page.Update()
+}
+
+function New-SectionHeader([string]$text,[int]$y,[int]$count){
+    $h=New-Object System.Windows.Forms.Panel
+    $h.Location=New-Object System.Drawing.Point (S 2),$y
+    $h.Size=New-Object System.Drawing.Size (S 840),(S 38)
+    $h.BackColor=$F.Bg; $h.Tag=@{T=$text;N=$count}
+    Enable-DoubleBuffer $h
+    $h.Add_Paint({
+        param($s,$e); $g=$e.Graphics
+        $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $g.Clear($script:F.Bg)
+        $tb=New-Object System.Drawing.SolidBrush $script:F.Text
+        $g.DrawString($s.Tag.T,$script:pTitle,$tb,(S 4),(S 12),$script:SF); $tb.Dispose()
+        $w=[int]($g.MeasureString($s.Tag.T,$script:pTitle,1000,$script:SF).Width)
+        $cb=New-Object System.Drawing.SolidBrush $script:F.TextSub
+        if($s.Tag.N -gt 0){ $g.DrawString("$($s.Tag.N)",$script:capFont,$cb,($w+(S 12)),(S 16),$script:SF) }
+        $cb.Dispose()
+        $p=New-Object System.Drawing.Pen $script:F.RowEdge
+        $g.DrawLine($p,($w+(S 34)),(S 24),(S 835),(S 24)); $p.Dispose()
+    })
+    return $h
+}
+
+# --------------------------------------------------------------- preset cards
+function New-PresetCard($preset,[int]$y){
+    $p=New-Object System.Windows.Forms.Panel
+    $p.Location=New-Object System.Drawing.Point (S 2),$y
+    $p.Size=New-Object System.Drawing.Size (S 840),(S 78)
+    $p.BackColor=$F.Bg; $p.Tag=@{P=$preset;Hot=$false}
+    Enable-DoubleBuffer $p
+    $p.Add_Paint({
+        param($s,$e); $g=$e.Graphics
+        $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $st=$s.Tag; $g.Clear($script:F.Bg)
+        $r=New-Object System.Drawing.RectangleF 0,0,($s.Width-1),($s.Height-2)
+        $c=$script:F.Row; if($st.Hot){$c=$script:F.RowHot}
+        Fill-Round $g $r (S 6) $c; Stroke-Round $g $r (S 6) $script:F.RowEdge
+        $hi=New-Object System.Drawing.Pen $script:F.RowTopHi
+        $g.DrawLine($hi,(S 7),1,($s.Width-(S 8)),1); $hi.Dispose()
+        $tb=New-Object System.Drawing.SolidBrush $script:F.Text
+        $g.DrawString($st.P.name,$script:pTitle,$tb,(S 18),(S 14),$script:SF); $tb.Dispose()
+        $cb=New-Object System.Drawing.SolidBrush $script:F.TextSub
+        $g.DrawString($st.P.blurb,$script:capFont,$cb,(S 18),(S 40),$script:SF)
+        $g.DrawString("$($st.P.count) policies",$script:capFont,$cb,(S 18),(S 56),$script:SF); $cb.Dispose()
+        $bw=$script:PC_BW
+        $br=New-Object System.Drawing.RectangleF $script:PC_BX,$script:PC_BY,$bw,$script:PC_BH
+        $bg=$script:F.RowHot; if($st.Hot){$bg=$script:F.Accent}
+        Fill-Round $g $br (S 4) $bg
+        if(-not $st.Hot){ Stroke-Round $g $br (S 4) $script:F.RowEdge }
+        $ink=$script:F.Text; if($st.Hot){$ink=[System.Drawing.Color]::FromArgb(27,27,27)}
+        $lb=New-Object System.Drawing.SolidBrush $ink
+        $sz=$g.MeasureString("Load",$script:btnFont,1000,$script:SF)
+        $g.DrawString("Load",$script:btnFont,$lb,($br.X+($bw-$sz.Width)/2),($br.Y+(S 7)),$script:SF); $lb.Dispose()
+    })
+    # Same zone discipline as the setting rows: loading a preset DISCARDS every
+    # staged selection, so a stray click on the blurb the user is reading must
+    # not do it. Only the drawn Load button responds, and only it lights up.
+    $p.Add_MouseMove({
+        param($s,$ev)
+        $over=(Test-InPresetButton $ev.X $ev.Y)
+        if($s.Tag.Hot -ne $over){ $s.Tag.Hot=$over; $s.Invalidate() }
+        if($over){ $s.Cursor=[System.Windows.Forms.Cursors]::Hand }
+        else     { $s.Cursor=[System.Windows.Forms.Cursors]::Default }
+    })
+    $p.Add_MouseLeave({$this.Tag.Hot=$false;$this.Invalidate()})
+    $p.Add_MouseDown({
+        param($s,$ev)
+        if(-not (Test-InPresetButton $ev.X $ev.Y)){ return }
+        Import-PresetIntoState $s.Tag.P
+        Refresh-View
+        Set-Status "$($s.Tag.P.name) loaded - $($s.Tag.P.count) policies staged. Nothing is written until Apply."
+    })
+    return $p
+}
+
+# Shared by New-PresetCard's Paint and its hit-testing. Kept as constants for
+# the same reason the row control columns are: when the drawn rect and the
+# clickable rect were computed separately, they drifted apart.
+$script:PC_BX = S 705
+$script:PC_BY = S 24
+$script:PC_BW = S 110
+$script:PC_BH = S 32
+function Test-InPresetButton($x, $y) {
+    return ($x -ge $script:PC_BX -and $x -le ($script:PC_BX + $script:PC_BW) -and
+            $y -ge $script:PC_BY -and $y -le ($script:PC_BY + $script:PC_BH))
+}
+
+# --------------------------------------------------------------- DNS page
+# Script scope on purpose: the Leave handler fires long after Build-DnsPage
+# has returned, and a nested function is out of scope by then - every blur of
+# the template box threw CommandNotFoundException.
+$script:tmplHint = "https://dns.example/dns-query"
+function Sync-TmplHint($box){
+    if($box.Focused){ return }
+    if([string]::IsNullOrEmpty($box.Tag)){
+        $box.ForeColor=[System.Drawing.Color]::FromArgb(96,96,96)
+        $box.Text=$script:tmplHint
+    }
+}
+
+function Build-DnsPage {
+    $card=New-Object System.Windows.Forms.Panel
+    $card.Location=New-Object System.Drawing.Point (S 2),(S 4)
+    $card.Size=New-Object System.Drawing.Size (S 840),(S 150)
+    $card.BackColor=$F.Bg
+    $card.Tag=@{Zone=""}
+    Enable-DoubleBuffer $card
+    $card.Add_Paint({
+        param($s,$e); $g=$e.Graphics
+        $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $g.TextRenderingHint=[System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
+        $st=$s.Tag
+        $g.Clear($script:F.Bg)
+        $r=New-Object System.Drawing.RectangleF 0,0,($s.Width-1),($s.Height-2)
+        Fill-Round $g $r (S 6) $script:F.Row; Stroke-Round $g $r (S 6) $script:F.RowEdge
+        $hi=New-Object System.Drawing.Pen $script:F.RowTopHi
+        $g.DrawLine($hi,(S 7),1,($s.Width-(S 8)),1); $hi.Dispose()
+        $tb=New-Object System.Drawing.SolidBrush $script:F.Text
+        $g.DrawString("DNS over HTTPS mode",$script:rowFont,$tb,(S 18),(S 18),$script:SF)
+        $g.DrawString("Custom template URL",$script:rowFont,$tb,(S 18),(S 92),$script:SF); $tb.Dispose()
+        $cb=New-Object System.Drawing.SolidBrush $script:F.TextSub
+        $g.DrawString("unmanaged writes no DNS policy, leaving Brave's own setting alone",$script:capFont,$cb,(S 18),(S 40),$script:SF)
+        $needs=($script:dnsModes[$script:dnsState.Mode] -eq "custom" -or $script:dnsModes[$script:dnsState.Mode] -eq "secure")
+        $note="Only used by the custom and secure modes"
+        if($needs){ $note="Required - secure DNS with no template resolves nothing" }
+        $g.DrawString($note,$script:capFont,$cb,(S 18),(S 114),$script:SF); $cb.Dispose()
+
+        # mode dropdown, same column and bounds rule as every other row
+        $dr=New-Object System.Drawing.RectangleF $script:DD_X,(S 16),$script:DD_W,(S 30)
+        $managed=($script:dnsState.Mode -gt 0)
+        $bg=$script:F.RowHot; if($managed){ $bg=$script:F.AccentDim }
+        if($st.Zone -eq "ctl"){ $bg=$script:F.RowTopHi; if($managed){ $bg=[System.Drawing.Color]::FromArgb(70,76,194,255) } }
+        Fill-Round $g $dr (S 4) $bg
+        $edge=$script:F.RowEdge; if($managed){ $edge=$script:F.Accent }
+        Stroke-Round $g $dr (S 4) $edge
+        $ink=$script:F.Text; if($managed){ $ink=$script:F.Accent }
+        $vb=New-Object System.Drawing.SolidBrush $ink
+        $g.DrawString($script:dnsModes[$script:dnsState.Mode],$script:rowFont,$vb,($dr.X+(S 12)),($dr.Y+(S 6)),$script:SF); $vb.Dispose()
+        $ch=New-Object System.Drawing.Pen $ink,([float](1.6*$script:DPI))
+        $cx=$dr.Right-(S 24); $cy=$dr.Y+(S 13)
+        $g.DrawLines($ch,[System.Drawing.PointF[]]@(
+            [System.Drawing.PointF]::new($cx,$cy),
+            [System.Drawing.PointF]::new(($cx+(S 5)),($cy+(S 5))),
+            [System.Drawing.PointF]::new(($cx+(S 10)),$cy)))
+        $ch.Dispose()
+
+        # the template field is a real TextBox child; just draw its frame
+        $well=New-Object System.Drawing.RectangleF ($script:DD_X-1),(S 89),($script:DD_W+2),(S 28)
+        $wedge=$script:F.RowEdge; if($needs){ $wedge=$script:F.Accent }
+        Stroke-Round $g $well (S 4) $wedge
+    })
+    $tmpl=New-Object System.Windows.Forms.TextBox
+    $tmpl.BorderStyle=[System.Windows.Forms.BorderStyle]::None
+    $tmpl.Font=$script:rowFont
+    $tmpl.BackColor=[System.Drawing.Color]::FromArgb(38,38,38)
+    $tmpl.ForeColor=$F.Text
+    $tmpl.Location=New-Object System.Drawing.Point ($script:DD_X+(S 8)),(S 96)
+    $tmpl.Size=New-Object System.Drawing.Size ($script:DD_W-(S 16)),(S 20)
+    $tmpl.Text=""
+    $card.Controls.Add($tmpl)
+    $card.Tag.Tmpl=$tmpl
+
+    # .NET Framework has no PlaceholderText, so fake one: grey hint while the
+    # box is empty and unfocused, cleared the moment the user types.
+    $tmpl.Tag=""
+    $tmpl.Add_Enter({
+        if([string]::IsNullOrEmpty($this.Tag)){ $this.Text="" }
+        $this.ForeColor=$script:F.Text
+    })
+    Sync-TmplHint $tmpl
+
+    $card.Add_MouseMove({
+        param($s,$ev)
+        $z=""
+        $dl=$script:DD_X-$script:TG_PAD; $dr2=$script:DD_X+$script:DD_W+$script:TG_PAD
+        if($ev.X -ge $dl -and $ev.X -le $dr2 -and $ev.Y -ge (S 6) -and $ev.Y -le (S 56)){ $z="ctl" }
+        if($z -ne $s.Tag.Zone){
+            $s.Tag.Zone=$z
+            if($z -eq ""){ $s.Cursor=[System.Windows.Forms.Cursors]::Default }
+            else { $s.Cursor=[System.Windows.Forms.Cursors]::Hand }
+            $s.Invalidate()
+        }
+    })
+    $card.Add_MouseLeave({
+        $this.Tag.Zone=""; $this.Cursor=[System.Windows.Forms.Cursors]::Default; $this.Invalidate()
+    })
+    $card.Add_MouseDown({
+        param($s,$ev)
+        # bounded exactly like every other control: label clicks do nothing
+        if($s.Tag.Zone -ne "ctl"){ return }
+        $menu=New-Object System.Windows.Forms.ContextMenuStrip
+        $menu.BackColor=$script:F.RowHot
+        $menu.ForeColor=$script:F.Text
+        $menu.Font=$script:rowFont
+        $menu.ShowImageMargin=$false
+        $menu.Renderer=New-Object System.Windows.Forms.ToolStripProfessionalRenderer((New-Object DarkMenuColors))
+        $i=0
+        foreach($m in $script:dnsModes){
+            $mi=$menu.Items.Add($m)
+            $mi.Tag=@{Card=$s;Idx=$i}
+            if($i -eq $script:dnsState.Mode){ $mi.ForeColor=$script:F.Accent }
+            $mi.Add_Click({
+                $d=$this.Tag
+                $script:dnsState.Mode=$d.Idx
+                $m=$script:dnsModes[$d.Idx]
+                $box=$d.Card.Tag.Tmpl
+                $box.Enabled=($m -eq "custom" -or $m -eq "secure")
+                if(-not $box.Enabled){ $box.ForeColor=[System.Drawing.Color]::FromArgb(96,96,96) }
+                elseif(-not [string]::IsNullOrEmpty($box.Tag)){ $box.ForeColor=$script:F.Text }
+                Set-Status "DNS mode: $m"
+                $d.Card.Invalidate()
+            })
+            $i++
+        }
+        $menu.Show($s,(New-Object System.Drawing.Point $script:DD_X,(S 46)))
+    })
+    $m0=$script:dnsModes[$script:dnsState.Mode]
+    $tmpl.Enabled=($m0 -eq "custom" -or $m0 -eq "secure")
+    if($script:dnsState.Tmpl){ $tmpl.Tag=$script:dnsState.Tmpl; $tmpl.Text=$script:dnsState.Tmpl; $tmpl.ForeColor=$F.Text }
+    # One TextChanged and one Leave. The prototype's hint-mirroring pair and
+    # the engine's validating pair were both registered, so each event ran
+    # twice in registration order - benign, but order-dependent.
+    $tmpl.Add_TextChanged({ if($this.Focused){ $this.Tag=$this.Text; $script:dnsState.Tmpl=$this.Text } })
+    $tmpl.Add_Leave({
+        $this.Tag=$this.Text
+        # normalise on the way out so the stored value is what Apply writes
+        if(-not [string]::IsNullOrWhiteSpace($this.Tag)){
+            $chk=Test-DohTemplate $this.Tag
+            if($chk.Ok){ $this.Tag=$chk.Value; $this.Text=$chk.Value; $script:dnsState.Tmpl=$chk.Value }
+            else { Set-Status "DoH template: $($chk.Reason)" }
+        }
+        Sync-TmplHint $this
+    })
+    $page.Controls.Add($card)
+}
+
+# --------------------------------------------------------------- page switch
+function Get-SearchStem([string]$w){
+    # "passwords" -> "password", but "dns", "https" and "class" keep their s:
+    # only a trailing s after at least three other letters, not doubled, is
+    # treated as a plural.
+    if($w.Length -ge 4 -and $w.EndsWith("s") -and -not $w.EndsWith("ss")){ return $w.Substring(0,$w.Length-1) }
+    return $w
+}
+function Get-SearchWords([string]$text){
+    # The words of a haystack, each present as itself and as its stem. Policy
+    # keys are CamelCase, so they are split at case changes too - a user who
+    # types "blocklist" should find ExtensionInstallBlocklist - and kept whole
+    # as well, so a pasted key still matches by prefix.
+    # A HashSet, not a hashtable. PowerShell resolves $table.Keys to the ENTRY
+    # named "keys" when one exists - and "registry keys" appears in several
+    # descriptions - so the key collection came back as $true and every prefix
+    # test on those rows threw into the console. The unary comma keeps the set
+    # from being unrolled into strings on return.
+    $out=New-Object System.Collections.Generic.HashSet[string]
+    $spaced=$text -creplace '([a-z0-9])([A-Z])','$1 $2'
+    foreach($w in (("$text $spaced").ToLower() -split '[^a-z0-9]+')){
+        if($w){ [void]$out.Add($w); [void]$out.Add((Get-SearchStem $w)) }
+    }
+    return ,$out
+}
+function Test-SearchHit($words,[string]$tok,[string]$stem){
+    # A token hits when it IS a word (or a word's stem), or when it is the
+    # start of one and long enough to mean something - three characters, so
+    # "tel" finds telemetry but "is" cannot match every row that has an "i".
+    if($words.Contains($tok) -or $words.Contains($stem)){ return $true }
+    if($stem.Length -ge 3){
+        foreach($w in $words){ if($w.StartsWith($stem)){ return $true } }
+    }
     return $false
 }
-
-$resetButton.Add_Click({
-    if (Reset-AllSettings) {
-        # Clear every row (unchecked / "Not managed") and reset DNS controls
-        foreach ($control in $allFeatures) {
-            Reset-FeatureRow $control
-        }
-        $dnsDropdown.SelectedItem = "unmanaged"
-        $dnsTemplateBox.Text = ""
-        $dnsTemplateBox.Enabled = $false
-        $statusLabel.Text = "All policies reset"
-    }
-})
-
-# ---------------------------------------------------------------------------
-# Export
-# ---------------------------------------------------------------------------
-
-$exportButton.Add_Click({
-    $saveFileDialog = New-Object System.Windows.Forms.SaveFileDialog
-    $saveFileDialog.Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*"
-    $saveFileDialog.Title = "Export SlimBrave Neo Settings"
-    $saveFileDialog.InitialDirectory = [Environment]::GetFolderPath("MyDocuments")
-    $saveFileDialog.FileName = "SlimBraveNeoSettings.json"
-
-    if ($saveFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-        # New key-value map format so multi-value policies (e.g.
-        # IncognitoModeAvailability: 1 vs 2) survive a round-trip.
-        # A choice row exports the value it is set to and is omitted entirely
-        # on "Not managed", so the file shape is unchanged: keys present are
-        # keys that get written.
-        $featureMap = [ordered]@{}
-        foreach ($control in $allFeatures) {
-            $rowValue = Get-RowValue $control
-            if ($null -ne $rowValue) {
-                $featureMap[$control.Tag.Key] = $rowValue
+function Get-SearchMatches([string]$query){
+    # Token matching over name + key + full description, so a word that only
+    # appears in the prose still finds the row. Each token must hit somewhere
+    # (AND), which makes "password leak" narrower than either word alone.
+    # Words, not substrings: the previous version stripped a trailing "s" from
+    # every haystack word and then matched anywhere inside the text, so "is"
+    # became "i" and matched every row, and "ads" matched "read" and "shadow".
+    # Same split as the haystack, so "Privacy & Security" and "De-AMP" match
+    # instead of returning nothing on the punctuation.
+    $tokens=@($query.ToLower() -split '[^a-z0-9]+' | Where-Object { $_ })
+    if(-not $tokens){ return @() }
+    $hits=@()
+    for($ci=0;$ci -lt $script:cats.Count;$ci++){
+        $cat=$script:cats[$ci]
+        foreach($row in $cat.rows){
+            $name=[string]$row.name
+            $desc=[string]$row.full
+            $key=[string]$row.key
+            $hayWords=Get-SearchWords "$name $key $desc $($cat.name)"
+            $titleWords=Get-SearchWords "$name $key"
+            $all=$true; $score=0
+            foreach($tok in $tokens){
+                $stem=Get-SearchStem $tok
+                if(Test-SearchHit $hayWords $tok $stem){
+                    # a title or key hit ranks above a description-only hit
+                    if(Test-SearchHit $titleWords $tok $stem){ $score+=10 }
+                    else { $score+=3 }
+                } else { $all=$false; break }
             }
-        }
-
-        # DnsMode is omitted when DNS is unmanaged, so importing the file
-        # (on any platform) lands back on "unmanaged" instead of forcing a
-        # managed DNS policy. The template only matters for custom/secure.
-        $settingsToExport = [ordered]@{
-            Features = $featureMap
-        }
-        $dnsMode = $dnsDropdown.SelectedItem
-        if ($dnsMode -and $dnsMode -ne "unmanaged") {
-            $settingsToExport["DnsMode"] = $dnsMode
-            if (($dnsMode -eq "custom" -or $dnsMode -eq "secure") -and
-                -not [string]::IsNullOrWhiteSpace($dnsTemplateBox.Text)) {
-                $settingsToExport["DnsTemplates"] = $dnsTemplateBox.Text
-            }
-        }
-
-        try {
-            # -Depth 5 covers Features -> key -> list values (Shields).
-            # Written as UTF-8 without BOM rather than through Out-File,
-            # whose default encoding is host-dependent: UTF-16LE+BOM on
-            # Windows PowerShell 5.1, UTF-8 on pwsh 7. Same idiom as
-            # Repair-OneBravePrefs.
-            [System.IO.File]::WriteAllText(
-                $saveFileDialog.FileName,
-                ($settingsToExport | ConvertTo-Json -Depth 5),
-                (New-Object System.Text.UTF8Encoding $false))
-            $statusLabel.Text = "Settings exported"
-            [System.Windows.Forms.MessageBox]::Show(
-                "Settings exported successfully to:`n$($saveFileDialog.FileName)",
-                "Export Successful",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-        } catch {
-            [System.Windows.Forms.MessageBox]::Show(
-                "Failed to export settings: $_",
-                "Export Failed",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Error
-            )
+            if($all){ $hits+=@{Row=$row;Cat=$cat.name;Score=$score} }
         }
     }
-})
-
-# ---------------------------------------------------------------------------
-# Loading a settings object into the UI
-#
-# The Import button and every Quick Presets button hand a parsed settings
-# object to this one function, so a preset and an imported file take exactly
-# the same path: every row cleared first, mutual-exclusion groups resolved by
-# the CheckedChanged handlers above, tri-state rows placed by
-# Select-ChoiceValue, DNS mode resolved to the canonical dropdown item.
-#
-# Nothing here touches the registry - the user still clicks Apply Settings.
-# ---------------------------------------------------------------------------
-
-function Import-SettingsObject {
-    <#
-    .SYNOPSIS
-    Load one parsed settings object - an imported file or an embedded preset
-    - into the form's controls.
-
-    .DESCRIPTION
-    Returns a note describing everything the UI could not represent (an
-    unrecognised DNS mode, a list that is not the one SlimBrave writes, a
-    tri-state value outside the key's enum), ready to append to the caller's
-    own success message, or an empty string when everything loaded cleanly.
-    #>
-    param ($Settings)
-
-    # Clear every row first, so a key the object omits ends up unmanaged
-    # rather than keeping whatever was on screen.
-    foreach ($control in $allFeatures) {
-        Reset-FeatureRow $control
-    }
-
-    $ignoredLists   = @()
-    $ignoredChoices = @()
-    $features = $Settings.Features
-    if ($features -is [array]) {
-        # Legacy pre-2026 array format. Only the first row per key wins to
-        # preserve intent for multi-value keys (avoids silently
-        # force-incognitoing users whose old export listed
-        # IncognitoModeAvailability).
-        $handled = @{}
-        foreach ($featureKey in $features) {
-            if ($handled.ContainsKey($featureKey)) { continue }
-            foreach ($control in $allFeatures) {
-                if ($control.Tag.Key -eq $featureKey) {
-                    if ($null -ne $control.Tag.Choices) {
-                        # A bare key in the legacy format means the box was
-                        # ticked, and a ticked box wrote the row's Value
-                        # (Block).
-                        [void] (Select-ChoiceValue $control $control.Tag.Value)
-                    } else {
-                        $control.Checked = $true
-                    }
-                    $handled[$featureKey] = $true
-                    break
-                }
-            }
-        }
-    } elseif ($null -ne $features) {
-        # New dict format - PSCustomObject with key-value pairs.
-        foreach ($prop in $features.PSObject.Properties) {
-            foreach ($control in $allFeatures) {
-                if ($control.Tag.Key -ne $prop.Name) { continue }
-                if ($null -ne $control.Tag.Choices) {
-                    # Which enum members are legal differs per key, so a
-                    # value this row cannot represent is dropped to "Not
-                    # managed" and reported rather than written blindly.
-                    if (-not (Select-ChoiceValue $control $prop.Value)) {
-                        $ignoredChoices += $prop.Name
-                    }
-                    continue
-                }
-                if (Test-FeatureValueMatches $control.Tag $prop.Value) {
-                    $control.Checked = $true
-                } elseif ($control.Tag.Type -eq "List") {
-                    # A list we can't reproduce: applying the row would
-                    # substitute our own wildcards for it.
-                    $ignoredLists += $prop.Name
-                }
-            }
-        }
-    }
-
-    # DNS: an object with no DnsMode means DNS is unmanaged (a bare
-    # DnsTemplates is treated as custom for legacy exports). Assigning a
-    # value the ComboBox doesn't hold is a silent no-op that leaves the
-    # previous mode selected, and -contains can't pre-check it: it matches
-    # case-insensitively while SelectedItem resolution is case-sensitive, so
-    # "Automatic" would pass the guard and then no-op. Resolve to the
-    # canonical item instead.
-    $unknownDns = $null
-    if ($Settings.DnsMode) {
-        $mode = [string]$Settings.DnsMode
-        $canonical = @($dnsDropdown.Items) | Where-Object { $_ -eq $mode } | Select-Object -First 1
-        if ($canonical) {
-            $dnsDropdown.SelectedItem = $canonical
-        } else {
-            $dnsDropdown.SelectedItem = "unmanaged"
-            $unknownDns = $mode
-        }
-    } elseif ($Settings.DnsTemplates) {
-        $dnsDropdown.SelectedItem = "custom"
-    } else {
-        $dnsDropdown.SelectedItem = "unmanaged"
-    }
-    $dnsTemplateBox.Text = if ($Settings.DnsTemplates) {
-        $Settings.DnsTemplates
-    } else {
-        ""
-    }
-
-    $note = ""
-    if ($unknownDns) {
-        $note += "`n`nDNS mode '$unknownDns' is not recognised; DNS was left unmanaged."
-    }
-    if ($ignoredLists.Count -gt 0) {
-        $note += "`n`nIgnored, because the imported list is not the one SlimBrave writes: $(($ignoredLists | Select-Object -Unique) -join ', ')."
-    }
-    if ($ignoredChoices.Count -gt 0) {
-        $note += "`n`nLeft unmanaged, because the imported value is not one this policy accepts: $(($ignoredChoices | Select-Object -Unique) -join ', ')."
-    }
-    return $note
+    return ($hits | Sort-Object -Property @{Expression={$_.Score};Descending=$true},
+                                          @{Expression={$_.Row.name}})
 }
 
-# ---------------------------------------------------------------------------
-# Import
-# ---------------------------------------------------------------------------
-
-$importButton.Add_Click({
-    $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
-    $openFileDialog.Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*"
-    $openFileDialog.Title = "Import SlimBrave Neo Settings"
-    $openFileDialog.InitialDirectory = [Environment]::GetFolderPath("MyDocuments")
-
-    if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-        try {
-            # -Encoding UTF8 to match what Export now writes. The reader
-            # still honors a byte-order mark, so UTF-16 files written by
-            # older versions keep importing correctly.
-            $importedSettings = Get-Content -Path $openFileDialog.FileName -Raw -Encoding UTF8 | ConvertFrom-Json
-            $note = Import-SettingsObject $importedSettings
-            $statusLabel.Text = "Settings imported"
-
-            [System.Windows.Forms.MessageBox]::Show(
-                "Settings imported successfully from:`n$($openFileDialog.FileName)$note",
-                "Import Successful",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-        } catch {
-            [System.Windows.Forms.MessageBox]::Show(
-                "Failed to import settings: $_",
-                "Import Failed",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Error
-            )
-        }
-    }
-})
-
-# ---------------------------------------------------------------------------
-# Re-sync
-#
-# Throws the on-screen selections away and reads the registry again through
-# Initialize-CurrentSettings, the same function that fills the form at
-# startup - one reader, so a re-sync can never disagree with a fresh launch.
-# ---------------------------------------------------------------------------
-
-$resyncButton.Add_Click({
-    Initialize-CurrentSettings
-})
-
-# ---------------------------------------------------------------------------
-# Initialize - read current registry and pre-check matching features on startup
-# ---------------------------------------------------------------------------
-
-function Initialize-CurrentSettings {
-    # Read from both machine (HKLM) and user (HKCU) policy scopes.
-    # Machine scope takes precedence; user scope is a fallback.
-    $machineSettings = Get-ItemProperty -Path $registryPath -ErrorAction SilentlyContinue
-    $userSettings    = Get-ItemProperty -Path $userRegistryPath -ErrorAction SilentlyContinue
-
-    foreach ($control in $allFeatures) {
-        $feature = $control.Tag
-        if ($feature.Type -eq "List") {
-            $control.Checked =
-                (Test-ListPolicyMatches -RegistryPath $registryPath     -Name $feature.Key -Expected $feature.Value) -or
-                (Test-ListPolicyMatches -RegistryPath $userRegistryPath -Name $feature.Key -Expected $feature.Value)
-            continue
-        }
-        $currentValue = $null
-        if ($machineSettings -and ($machineSettings.PSObject.Properties.Name -contains $feature.Key)) {
-            $currentValue = $machineSettings.$($feature.Key)
-        } elseif ($userSettings -and ($userSettings.PSObject.Properties.Name -contains $feature.Key)) {
-            $currentValue = $userSettings.$($feature.Key)
-        }
-
-        if ($null -ne $feature.Choices) {
-            # A value outside this key's enum (or none at all) shows as
-            # "Not managed" - the row won't claim a state it can't write.
-            [void] (Select-ChoiceValue $control $currentValue)
-            continue
-        }
-
-        if ($null -ne $currentValue) {
-            if ($feature.Type -eq "DWord") {
-                $control.Checked = ([int]$currentValue -eq [int]$feature.Value)
-            } else {
-                $control.Checked = ($currentValue.ToString() -eq $feature.Value.ToString())
-            }
-        } else {
-            $control.Checked = $false
-        }
-    }
-
-    # DNS settings
-    if ($machineSettings -or $userSettings) {
-        $currentDnsMode = $null
-        $currentDnsTemplates = $null
-        if ($machineSettings -and ($machineSettings.PSObject.Properties.Name -contains "DnsOverHttpsMode")) {
-            $currentDnsMode = $machineSettings.DnsOverHttpsMode
-        } elseif ($userSettings -and ($userSettings.PSObject.Properties.Name -contains "DnsOverHttpsMode")) {
-            $currentDnsMode = $userSettings.DnsOverHttpsMode
-        }
-        if ($machineSettings -and ($machineSettings.PSObject.Properties.Name -contains "DnsOverHttpsTemplates")) {
-            $currentDnsTemplates = $machineSettings.DnsOverHttpsTemplates
-        } elseif ($userSettings -and ($userSettings.PSObject.Properties.Name -contains "DnsOverHttpsTemplates")) {
-            $currentDnsTemplates = $userSettings.DnsOverHttpsTemplates
-        }
-
-        if (-not [string]::IsNullOrWhiteSpace($currentDnsTemplates)) {
-            $dnsDropdown.SelectedItem = "custom"
-            $dnsTemplateBox.Text = $currentDnsTemplates
-        } elseif (-not [string]::IsNullOrWhiteSpace($currentDnsMode)) {
-            # Same canonical lookup as the import path: a registry value the
-            # dropdown doesn't hold would leave SelectedIndex at -1, blanking
-            # the control and skipping the DNS write on the next Apply.
-            $canonical = @($dnsDropdown.Items) | Where-Object { $_ -eq $currentDnsMode } | Select-Object -First 1
-            if ($canonical) {
-                $dnsDropdown.SelectedItem = $canonical
-            } else {
-                $dnsDropdown.SelectedItem = "unmanaged"
-            }
-        } else {
-            $dnsDropdown.SelectedItem = "unmanaged"
-        }
+function Show-SearchResults([string]$query){
+    $hits=Get-SearchMatches $query
+    $pageTitle.Text="Search"
+    $n=@($hits).Count
+    $word="matches"; if($n -eq 1){ $word="match" }
+    $crumb.Text="SlimBrave Neo  >  Search  -  $n $word for `"$query`""
+    foreach($n2 in $script:navItems){ $n2.Invalidate() }
+    $page.SuspendLayout()
+    $page.AutoScrollPosition=New-Object System.Drawing.Point 0,0
+    $page.AutoScrollMinSize=New-Object System.Drawing.Size 0,0
+    $page.Controls.Clear(); $script:rowPanels=@()
+    $y=S 4
+    if($n -eq 0){
+        $empty=New-Object System.Windows.Forms.Label
+        $empty.Text="Nothing matches `"$query`"."
+        $empty.Font=$script:rowFont; $empty.ForeColor=$F.TextSub
+        $empty.BackColor=$F.Bg; $empty.AutoSize=$true
+        $empty.Location=New-Object System.Drawing.Point (S 6),(S 12)
+        $page.Controls.Add($empty)
     } else {
-        $dnsDropdown.SelectedItem = "unmanaged"
+        $lastCat=""
+        foreach($h in $hits){
+            if($h.Cat -ne $lastCat){
+                $hd=New-SectionHeader $h.Cat $y 0
+                $page.Controls.Add($hd); $script:rowPanels+=$hd; $y+=$hd.Height+(S 4)
+                $lastCat=$h.Cat
+            }
+            $rp=New-FluentRow $h.Row $y
+            $page.Controls.Add($rp); $script:rowPanels+=$rp; $y+=$rp.Height+(S 4)
+        }
     }
-
-    $dnsTemplateBox.Enabled = ($dnsDropdown.SelectedItem -in @("custom", "secure"))
-
-    # Both callers - the startup fill and the Re-sync button - land here, so
-    # the status line always names what the controls are showing.
-    $statusLabel.Text = "Policy read from registry"
+    $page.ResumeLayout()
+    $page.AutoScrollPosition=New-Object System.Drawing.Point 0,0
+    $page.Invalidate($true); $page.Update()
 }
 
-Initialize-CurrentSettings
+function Refresh-View {
+    # Rebuild whatever the user is looking at. Apply, Reset, Re-sync, Import
+    # and a preset Load used to call Select-Page directly, which replaced an
+    # open search-results view with the page behind it while the box kept
+    # its query.
+    $q=""; if($script:searchBox){ $q=$script:searchBox.Text.Trim() }
+    if([string]::IsNullOrWhiteSpace($q)){ Select-Page $script:sel } else { Show-SearchResults $q }
+}
 
-# No height cap, no form-level scrollbar and no post-hoc resize: the window
-# is a fixed size that fits the displays this app targets, and anything that
-# doesn't fit a column is reached with that column's own scrollbar.
+function Select-Page([int]$idx){
+    $script:sel=$idx
+    foreach($n in $script:navItems){$n.Invalidate()}
+    $name=$script:pages[$idx]
+    $crumb.Text="SlimBrave Neo  >  $name"
+    $pageTitle.Text=$name
+    $page.SuspendLayout()
+    # Zero the scroll BEFORE clearing and refilling. Child Location is in
+    # scrolled coordinates, so rows added while the previous page's offset is
+    # still applied land that far down, and AutoScrollMinSize grows to cover
+    # the emptiness above them - the "ghost scroll" you have to travel through
+    # before reaching the content.
+    $page.AutoScrollPosition=New-Object System.Drawing.Point 0,0
+    $page.AutoScrollMinSize=New-Object System.Drawing.Size 0,0
+    $page.Controls.Clear(); $script:rowPanels=@()
+    if($idx -eq 0){
+        $y=S 4
+        foreach($pr in $script:presets){
+            $c=New-PresetCard $pr $y; $page.Controls.Add($c); $y+=S 82
+        }
+    } elseif($idx -eq 1){
+        # every row, every category, one scroll - no menuing
+        $y=S 4; $total=0
+        foreach($cat in $script:cats){
+            $hd=New-SectionHeader $cat.name $y $cat.rows.Count
+            $page.Controls.Add($hd); $script:rowPanels+=$hd; $y+=$hd.Height+(S 4)
+            foreach($row in $cat.rows){
+                $rp=New-FluentRow $row $y; $page.Controls.Add($rp)
+                $script:rowPanels+=$rp; $y+=$rp.Height+(S 4); $total++
+            }
+            $y+=S 10
+        }
+        $pageTitle.Text="All Options"
+        $crumb.Text="SlimBrave Neo  >  All Options  -  $total policies in one list"
+    } elseif($idx -eq ($script:pages.Count-1)){
+        Build-DnsPage
+    } else {
+        $cat=$script:cats[$idx-2]; $y=S 4
+        foreach($row in $cat.rows){
+            $rp=New-FluentRow $row $y; $page.Controls.Add($rp)
+            $script:rowPanels+=$rp; $y+=$rp.Height+(S 4)
+        }
+    }
+    $page.ResumeLayout()
+    $page.AutoScrollPosition=New-Object System.Drawing.Point 0,0
+    $page.Invalidate($true); $page.Update()
+}
 
+$script:searchBox.Add_TextChanged({
+    $q=$this.Text.Trim()
+    $searchHost.Invalidate()
+    if([string]::IsNullOrWhiteSpace($q)){ Select-Page $script:sel } else { Show-SearchResults $q }
+})
+$script:searchBox.Add_KeyDown({
+    param($s,$ev)
+    if($ev.KeyCode -eq [System.Windows.Forms.Keys]::Escape){ $s.Text="" }
+})
+
+if(Test-Path $script:machineReg){ Sync-FromRegistry } else { Set-Status "No Brave policy set on this machine" }
+Select-Page 0
 [void] $form.ShowDialog()

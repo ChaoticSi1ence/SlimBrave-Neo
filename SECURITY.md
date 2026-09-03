@@ -97,8 +97,22 @@ this is done every time:
 
 1. Tag the reviewed commit with `git tag -a vX.Y.Z` (use `-s` once a signing
    key exists) and push the tag.
-2. Generate the sums from a clean checkout **of that tag**, not from a working
-   tree: `sha256sum SlimBrave.ps1 slimbrave-linux.py slimbrave-mac.py > SHA256SUMS`.
+2. Generate the sums from **the bytes GitHub serves**, which are the bytes in
+   the tag object — not from a working tree, and not from a checkout on a
+   machine with `core.autocrlf=true`, which rewrites every file to CRLF before
+   you hash it and produces sums that match nothing anyone downloads:
+
+   ```bash
+   for f in SlimBrave.ps1 slimbrave-linux.py slimbrave-mac.py; do
+     printf '%s  %s
+' "$(git show "vX.Y.Z:$f" | sha256sum | cut -d' ' -f1)" "$f"
+   done > SHA256SUMS
+   ```
+
+   Then check one against the published URL before attaching it:
+   `curl -sL https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/vX.Y.Z/SlimBrave.ps1 | sha256sum`.
+   The sums for v1.9.5 through v2.1.0 were generated the old way and do **not**
+   match the raw URLs, the `iwr` one-liner, or a `sha256sum` on Linux/macOS.
 3. Paste the sums into the release notes and attach `SHA256SUMS`.
 4. Never move or re-cut a published tag. If a release is bad, yank it and cut
    a new version.
@@ -133,7 +147,7 @@ It writes to exactly three places:
 |----------|--------------------|
 | `HKLM:\SOFTWARE\Policies\BraveSoftware\Brave` | One value per ticked option (or one numbered subkey for list policies), plus `DnsOverHttpsMode` / `DnsOverHttpsTemplates`. Created only when you press Apply — opening the app writes nothing. |
 | `HKCU:\SOFTWARE\Policies\BraveSoftware\Brave` (or `HKEY_USERS\<your SID>\...` when elevated as another account) | Values are only **removed** here, never written, so a leftover user-scope policy cannot override the machine one. |
-| `%LOCALAPPDATA%\BraveSoftware\<channel>\User Data\<profile>\Preferences` | Only the `profile.content_settings.exceptions.braveShields` entries for `http://*,*` and `https://*,*` are deleted. Nothing else in the file is read back out or changed. Covers Stable/Beta/Nightly/Dev and every profile (`Default`, `Profile 1`, ...). Skipped entirely while Brave is running, because Brave would overwrite the file on its next save. |
+| `%LOCALAPPDATA%\BraveSoftware\<channel>\User Data\<profile>\Preferences`, for **every interactive account on the machine** | Only the `profile.content_settings.exceptions.braveShields` entries for `http://*,*` and `https://*,*` are deleted. Nothing else in the file is read back out or changed. Covers Stable/Beta/Nightly/Dev and every profile (`Default`, `Profile 1`, ...). The policy this tool writes is machine-wide, so the scrub follows it: your own profile root plus every other interactive account (`S-1-5-21-*` in the ProfileList registry key) whose Brave data is readable; the status line says when other users' profiles were cleaned. Skipped entirely while Brave is running, because Brave would overwrite the file on its next save. |
 
 Those Shields entries are a leak from **pre-1.x SlimBrave**, which wrote
 content-setting exceptions straight into the profile. Removing the registry
@@ -146,11 +160,11 @@ delete the `...\Policies\BraveSoftware\Brave` key itself and does not touch
 other values inside it — a group-policy `ExtensionInstallForcelist`,
 `URLBlocklist`, `ProxySettings` or anything another tool set survives.
 
-Reset clears those managed names outright; that is what a reset is for. Apply
-is stricter: a **list** policy you left unticked is removed only when the list
-on disk is byte-for-byte the one SlimBrave writes, so an
-`ExtensionInstallBlocklist` an admin owns is reported as skipped and left
-in place.
+Reset clears the managed **values** outright; that is what a reset is for. Both
+Reset and Apply are stricter about **list** policies: one is removed only when
+the list on disk is byte-for-byte the one SlimBrave writes, so an
+`ExtensionInstallBlocklist` an admin or a GPO owns is left in place and both
+actions report how many they skipped.
 
 ### Linux — `slimbrave-linux.py`
 
@@ -205,7 +219,8 @@ identifier. No other managed preference is touched.
 Then restart Brave and check `brave://policy` — none of the keys the tool
 manages should still be listed. On Linux and macOS the Shields-exception scrub
 happens on reset too; on Windows it happens unless Brave is running, in which
-case the dialog tells you to close Brave and reset again.
+case the status bar at the bottom of the window tells you to close Brave and
+reset again.
 
 ---
 
