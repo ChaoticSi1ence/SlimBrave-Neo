@@ -154,7 +154,7 @@ powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1
 
 <img src="assets/gui-screenshot.png" width="820" alt="SlimBrave Neo Windows GUI">
 
-*The Windows GUI: a sidebar of categories, presets as cards, and a search that reads the descriptions as well as the names.*
+*The Windows GUI, on All Options: every policy in one scroll, each with a plain-English description under its title. A sidebar splits them into categories, and the search reads the descriptions as well as the names.*
 
 </div>
 
@@ -186,17 +186,17 @@ Requires Administrator privileges; the script re-launches itself elevated. It op
 
 **Every policy explains itself.** Each row carries a plain-English description under its title — *"Stops the daily usage ping that counts this install in Brave's active-user statistics"* — rather than hiding it in a tooltip. Where the text is longer than the row, a chevron expands it in place.
 
-**Search reads the descriptions, not just the names.** The box in the header matches titles, policy keys, category names *and* the description text, so typing `passwords` surfaces "Require HTTPS for Basic Auth" even though its title never says the word, and `telemetry` returns the whole reporting section. Several words narrow the results, plurals match singulars, and title matches rank above prose matches.
+**Search reads the descriptions, not just the names.** The box in the header matches titles, policy keys, category names *and* the description text, so typing `passwords` surfaces "Require HTTPS for Basic Auth" even though its title never says the word, and `telemetry` returns the whole reporting section. Several words narrow the results, plurals match singulars, punctuation is ignored on both sides, and title matches rank above prose matches.
 
 **A sidebar splits the policies into seven categories** — or skip it entirely: **All Options** lists all 78 in one scroll with section headers, for anyone who would rather not navigate.
 
-**Presets are cards.** Each shows what it is, who it is for, and how many policies it sets. Loading one only fills in the controls; nothing reaches the registry until you press Apply Settings, so you can change your mind first. The presets are embedded in `SlimBrave.ps1` itself, so they work for the one-liner download above with no `Presets/` directory on disk.
+**Presets are cards.** Each shows what it does and how many policies it sets. Loading one only fills in the controls; nothing reaches the registry until you press Apply Settings, so you can change your mind first. The presets are embedded in `SlimBrave.ps1` itself, so they work for the one-liner download above with no `Presets/` directory on disk.
 
 **Clicking a label does nothing.** Only the toggle and the dropdown respond, each within its own bounds. Opening a menu is reversible; flipping a machine-wide policy is not.
 
 The button row is Export, Import, **Re-sync**, Reset and Apply Settings. Re-sync reads the policy currently in the registry back into the interface, discarding on-screen selections you have not applied. It writes nothing, and goes through the same reader that fills the form at startup, so a re-sync can never disagree with a fresh launch.
 
-Every row of Site Permissions is a dropdown rather than a checkbox: **Not managed / Ask / Block**, plus **Allow** on the keys where Chromium accepts it. Not managed is the default and writes nothing at all. The Permissions & Access section below covers what each state does and which keys offer Allow.
+Every row of Site Permissions is a dropdown rather than a checkbox: **Not managed / Ask / Block**, plus **Allow** on the keys where Chromium accepts it. Not managed is the default and writes nothing at all. The Site Permissions section below covers what each state does and which keys offer Allow.
 
 ---
 
@@ -316,7 +316,7 @@ Pin Brave's own protection defaults as managed policy so they can't be weakened 
 
 ## CLI Reference (Linux and macOS)
 
-The Windows PowerShell script is GUI-only: it declares no parameters and ignores anything on its command line, so flags land silently in `$args` and the window opens anyway. Use its Import and Export buttons instead.
+The Windows PowerShell script is GUI-only: it has no user-facing flags. It declares only the two internal parameters the elevation relaunch passes to itself, so use its Import and Export buttons instead.
 
 | Flag | Description |
 |------|-------------|

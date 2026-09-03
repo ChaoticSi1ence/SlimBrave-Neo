@@ -2422,7 +2422,12 @@ def test_ps1_row_mousedown_uses_zone_of_for_the_expander():
     start = text.index("function New-FluentRow")
     body = text[start:text.index("\n}\n", start)]
     md = body[body.index("Add_MouseDown"):]
-    assert "$ev.Y -le 50" not in md, "the expander is hit-tested with a bare rectangle again"
+    assert re.search(r"\$zone\s*=\s*Zone-Of \$s \$ev\.X \$ev\.Y", md), (
+        "MouseDown does not resolve the zone through Zone-Of"
+    )
+    assert not re.search(r"\$ev\.Y\s*-le\s*\(?S?\s*50", md), (
+        "the expander is hit-tested with a bare rectangle again"
+    )
     z = md.find("Zone-Of $s $ev.X $ev.Y")
     e = md.find('"exp"')
     assert 0 <= z < e, "MouseDown does not resolve the zone before testing for the expander"
@@ -2448,7 +2453,11 @@ def _gui_text():
 
 def _strip_parens(s):
     """Drop every parenthesised group, innermost first, so `(S 18)` and
-    arithmetic such as `($s.Width-1)` vanish and only bare tokens remain."""
+    arithmetic such as `($s.Width-1)` vanish and only bare tokens remain.
+
+    Known gap: a bare literal inside arithmetic, `($script:COLLAPSED+776)`,
+    vanishes with it. No constructor in the file does that today, and keeping
+    the 1 px hairline insets and the placement math exempt matters more."""
     while True:
         new = re.sub(r"\([^()]*\)", "", s)
         if new == s:
@@ -2498,7 +2507,8 @@ def test_ps1_dark_title_bar_is_actually_requested():
     so the dark UI opened under Windows' light title bar. Same class as the
     ownership guard that was defined and never used: pin the call."""
     text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
-    calls = re.findall(r"::DwmSetWindowAttribute\(", text)
+    live = re.sub(r"(?m)^\s*#.*$", "", text)   # a commented-out call is not a call
+    calls = re.findall(r"::DwmSetWindowAttribute\(", live)
     assert len(calls) >= 1, "DwmSetWindowAttribute is declared but never called"
     assert "Add_HandleCreated" in text, "the dark-mode attribute must be set once the handle exists"
 
@@ -2509,10 +2519,19 @@ def test_ps1_gui_fonts_follow_the_layout_factor():
     with the grid. A point-unit font in the GUI region would outgrow its row
     on exactly the screens the clamp exists for."""
     text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    body = text[text.index("function New-UiFont"):]
+    body = body[:body.index("\n}\n")]
     gui = text[text.index("$form = New-Object System.Windows.Forms.Form"):]
-    assert 'New-Object System.Drawing.Font "' not in gui, "a GUI font is built in points, bypassing the factor"
-    assert "function New-UiFont" in text
-    assert re.search(r"\$fitDpi\s*=", text), "the width-factor clamp is missing"
+    assert "GraphicsUnit]::Pixel" in body and "$script:DPI" in body, (
+        "New-UiFont no longer builds pixel-unit fonts from the layout factor"
+    )
+    outside = gui.replace(body, "")   # New-UiFont itself is where a Font is built
+    assert not re.search(r"New-Object System\.Drawing\.Font\b", outside), (
+        "a GUI font is built directly, bypassing the factor"
+    )
+    assert re.search(r"if\(\$fitDpi -lt \$script:DPI\)\{\s*\$script:DPI=", text), (
+        "the width-factor clamp is missing or disabled"
+    )
     assert text.index("$fitDpi") < text.index("$clientH=[math]::Max"), (
         "the factor must be clamped before the first S() call"
     )
@@ -2529,7 +2548,8 @@ def test_ps1_status_bar_grows_to_its_message_instead_of_hiding_it():
     start = text.index("function Set-Status(")
     body = text[start:text.index("\n}\n", start)]
     assert "MeasureString" in body and "[ref]$nl" in body, "Set-Status does not measure the message's lines"
-    assert re.search(r"\$bar\.Height\s*=\s*\$need", body), "Set-Status does not resize the bar"
+    live = re.sub(r"(?m)^\s*#.*$", "", body)   # a commented-out assignment is not one
+    assert re.search(r"\$bar\.Height\s*=\s*\$need", live), "Set-Status does not resize the bar"
     assert re.search(r"\$page\.Height\s*=", body), "the page does not yield the bar's extra height"
     assert re.search(r"\$c\.Top\s*=", body), "buttons are not re-centred in a taller bar"
     assert re.search(r"^\$script:BAR_MAX_LINES\s*=\s*[3-6]\s*$", text, re.MULTILINE), "no sane line cap"
@@ -2554,4 +2574,56 @@ def test_ps1_search_word_set_is_not_a_hashtable():
     start = text.index("function Test-SearchHit(")
     hit = text[start:text.index("\n}\n", start)]
     assert ".Keys" not in hit and "ContainsKey" not in hit, "Test-SearchHit still treats the word set as a hashtable"
+
+
+# ---------------------------------------------------------------------------
+# Engine guards the GUI rewrite dropped once already
+# ---------------------------------------------------------------------------
+
+
+def test_ps1_engine_guards_are_wired_not_merely_defined():
+    """94a736a restored four guards main had and the rewrite lost, and its own
+    message says they were lost because no test covered these paths. That is
+    still the risk: each of these is a call site, not a definition."""
+    text = re.sub(r"(?m)^\s*#.*$", "", (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8"))
+
+    apply_body = text[text.index("function Invoke-ApplyPolicy"):text.index("function Invoke-ResetPolicy")]
+    reset_body = text[text.index("function Invoke-ResetPolicy"):]
+    reset_body = reset_body[:reset_body.index("\n}\n")]
+    for name, body in (("Apply", apply_body), ("Reset", reset_body)):
+        assert "Remove-OwnedListPolicy" in body, (
+            f"{name} deletes list policies without the ownership guard"
+        )
+
+    assert re.search(r"^\$script:userReg\s*=\s*\$userRegistryPath", text, re.MULTILINE), (
+        "the user hive is not the SID-aware one"
+    )
+
+    imp = text[text.index("function Import-PresetIntoState"):]
+    imp = imp[:imp.index("\n}\n")]
+    assert "Compare-Object" in imp, "Import stages a list row without comparing its value"
+    assert "Enforce-ExclusionGroups" in imp, "Import can stage two members of one exclusion group"
+
+    sync = text[text.index("function Sync-FromRegistry"):]
+    sync = sync[:sync.index("\n}\n")]
+    assert "Enforce-ExclusionGroups" in sync, "Re-sync can stage two members of one exclusion group"
+
+    relaunch = text[text.index("$relaunchArgs"):]
+    relaunch = relaunch[:relaunch.index("Start-Process")]
+    assert '`"$($script:selfPath)`"' in relaunch, "the relaunch path is unquoted again"
+
+
+def test_ps1_legacy_array_import_takes_the_first_row_per_key():
+    """Several policy keys carry two rows with opposite values (Force vs
+    Disable Incognito, the two Variations rows, the two Referrers rows). The
+    legacy-array branch guarded against staging both by testing the row's own
+    state - which the function had just cleared, so it never fired."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    imp = text[text.index("function Import-PresetIntoState"):]
+    imp = imp[:imp.index("\n}\n")]
+    branch = imp[imp.index("$feat -is [array]"):]
+    assert "$handled" in branch, "the legacy-array branch has no handled-keys set"
+    assert re.search(r"\$handled\.ContainsKey\(\$row\.key\)", branch), (
+        "the first-row-per-key guard does not key on $row.key"
+    )
 

@@ -50,15 +50,17 @@ if (-not $isAdmin) {
     } catch {
         # A declined UAC prompt is non-terminating without -ErrorAction Stop,
         # so without this the original would exit silently and look broken.
+        # Report the actual error: a blocked or missing powershell.exe is not
+        # the user clicking No, and a wrapper needs a non-zero exit either way.
         [void][System.Windows.Forms.MessageBox]::Show(
-            "Administrator access was declined. Apply and Reset need it to write machine policy.",
+            "Could not relaunch as Administrator: $($_.Exception.Message)`n`nApply and Reset need elevation to write machine policy.",
             "Not elevated",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning)
+        exit 1
     }
     exit
 }
-[System.Windows.Forms.Application]::EnableVisualStyles()
 # ---------------------------------------------------------------------------
 # High DPI & Visual Styles Support
 # Fixes blurry window / text rendering on displays with >100% DPI scaling
@@ -145,7 +147,7 @@ function Test-ListPolicyIsExactly {
         [string]   $Name,
         [string[]] $Expected
     )
-    # Ownership test, as opposed to the subset test above: is the list on
+    # Ownership test: is the list on
     # disk exactly the one SlimBrave writes? An admin's own blocklist is a
     # superset (or a different set entirely) and must not be deleted just
     # because the matching box is unchecked. Absent means nothing to
@@ -161,86 +163,6 @@ function Test-ListPolicyIsExactly {
     # An empty subkey holds no third-party list, so let it be cleaned up.
     if ($actual.Count -eq 0) { return $true }
     return (($actual.Count -eq $Expected.Count) -and -not (Compare-Object $actual $Expected))
-}
-
-# ---------------------------------------------------------------------------
-# Feature row state
-#
-# A row is either a CheckBox (binary: write Tag.Value or nothing) or, when
-# its feature carries `Choices`, a ComboBox (write the selected choice's
-# value, or nothing when "Not managed" is selected). Everything that reads
-# or writes row state - Apply, Reset, Import, Export, Initialize - goes
-# through these three helpers so neither control type is special-cased at
-# the call sites.
-# ---------------------------------------------------------------------------
-
-function Get-RowValue {
-    <#
-    .SYNOPSIS
-    The policy value this row currently manages, or $null when it manages
-    nothing (unchecked box / "Not managed").
-    #>
-    param ($Control)
-    $feature = $Control.Tag
-    if ($null -ne $feature.Choices) {
-        $index = $Control.SelectedIndex
-        if ($index -lt 0) { return $null }
-        return $feature.Choices[$index].Value
-    }
-    if ($Control.Checked) {
-        # The unary comma keeps a List row's value a list: returning a
-        # one-element array unrolls it to a bare string, which would export
-        # ExtensionInstallBlocklist as "*" instead of ["*"].
-        if ($feature.Value -is [array]) { return ,$feature.Value }
-        return $feature.Value
-    }
-    return $null
-}
-
-function Reset-FeatureRow {
-    # Back to "manages nothing": unchecked, or the first choice, which is
-    # always ("Not managed", $null).
-    param ($Control)
-    if ($null -ne $Control.Tag.Choices) {
-        $Control.SelectedIndex = 0
-    } else {
-        $Control.Checked = $false
-    }
-}
-
-function Select-ChoiceValue {
-    <#
-    .SYNOPSIS
-    Select the entry of a choice row whose value is $Value. Returns $false
-    when the row cannot represent that value (including $null) and leaves it
-    on "Not managed", so callers can report the value they had to drop.
-    #>
-    param ($Control, $Value)
-    $choices = $Control.Tag.Choices
-    # Only a genuine integer can name an enum member. This has to be a type
-    # test, not a cast: [int]$true is 1, so a JSON `true` would otherwise
-    # select "Allow" on the three keys that have one and silently grant every
-    # site the permission the user never asked to grant. A quoted "1" is not
-    # a member either. Both drop to "Not managed" and are reported, matching
-    # the type-strict check in the two Python scripts.
-    $isInteger = ($Value -is [int]) -or ($Value -is [long]) -or
-                 ($Value -is [int16]) -or ($Value -is [byte]) -or ($Value -is [uint32])
-    if ($isInteger) {
-        for ($i = 0; $i -lt $choices.Count; $i++) {
-            $choiceValue = $choices[$i].Value
-            if ($null -eq $choiceValue) { continue }
-            # The registry hands us Int32, imported JSON Int32/Int64, so
-            # compare numerically once both sides are known to be integers.
-            $isMatch = $false
-            try { $isMatch = ([int]$choiceValue -eq [int]$Value) } catch { $isMatch = $false }
-            if ($isMatch) {
-                $Control.SelectedIndex = $i
-                return $true
-            }
-        }
-    }
-    $Control.SelectedIndex = 0
-    return $false
 }
 
 $telemetryFeatures = @(
@@ -741,9 +663,6 @@ $categories = @(
     @{ Name = "Brave Features";               Features = $braveFeatures },
     @{ Name = "Performance & Bloat";          Features = $perfFeatures }
 )
-$categoryByName = @{}
-foreach ($cat in $categories) { $categoryByName[$cat.Name] = $cat }
-
 # ---------------------------------------------------------------------------
 # ADAPTER - native feature tables to the shape the interface reads
 #
@@ -1136,19 +1055,11 @@ function Invoke-ApplyPolicy {
         }
         # write the sanitised value, not the raw keystrokes
         $script:dnsState.Tmpl = $check.Value
-    } elseif (-not [string]::IsNullOrWhiteSpace($script:dnsState.Tmpl)) {
-        # a template kept for "automatic" still has to be well-formed
-        $check = Test-DohTemplate $script:dnsState.Tmpl
-        if (-not $check.Ok) {
-            [void][System.Windows.Forms.MessageBox]::Show(
-                "$($check.Reason)`n`nClear the template or correct it before applying.",
-                "Check the DoH template",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning)
-            return $false
-        }
-        $script:dnsState.Tmpl = $check.Value
     }
+    # No check in the other modes: the template is not written there, and the
+    # box is disabled, so refusing over a held value was an unrecoverable
+    # block - pick custom, mistype, switch to off, and Apply died with the
+    # only remedy behind a greyed-out control.
     if (-not (Test-Elevated)) {
         [void][System.Windows.Forms.MessageBox]::Show(
             "Writing machine policy needs Administrator. Relaunch elevated to apply.",
@@ -1232,7 +1143,12 @@ function Invoke-ApplyPolicy {
         $written++
     }
     $repair = Repair-BravePrefs
-    Set-Status (Join-Status "Applied $written policies. Restart Brave, then check brave://policy." $repair)
+    $lead = "Applied $written policies. Restart Brave, then check brave://policy."
+    if ($skippedLists.Count -gt 0) {
+        $lead += " Left alone because the list on disk is not the one SlimBrave writes: " +
+                 (($skippedLists.Keys | Sort-Object) -join ", ") + "."
+    }
+    Set-Status (Join-Status $lead $repair)
     return $true
 }
 
@@ -1320,10 +1236,27 @@ function Sync-FromRegistry {
         if ($idx -ge 0) { $script:dnsState.Mode = $idx }
         $script:dnsState.Tmpl = $tm
     }
+    Enforce-ExclusionGroups
     Set-Status "Policy read from registry - $($live.Count) values found"
 }
 
+function Enforce-ExclusionGroups {
+    # The toggle handler collapses a group as you click, but Import and
+    # Re-sync write $script:state directly and never ran that rule - so two
+    # members of one group could be staged together and Apply wrote both.
+    # main collapsed groups through CheckedChanged; the Python ports do it in
+    # _enforce_groups. First row of a group wins, deterministically.
+    $seen = @{}
+    foreach ($row in Get-AllRows) {
+        if (-not $row.group) { continue }
+        if (-not $script:state[$row.Id].On) { continue }
+        if ($seen.ContainsKey($row.group)) { $script:state[$row.Id].On = $false; continue }
+        $seen[$row.group] = $true
+    }
+}
+
 function Import-PresetIntoState($preset) {
+    $script:importNotes = @()
     foreach ($id in @($script:state.Keys)) { $script:state[$id].On = $false; $script:state[$id].Sel = 0 }
     $feat = $preset.features
     if ($feat -is [array]) {
@@ -1334,9 +1267,17 @@ function Import-PresetIntoState($preset) {
         # already cleared the user's selections above.
         $names = @()
         foreach ($n in $feat) { $names += [string]$n }
+        # First row per KEY wins. Several keys carry two rows with opposite
+        # values (Force Incognito vs Disable Incognito, the two Variations
+        # rows, the two Referrers rows), and the guard here used to test the
+        # row's own state - which this function had just cleared, so it never
+        # fired and BOTH rows of every pair were staged. Apply then wrote the
+        # second one's value.
+        $handled = @{}
         foreach ($row in Get-AllRows) {
             if ($names -notcontains $row.key) { continue }
-            if ($script:state[$row.Id].On -or $script:state[$row.Id].Sel -gt 0) { continue }
+            if ($handled.ContainsKey($row.key)) { continue }
+            $handled[$row.key] = $true
             if (Test-IsChoiceRow $row) {
                 for ($i = 1; $i -lt $row.choices.Count; $i++) {
                     if ([string]$row.choices[$i][1] -eq [string]$row.value) {
@@ -1356,9 +1297,18 @@ function Import-PresetIntoState($preset) {
         if ($null -eq $feat.PSObject.Properties[$row.key]) { continue }
         $want = $feat.$($row.key)
         if (Test-IsChoiceRow $row) {
-            for ($i = 1; $i -lt $row.choices.Count; $i++) {
-                if ([string]$row.choices[$i][1] -eq [string]$want) { $script:state[$row.Id].Sel = $i; break }
+            # Type-strict, as main and both Python ports are: a quoted "1" is
+            # not a member of the enum, and neither is $true.
+            $ok = ($want -is [int] -or $want -is [long] -or $want -is [byte] -or $want -is [double])
+            $matched = $false
+            if ($ok) {
+                for ($i = 1; $i -lt $row.choices.Count; $i++) {
+                    if ([string]$row.choices[$i][1] -eq [string][int]$want) {
+                        $script:state[$row.Id].Sel = $i; $matched = $true; break
+                    }
+                }
             }
+            if (-not $matched) { $script:importNotes += "$($row.key)=$want" }
         } elseif ($row.value -is [array]) {
             # Match the VALUE, not merely the key. Ticking on key presence alone
             # means an imported single-site exception such as
@@ -1370,7 +1320,7 @@ function Import-PresetIntoState($preset) {
             if ($wantList.Count -eq $mine.Count -and
                 -not (Compare-Object $wantList $mine)) {
                 $script:state[$row.Id].On = $true
-            }
+            } else { $script:importNotes += $row.key }
         } else {
             if ([string](ConvertTo-RegValue $want) -eq [string](ConvertTo-RegValue $row.value)) {
                 $script:state[$row.Id].On = $true
@@ -1379,13 +1329,22 @@ function Import-PresetIntoState($preset) {
     }
     $script:dnsState.Mode = 0
     $script:dnsState.Tmpl = ""
-    if ($preset.dns) {
-        $idx = [Array]::IndexOf($script:dnsModes, [string]$preset.dns)
-        if ($idx -ge 0) { $script:dnsState.Mode = $idx }
-    }
     if ($preset.tmpl) { $script:dnsState.Tmpl = [string]$preset.tmpl }
+    if ($preset.dns) {
+        # Case-insensitive, as main was: a hand-edited "Automatic" must not
+        # silently land on unmanaged and drop the resolver the file asked for.
+        $want = [string]$preset.dns
+        $canon = @($script:dnsModes | Where-Object { $_ -eq $want })
+        if ($canon.Count -gt 0) {
+            $script:dnsState.Mode = [Array]::IndexOf($script:dnsModes, $canon[0])
+        } else { $script:importNotes += "DnsMode=$want" }
+    } elseif ($script:dnsState.Tmpl) {
+        # A template with no mode means custom - main and the Python ports
+        # both take it that way; leaving it unmanaged deletes the resolver.
+        $script:dnsState.Mode = [Array]::IndexOf($script:dnsModes, "custom")
+    }
+    Enforce-ExclusionGroups
 }
-[System.Windows.Forms.Application]::EnableVisualStyles()
 
 $F = @{
     Bg=[System.Drawing.Color]::FromArgb(32,32,32);      Rail=[System.Drawing.Color]::FromArgb(27,27,27)
@@ -1682,11 +1641,8 @@ $bar.Add_Paint({
     # The buttons are child panels, so status text drawn past the leftmost
     # one lands on the bar behind them and shows through the gaps between
     # them (issue #20). Draw it into the room before that button instead.
-    # Fonts are in points, so from 125% scaling a single line no longer holds
-    # the part of an Apply message the user has to act on - but the 68 px bar
-    # fits two lines through 175%, so wrap to two when they fit and trim on a
-    # word boundary otherwise. The full message goes to a tooltip whenever
-    # any of it was cut. At 100% every one-line message paints as before.
+    # Set-Status has already grown the bar to fit the message, so this draws
+    # into whatever height that produced and only ellipsises past the cap.
     $room=$script:barButtonsLeft-(2*$script:BAR_PAD)
     $lineH=$g.MeasureString("Ag",$script:capFont,10000,$script:SF).Height
     # As many lines as the bar's CURRENT height holds - Set-Status has already
@@ -1791,7 +1747,10 @@ function New-BarButton([string]$label,[bool]$accent){
                     $m=$script:dnsModes[$script:dnsState.Mode]
                     if($m -ne "unmanaged"){
                         $out.DnsMode=$m
-                        if($script:dnsState.Tmpl){ $out.DnsTemplates=$script:dnsState.Tmpl }
+                        # Only the modes that actually write it. off/automatic
+                        # with a template is a combination Apply drops and the
+                        # Linux CLI rejects outright.
+                        if($script:dnsState.Tmpl -and ($m -eq "custom" -or $m -eq "secure")){ $out.DnsTemplates=$script:dnsState.Tmpl }
                     }
                     # Set-Content failure is NON-terminating, so without this
                     # the success status ran even when nothing was written -
@@ -1823,7 +1782,11 @@ function New-BarButton([string]$label,[bool]$accent){
                            $null -eq $cfg.Features){ throw "no Features block" }
                         Import-PresetIntoState @{features=$cfg.Features;dns=$cfg.DnsMode;tmpl=$cfg.DnsTemplates}
                         Refresh-View
-                        Set-Status "Imported from $([System.IO.Path]::GetFileName($dlg.FileName))"
+                        $msg="Imported from $([System.IO.Path]::GetFileName($dlg.FileName))"
+                        if($script:importNotes.Count -gt 0){
+                            $msg+=" Left unmanaged, because the imported value is not one this policy accepts: "+(($script:importNotes | Sort-Object) -join ", ")+"."
+                        }
+                        Set-Status $msg
                     } catch { Set-Status "Import failed - not a SlimBrave config" }
                 }
             }
@@ -1833,10 +1796,9 @@ function New-BarButton([string]$label,[bool]$accent){
     $bar.Controls.Add($b); return $b
 }
 # Packed from the bar's right edge leftward. Button widths come from the
-# rendered label and the fonts are in points, so the row grows with display
-# scaling while the bar stays 930 px wide - laid out left-to-right from a
-# fixed x it ran off the form above 100% (issue #20). Anchored right it grows
-# into the free middle instead, and the status text takes whatever is left.
+# rendered label, so the row's width follows the text - laid out left-to-right
+# from a fixed x it ran off the form above 100% (issue #20). Anchored right it
+# grows into the free middle instead, and the status text takes what is left.
 $specs=@(@("Export",$false),@("Import",$false),@("Re-sync",$false),@("Reset",$false),@("Apply Settings",$true))
 $bx=$bar.Width-$script:BAR_PAD
 for($i=$specs.Count-1;$i -ge 0;$i--){
@@ -2388,7 +2350,9 @@ function Get-SearchMatches([string]$query){
     # Words, not substrings: the previous version stripped a trailing "s" from
     # every haystack word and then matched anywhere inside the text, so "is"
     # became "i" and matched every row, and "ads" matched "read" and "shadow".
-    $tokens=@($query.ToLower() -split '\s+' | Where-Object { $_ })
+    # Same split as the haystack, so "Privacy & Security" and "De-AMP" match
+    # instead of returning nothing on the punctuation.
+    $tokens=@($query.ToLower() -split '[^a-z0-9]+' | Where-Object { $_ })
     if(-not $tokens){ return @() }
     $hits=@()
     for($ci=0;$ci -lt $script:cats.Count;$ci++){
