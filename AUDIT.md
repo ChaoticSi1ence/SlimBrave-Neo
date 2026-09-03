@@ -47,8 +47,8 @@ pin GPU acceleration on but not off.
   already audited and already written by this project is now reachable, as a
   mutually exclusive pair beside the force-on row, matching the three existing
   same-key pairs (`IncognitoModeAvailability`, `ChromeVariations`,
-  `DefaultBraveReferrersSetting`). Inventory 78 → **79 rows**, still 78 distinct
-  keys. All three implementations updated together; PS1↔Python parity green.
+  `DefaultBraveReferrersSetting`). Inventory 78 → **79 rows** over an unchanged **75 distinct keys** — the pair
+  shares one, as the three existing same-key pairs do. All three implementations updated together; PS1↔Python parity green.
 - **Deliberately in no preset.** Chromium's default is on, so forcing it off
   costs rendering performance and battery; it is a troubleshooting lever for a
   faulty GPU driver, a VM or RDP session, or screen-sharing corruption — not a
