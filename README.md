@@ -31,8 +31,8 @@ SlimBrave Neo uses Chromium enterprise managed policies to disable telemetry, bl
 > If you find a download claiming to be SlimBrave-Neo elsewhere, it is not from this project. See [`SECURITY.md`](SECURITY.md).
 
 > [!NOTE]
-> **Linux users: consider [Brave Origin](https://brave.com/origin/linux/nightly/) first.**
-> Brave Origin is a free, official Brave variant that ships with telemetry and bloat already removed. If you just want a clean Brave without configuration, that's the simpler path.
+> **Linux users: consider [Brave Origin](https://brave.com/origin/linux/) first.**
+> Brave Origin is a free, official Brave variant that ships with telemetry and bloat already removed. It has reached the Release channel on Linux and installs from Brave's own apt/rpm repositories as `brave-origin` — no longer a nightly preview. If you just want a clean Brave without configuration, that's the simpler path.
 >
 > The Linux version of SlimBrave Neo is still fully supported, and is the right tool if you want fine-grained control over individual policies, custom presets, or your own DoH templates beyond what Origin provides out of the box.
 
