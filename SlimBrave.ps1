@@ -111,242 +111,13 @@ if ([string]::IsNullOrWhiteSpace($OriginalSid)) {
 } else {
     $userRegistryPath = "Registry::HKEY_USERS\$OriginalSid\SOFTWARE\Policies\BraveSoftware\Brave"
 }
-$registryPath       = $machineRegistryPath
 
 Clear-Host
-# ---------------------------------------------------------------------------
-# DNS helper - handles both DnsOverHttpsMode and DnsOverHttpsTemplates
-# ---------------------------------------------------------------------------
 
-function Set-DnsSettings {
-    param (
-        [string] $dnsMode,
-        [string] $dnsTemplates,
-        [string] $MachinePath,
-        [string] $UserPath
-    )
-    # "secure" (and "custom", which resolves to it) with no template breaks
-    # every hostname lookup: Chromium applies the mode anyway, blanks the
-    # template pref, and secure mode has no plaintext fallback. The user
-    # can't undo it in brave://settings either, because the policy is
-    # machine-managed. "off"/"automatic" are fine without a template.
-    if ($dnsMode -in @("custom", "secure") -and [string]::IsNullOrWhiteSpace($dnsTemplates)) {
-        [System.Windows.Forms.MessageBox]::Show(
-            "'secure' and 'custom' DoH require a template URL (e.g. https://cloudflare-dns.com/dns-query).",
-            "Missing DoH Template",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
-        )
-        return $false
-    }
-
-    $resolvedMode = $dnsMode
-
-    if ($dnsMode -eq "custom" -or $dnsMode -eq "secure") {
-        # Chromium has no "custom" mode - a pinned resolver IS "secure" plus
-        # a template. Writing the template for a plain "secure" selection too
-        # keeps parity with the Linux/macOS scripts, so cross-platform
-        # configs with DnsMode=secure + DnsTemplates don't lose their
-        # resolver here.
-        $resolvedMode = "secure"
-        Set-ItemProperty -Path $MachinePath -Name "DnsOverHttpsTemplates" -Value $dnsTemplates -Type String -Force
-    } else {
-        # Remove the templates key when no template applies
-        if (Get-ItemProperty -Path $MachinePath -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue) {
-            Remove-ItemProperty -Path $MachinePath -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
-        }
-    }
-
-    Set-ItemProperty -Path $MachinePath -Name "DnsOverHttpsMode" -Value $resolvedMode -Type String -Force
-
-    # Scrub the user-scope twin whichever branch ran, so Brave never merges a
-    # stale HKCU DNS policy with the machine one. Per-branch placement would
-    # miss the template path.
-    if (Test-Path -Path $UserPath) {
-        Remove-ItemProperty -Path $UserPath -Name "DnsOverHttpsMode"      -ErrorAction SilentlyContinue
-        Remove-ItemProperty -Path $UserPath -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
-    }
-
-    return $true
-}
-
-# ---------------------------------------------------------------------------
-# List-policy helpers
-#
-# Chromium list policies on Windows live in a subkey with numbered REG_SZ
-# values (e.g. ...\BraveShieldsDisabledForUrls\1 = "https://*"). Writing the
-# list as a single REG_SZ holding a JSON array has no effect — Chromium
-# won't parse it, and the corresponding policy silently stays at its
-# default.
-# ---------------------------------------------------------------------------
-
-function Set-ListPolicy {
-    param (
-        [string]   $RegistryPath,
-        [string]   $Name,
-        [string[]] $Values
-    )
-    $listKey = Join-Path $RegistryPath $Name
-    # Drop any stale subkey and any legacy REG_SZ that used to live at the
-    # parent with the same name, so old broken SlimBrave writes are cleaned.
-    if (Test-Path $listKey) {
-        Remove-Item -Path $listKey -Recurse -Force
-    }
-    if (Get-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue) {
-        Remove-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue
-    }
-    New-Item -Path $listKey -Force | Out-Null
-    for ($i = 0; $i -lt $Values.Count; $i++) {
-        Set-ItemProperty -Path $listKey -Name ($i + 1) -Value $Values[$i] -Type String -Force
-    }
-}
-
-function Remove-ListPolicy {
-    param (
-        [string] $RegistryPath,
-        [string] $Name
-    )
-    $listKey = Join-Path $RegistryPath $Name
-    if (Test-Path $listKey) {
-        Remove-Item -Path $listKey -Recurse -Force
-    }
-    if (Get-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue) {
-        Remove-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue
-    }
-}
-
-function Repair-OneBravePrefs {
-    param ([string] $pref)
-    # Scrub one profile's Preferences file; returns the number of leaked
-    # Shields exceptions removed. Safe when the file or keys do not exist.
-    if (-not (Test-Path $pref)) { return 0 }
-
-    try {
-        $j = Get-Content $pref -Raw -Encoding UTF8 | ConvertFrom-Json
-    } catch {
-        return 0
-    }
-
-    $bs = $null
-    if ($j.profile -and $j.profile.content_settings -and $j.profile.content_settings.exceptions) {
-        $bs = $j.profile.content_settings.exceptions.braveShields
-    }
-    if (-not $bs) { return 0 }
-
-    $removed = 0
-    foreach ($pattern in @('http://*,*', 'https://*,*')) {
-        if ($bs.PSObject.Properties.Name -contains $pattern) {
-            $bs.PSObject.Properties.Remove($pattern)
-            $removed++
-        }
-    }
-
-    if ($removed -eq 0) { return 0 }
-
-    # Brave reads Preferences as compact UTF-8 JSON without BOM. Out-File
-    # default would write UTF-16/BOM and break Brave on next launch.
-    $json = $j | ConvertTo-Json -Depth 100 -Compress
-    $tmp = "$pref.slimbrave-tmp"
-    try {
-        [System.IO.File]::WriteAllText($tmp, $json, (New-Object System.Text.UTF8Encoding $false))
-        Move-Item -Force $tmp $pref
-    } catch {
-        if (Test-Path $tmp) { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
-        return 0
-    }
-
-    return $removed
-}
-
-function Repair-BravePrefs {
-    <#
-    .SYNOPSIS
-    Scrubs SlimBrave-leaked Shields exceptions from the user's Brave profiles.
-
-    .DESCRIPTION
-    Brave/Chromium writes managed *ForUrls content-setting policies through
-    to each profile's Preferences file. Removing the policy from the
-    registry does NOT roll those entries back — the profile keeps the
-    per-URL exceptions, so unchecking "Disable Brave Shields" leaves
-    shields stuck off. The exceptions land in every profile that was used
-    while the policy was active (Default, Profile 1, Profile 2, ...) and
-    in every installed channel (Stable, Beta, Nightly, Dev — the registry
-    policy applies to all of them), so every profile directory of every
-    channel is scrubbed, not just Stable's Default.
-
-    Returns a hashtable @{ Removed = N; Running = $true/$false; Skipped = $true/$false }.
-    Safe to call when files or keys do not exist.
-    #>
-    # Every Brave channel runs as brave.exe on Windows.
-    $running = ($null -ne (Get-Process brave -ErrorAction SilentlyContinue))
-    # Chromium serves prefs from an in-memory PrefService and rewrites the
-    # file on shutdown, so a scrub done now is thrown away the moment the
-    # user closes Brave - which is exactly what we tell them to do next.
-    # Skip the write and report it rather than claiming a clean that won't
-    # survive.
-    if ($running) {
-        return @{ Removed = 0; Running = $true; Skipped = $true }
-    }
-
-    # Prefer the invoking user's profile root over the elevated process's
-    # own, which under over-the-shoulder UAC belongs to the admin account.
-    $localAppData = $env:LOCALAPPDATA
-    if (-not [string]::IsNullOrWhiteSpace($script:OriginalLocalAppData)) {
-        $localAppData = $script:OriginalLocalAppData
-    }
-
-    $removed = 0
-    foreach ($channelDir in @('Brave-Browser', 'Brave-Browser-Beta', 'Brave-Browser-Nightly', 'Brave-Browser-Dev')) {
-        $userData = Join-Path $localAppData "BraveSoftware\$channelDir\User Data"
-        if (-not (Test-Path $userData)) { continue }
-        $profileDirs = Get-ChildItem -Path $userData -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' }
-        foreach ($dir in $profileDirs) {
-            $removed += Repair-OneBravePrefs (Join-Path $dir.FullName 'Preferences')
-        }
-    }
-
-    return @{ Removed = $removed; Running = $false; Skipped = $false }
-}
-
-function Test-FeatureValueMatches {
-    param($feature, $expected)
-    # List-typed features write a fixed canonical value (the Shields URL
-    # pattern list), so an imported list has to match it exactly. Accepting
-    # any list for the key would tick the row and then apply OUR wildcards -
-    # turning an imported single-site exception into Shields-off for the
-    # whole web, reported as a successful import.
-    if ($feature.Type -eq "List") {
-        $exp = @($expected      | ForEach-Object { [string]$_ })
-        $own = @($feature.Value | ForEach-Object { [string]$_ })
-        return (($exp.Count -eq $own.Count) -and -not (Compare-Object $exp $own))
-    }
-    if ($feature.Type -eq "DWord") {
-        try { return ([int]$feature.Value -eq [int]$expected) }
-        catch { return $false }
-    }
-    return ($feature.Value.ToString() -eq $expected.ToString())
-}
-
-function Test-ListPolicyMatches {
-    param (
-        [string]   $RegistryPath,
-        [string]   $Name,
-        [string[]] $Expected
-    )
-    $listKey = Join-Path $RegistryPath $Name
-    if (-not (Test-Path $listKey)) { return $false }
-    $props = Get-ItemProperty -Path $listKey -ErrorAction SilentlyContinue
-    if (-not $props) { return $false }
-    $actual = @()
-    foreach ($p in $props.PSObject.Properties) {
-        if ($p.Name -match '^\d+$') { $actual += [string]$p.Value }
-    }
-    foreach ($e in $Expected) {
-        if ($actual -notcontains $e) { return $false }
-    }
-    return $true
-}
+# The old three-column engine used to live here. Its functions were defined
+# a second time by the interface's engine further down, and PowerShell binds
+# the LATER definition - so this block was dead at runtime while still
+# matching every grep-based test. Removed; see test_ps1_no_function_is_defined_twice.
 
 function Test-ListPolicyIsExactly {
     param (
@@ -933,20 +704,12 @@ $script:embeddedPresets = [ordered]@{
 }
 
 # ---------------------------------------------------------------------------
-# Column layout
+# Adapter
 #
-# Three fixed columns, always. The window is a fixed size that fits on a
-# 1366x768 display; each column is its own AutoScroll panel, so a column
-# whose categories are taller than the panel scrolls on its own and the DNS
-# row and the button row below never move.
-#
-# This deliberately replaces the old height heuristic (measure the natural
-# two-column window, compare it against the working area, reflow to three
-# columns if it doesn't fit, and cap the form height as a last resort). That
-# constant was wrong by a few pixels in both directions across DPI scales,
-# and its safety net then produced the whole-window scrollbar it existed to
-# prevent. Nothing measures the screen any more, so there is no constant to
-# drift: adding rows makes a column scroll instead of resizing the window.
+# Reshapes the feature tables above into the rows the interface reads. The
+# tables stay verbatim - they are the single source of truth, shared with the
+# Python ports and parsed by the test suite - and nothing below is a second
+# copy of a policy. Each row's description is its existing Tip.
 # ---------------------------------------------------------------------------
 
 $categories = @(
@@ -1037,17 +800,21 @@ foreach ($name in $script:embeddedPresets.Keys) {
         tmpl     = [string]$obj.DnsTemplates
     }
 }
-# SlimBrave Fluent - policy engine. Dot-sourced by fluent3.ps1.
-# Ported from SlimBrave.ps1 with the same semantics, including the fixes that
-# shipped in v2.0.x: scoped Reset, and DNS "secure" requiring a template.
+# Policy engine - registry read/write, DNS, leaked-prefs repair. Same
+# semantics as v2.0.x main: scoped Reset, and DNS "secure" requiring a template.
 
 $script:dnsState = @{ Mode = 0; Tmpl = "" }
 
 # ---------------------------------------------------------------------------
 # REGISTRY
 # ---------------------------------------------------------------------------
-$script:machineReg = "HKLM:\SOFTWARE\Policies\BraveSoftware\Brave"
-$script:userReg    = "HKCU:\SOFTWARE\Policies\BraveSoftware\Brave"
+# The user-scope path is the SID-aware one computed at the top of the file.
+# A literal HKCU here is the elevated process's OWN hive, which under
+# over-the-shoulder UAC belongs to the approving admin, not the user whose
+# policy is being scrubbed. This assignment was the missing half of the
+# $OriginalSid restoration in 94a736a.
+$script:machineReg = $machineRegistryPath
+$script:userReg    = $userRegistryPath
 
 function Test-Elevated {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -1119,6 +886,15 @@ function ConvertTo-RegValue($value) {
     return $value
 }
 
+# ---------------------------------------------------------------------------
+# List-policy helpers
+#
+# Chromium list policies on Windows live in a subkey with numbered REG_SZ
+# values (e.g. ...\BraveShieldsDisabledForUrls\1 = "https://*"). Writing the
+# list as a single REG_SZ holding a JSON array has no effect - Chromium
+# won't parse it, and the corresponding policy silently stays at its
+# default.
+# ---------------------------------------------------------------------------
 function Set-ListPolicy([string]$RegistryPath, [string]$Name, [string[]]$Values) {
     $listKey = Join-Path $RegistryPath $Name
     if (Test-Path $listKey) { Remove-Item -Path $listKey -Recurse -Force }
@@ -1655,7 +1431,6 @@ $script:btnFont  =New-Object System.Drawing.Font "Segoe UI",9.5
 $script:pTitle   =New-Object System.Drawing.Font "Segoe UI Semibold",11
 try { $script:iconFont = New-Object System.Drawing.Font "Segoe MDL2 Assets",11 }
 catch { $script:iconFont = New-Object System.Drawing.Font "Segoe UI",10 }
-$script:chevFont = New-Object System.Drawing.Font "Segoe UI",9
 
 # --------------------------------------------------------------- nav rail
 $rail=New-Object System.Windows.Forms.Panel
@@ -2098,7 +1873,12 @@ function New-FluentRow($row,[int]$y){
         param($s,$ev)
         $st=$s.Tag
         $ecol=$script:EXP_X; if($st.IsChoice){ $ecol=$script:EXP_X_CHOICE }
-        if($ev.X -ge $ecol -and $ev.X -le ($ecol+26) -and $ev.Y -le 50){
+        # One hit-test for click, hover and highlight. The bare rectangle that
+        # used to sit here ignored whether the row HAS a chevron, so a click in
+        # empty row space flipped the expander on rows with no expander - and
+        # from 125% scaling visibly grew them. Zone-Of is what MouseMove uses.
+        $zone=Zone-Of $s $ev.X $ev.Y
+        if($zone -eq "exp"){
             $st.Open=-not $st.Open
             if($st.Open){
                 $g=$s.CreateGraphics()
@@ -2111,7 +1891,7 @@ function New-FluentRow($row,[int]$y){
             $s.Invalidate(); return
         }
         if($st.IsChoice){
-            if((Zone-Of $s $ev.X $ev.Y) -eq "ctl"){
+            if($zone -eq "ctl"){
                 $menu=New-Object System.Windows.Forms.ContextMenuStrip
                 $menu.BackColor=$script:F.RowHot
                 $menu.ForeColor=$script:F.Text
@@ -2138,7 +1918,7 @@ function New-FluentRow($row,[int]$y){
         else {
             # toggles fire ONLY inside the pill (plus padding). Clicking a
             # label should never silently flip a machine-wide policy.
-            if((Zone-Of $s $ev.X $ev.Y) -ne "ctl"){ return }
+            if($zone -ne "ctl"){ return }
             $script:state[$st.Row.Id].On = -not $script:state[$st.Row.Id].On
             if($script:state[$st.Row.Id].On -and $st.Row.group){
                 # exclusivity applies to the MODEL, so it holds for group
@@ -2412,7 +2192,7 @@ function Build-DnsPage {
                 $box.Enabled=($m -eq "custom" -or $m -eq "secure")
                 if(-not $box.Enabled){ $box.ForeColor=[System.Drawing.Color]::FromArgb(96,96,96) }
                 elseif(-not [string]::IsNullOrEmpty($box.Tag)){ $box.ForeColor=$script:F.Text }
-                Set-Status "DNS mode: $m (prototype)"
+                Set-Status "DNS mode: $m"
                 $d.Card.Invalidate()
             })
             $i++

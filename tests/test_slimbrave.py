@@ -2371,3 +2371,54 @@ def test_ps1_action_bar_row_is_right_anchored_and_status_is_bounded():
     assert re.search(r"if\s*\(\s*\$room\s*-gt\s*0\s*\)\s*\{[^}]*DrawString", paint), (
         "the status is drawn even when there is no room for it"
     )
+
+
+# ---------------------------------------------------------------------------
+# Hazards the Fluent review uncovered
+# ---------------------------------------------------------------------------
+
+
+def test_ps1_no_function_is_defined_twice():
+    """PowerShell silently binds the LATER of two same-named function
+    definitions. The prototype engine survived graduation as a full second
+    copy of four functions, dead at runtime - while every grep-based test in
+    this file still matched it. A guard removed from the live copy would have
+    passed as long as the dead copy kept it."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    names = re.findall(r"^function\s+([A-Za-z][\w-]*)", text, re.MULTILINE)
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    assert not dupes, f"defined more than once (later definition wins silently): {dupes}"
+
+
+def test_ps1_user_scope_registry_path_is_sid_aware():
+    """Under over-the-shoulder UAC the elevated process's HKCU is the approving
+    admin's hive. The invoking user's hive is addressed by SID under
+    HKEY_USERS instead. 94a736a restored the $OriginalSid parameter but the
+    live $script:userReg still hard-coded HKCU - only the dead engine used the
+    SID-aware path. Pin both halves."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    assert re.search(r"^\s*\[string\]\s*\$OriginalSid", text, re.MULTILINE), (
+        "$OriginalSid is not a parameter"
+    )
+    assert re.search(r"HKEY_USERS\\\$OriginalSid\\", text), "no SID-addressed user hive path"
+    assert re.search(r"^\$script:userReg\s*=\s*\$userRegistryPath", text, re.MULTILINE), (
+        "$script:userReg is not derived from the SID-aware $userRegistryPath"
+    )
+    assert not re.search(r"^\$script:userReg\s*=\s*\"HKCU:", text, re.MULTILINE), (
+        "$script:userReg hard-codes HKCU again"
+    )
+
+
+def test_ps1_row_mousedown_uses_zone_of_for_the_expander():
+    """The expander click used a bare rectangle that ignored whether the row
+    has a chevron, so empty row space toggled rows with no expander. Click,
+    hover and highlight must share the one resolver, Zone-Of."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    start = text.index("function New-FluentRow")
+    body = text[start:text.index("\n}\n", start)]
+    md = body[body.index("Add_MouseDown"):]
+    assert "$ev.Y -le 50" not in md, "the expander is hit-tested with a bare rectangle again"
+    z = md.find("Zone-Of $s $ev.X $ev.Y")
+    e = md.find('"exp"')
+    assert 0 <= z < e, "MouseDown does not resolve the zone before testing for the expander"
+
