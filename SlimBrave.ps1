@@ -1442,6 +1442,19 @@ $form.Text = "SlimBrave Neo - Fluent GUI (beta)"
 # yield - the columns do not reflow - so it is S'd and may overhang.
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedSingle
 $form.MaximizeBox = $false
+# The palette is dark but .NET Framework never asks DWM for a dark title bar,
+# so the window opened under Windows' light frame - the P/Invoke for this has
+# been declared since the DPI block and never called. Attribute 20 is
+# DWMWA_USE_IMMERSIVE_DARK_MODE on Windows 10 20H1+ and 11; builds 1809-1903
+# used 19. Best effort: any failure just leaves the light frame.
+$form.Add_HandleCreated({
+    try {
+        $on=1
+        if([SlimBrave.DpiHelper]::DwmSetWindowAttribute($this.Handle,20,[ref]$on,4) -ne 0){
+            [void][SlimBrave.DpiHelper]::DwmSetWindowAttribute($this.Handle,19,[ref]$on,4)
+        }
+    } catch {}
+})
 # Non-client height of THIS window style, from the same AdjustWindowRectEx
 # WinForms sizes the window with. SystemInformation.CaptionHeight +
 # 2*FixedFrameBorderSize.Height says 29 on Windows 11 where the frame is 39.
@@ -1451,6 +1464,15 @@ $chromeH=$form.Height-$form.ClientSize.Height
 # position come from one monitor. Never grows past the design; never
 # shrinks below ~4 rows (then it overhangs rather than the page vanishing).
 $wa=[System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+# Width has no fallback - the columns do not reflow - so on a screen too
+# narrow for S(1180) the FACTOR yields instead: it is clamped to what fits,
+# and the fonts, built from the same factor below, shrink with the grid.
+# 1920-wide at 175%+ and 1366-wide at 125% are the real cases. Floor 0.75:
+# below that the text is unreadable and overhanging is the lesser evil.
+# This must run before the first S() call, which is the line after it.
+$chromeW=$form.Width-$form.ClientSize.Width
+$fitDpi=[double]($wa.Width-$chromeW)/1180.0
+if($fitDpi -lt $script:DPI){ $script:DPI=[math]::Max(0.75,$fitDpi) }
 $clientH=[math]::Max((S 300),[math]::Min((S 760),($wa.Height-$chromeH)))
 $form.ClientSize = New-Object System.Drawing.Size (S 1180), $clientH
 # Windows' default placement keeps a window inside the MONITOR, not the work
@@ -1463,15 +1485,25 @@ $form.Location = New-Object System.Drawing.Point ($wa.X+[math]::Max(0,[int](($wa
 $form.BackColor = $F.Bg
 Enable-DoubleBuffer $form
 
-$script:titleFont=New-Object System.Drawing.Font "Segoe UI Semibold",16
-$script:crumbFont=New-Object System.Drawing.Font "Segoe UI",9
-$script:navFont  =New-Object System.Drawing.Font "Segoe UI",10
-$script:rowFont  =New-Object System.Drawing.Font "Segoe UI",10
-$script:capFont  =New-Object System.Drawing.Font "Segoe UI",8.5
-$script:btnFont  =New-Object System.Drawing.Font "Segoe UI",9.5
-$script:pTitle   =New-Object System.Drawing.Font "Segoe UI Semibold",11
-try { $script:iconFont = New-Object System.Drawing.Font "Segoe MDL2 Assets",11 }
-catch { $script:iconFont = New-Object System.Drawing.Font "Segoe UI",10 }
+# Fonts are authored in points but built in PIXELS at pt*96/72*$script:DPI -
+# exactly what a point font renders as at the system DPI, so at any normal
+# scale nothing changes - except that the size follows $script:DPI. That only
+# matters when the factor was clamped below the display's own DPI to keep the
+# window inside the screen width (form block above): grid and glyphs then
+# shrink together instead of the text outgrowing its rows.
+function New-UiFont($family,[double]$pt){
+    return New-Object System.Drawing.Font($family,[float]($pt*96.0/72.0*$script:DPI),
+        [System.Drawing.FontStyle]::Regular,[System.Drawing.GraphicsUnit]::Pixel)
+}
+$script:titleFont=New-UiFont "Segoe UI Semibold" 16
+$script:crumbFont=New-UiFont "Segoe UI" 9
+$script:navFont  =New-UiFont "Segoe UI" 10
+$script:rowFont  =New-UiFont "Segoe UI" 10
+$script:capFont  =New-UiFont "Segoe UI" 8.5
+$script:btnFont  =New-UiFont "Segoe UI" 9.5
+$script:pTitle   =New-UiFont "Segoe UI Semibold" 11
+try { $script:iconFont = New-UiFont "Segoe MDL2 Assets" 11 }
+catch { $script:iconFont = New-UiFont "Segoe UI" 10 }
 
 # --------------------------------------------------------------- nav rail
 $rail=New-Object System.Windows.Forms.Panel
@@ -1483,8 +1515,8 @@ $rail.Size=New-Object System.Drawing.Size (S 250),$form.ClientSize.Height
 $rail.Anchor=[System.Windows.Forms.AnchorStyles]"Top,Bottom,Left"
 $rail.BackColor=$F.Rail; Enable-DoubleBuffer $rail; $form.Controls.Add($rail)
 
-$script:railTitleFont=New-Object System.Drawing.Font "Segoe UI Semibold",15
-$script:railSubFont=New-Object System.Drawing.Font "Segoe UI",9
+$script:railTitleFont=New-UiFont "Segoe UI Semibold" 15
+$script:railSubFont=New-UiFont "Segoe UI" 9
 
 $railHead=New-Object System.Windows.Forms.Panel
 $railHead.Location=New-Object System.Drawing.Point 0,(S 14)
@@ -1501,7 +1533,7 @@ $railHead.Add_Paint({
     $tile=New-Object System.Drawing.RectangleF (S 16),(S 8),(S 32),(S 32)
     Fill-Round $g $tile (S 8) $script:F.AccentDim
     $ib=New-Object System.Drawing.SolidBrush $script:F.Accent
-    $glyphFont=New-Object System.Drawing.Font $script:iconFont.FontFamily,14
+    $glyphFont=New-UiFont $script:iconFont.FontFamily 14
     $gl=[char]0xE72E
     $sz=$g.MeasureString($gl,$glyphFont,1000,$script:SF)
     $g.DrawString($gl,$glyphFont,$ib,($tile.X+($tile.Width-$sz.Width)/2),($tile.Y+($tile.Height-$sz.Height)/2),$script:SF)
@@ -1628,6 +1660,10 @@ $script:BAR_PAD=S 20   # status text left margin, button row right margin
 $script:BAR_GAP=S 8    # between buttons
 $script:barButtonsLeft=$bar.Width   # x of the leftmost button, set once the row is built
 $script:barTip=New-Object System.Windows.Forms.ToolTip
+# The tooltip carries the full status when the bar had to cut it. The 5 s
+# default hid a 161-character repair note before it could be read; 30 s is
+# just under the control's cap.
+$script:barTip.AutoPopDelay=30000; $script:barTip.InitialDelay=300; $script:barTip.ReshowDelay=100
 $bar.Add_Paint({
     param($s,$e); $g=$e.Graphics
     $p=New-Object System.Drawing.Pen $script:F.RowEdge
@@ -1689,15 +1725,15 @@ function New-BarButton([string]$label,[bool]$accent){
     $b.Add_MouseLeave({$this.Tag.Hot=$false;$this.Invalidate()})
     $b.Add_Click({
         switch($this.Tag.L){
-            "Apply Settings" { if(Invoke-ApplyPolicy){ Select-Page $script:sel } }
+            "Apply Settings" { if(Invoke-ApplyPolicy){ Refresh-View } }
             "Reset" {
                 $ans=[System.Windows.Forms.MessageBox]::Show(
                     "Remove every policy SlimBrave Neo manages? Policies set by group policy or another tool are left alone.",
                     "Confirm reset",[System.Windows.Forms.MessageBoxButtons]::YesNo,
                     [System.Windows.Forms.MessageBoxIcon]::Warning)
-                if($ans -eq "Yes"){ if(Invoke-ResetPolicy){ Select-Page $script:sel } }
+                if($ans -eq "Yes"){ if(Invoke-ResetPolicy){ Refresh-View } }
             }
-            "Re-sync" { Sync-FromRegistry; Select-Page $script:sel }
+            "Re-sync" { Sync-FromRegistry; Refresh-View }
             "Export" {
                 $dlg=New-Object System.Windows.Forms.SaveFileDialog
                 $dlg.Filter="JSON files (*.json)|*.json"
@@ -1743,7 +1779,7 @@ function New-BarButton([string]$label,[bool]$accent){
                            $null -eq $cfg.PSObject.Properties['Features'] -or
                            $null -eq $cfg.Features){ throw "no Features block" }
                         Import-PresetIntoState @{features=$cfg.Features;dns=$cfg.DnsMode;tmpl=$cfg.DnsTemplates}
-                        Select-Page $script:sel
+                        Refresh-View
                         Set-Status "Imported from $([System.IO.Path]::GetFileName($dlg.FileName))"
                     } catch { Set-Status "Import failed - not a SlimBrave config" }
                 }
@@ -2009,11 +2045,18 @@ function Reflow-Page {
     $keep=[Math]::Abs($page.AutoScrollPosition.Y)
     $page.SuspendLayout()
     $page.AutoScrollPosition=New-Object System.Drawing.Point 0,0
-    $y=S 4
+    # Same strides as Select-Page and Show-SearchResults lay the page out
+    # with: header S 38 + S 4, row S 64 + S 4, and on All Options an S 10 gap
+    # before each category after the first. This used to add S 6 under every
+    # header instead, so the first expand or collapse shifted every row on a
+    # page with section headers.
+    $inSearch=($script:searchBox -and -not [string]::IsNullOrWhiteSpace($script:searchBox.Text))
+    $y=S 4; $first=$true
     foreach($p in $script:rowPanels){
+        if(($null -ne $p.Tag.T) -and -not $first -and -not $inSearch){ $y+=S 10 }
         $p.Location=New-Object System.Drawing.Point (S 2),$y
         $y+=$p.Height+(S 4)
-        if($null -ne $p.Tag.T){ $y+=S 6 }   # extra air under a section header
+        $first=$false
     }
     $page.ResumeLayout()
     $page.AutoScrollPosition=New-Object System.Drawing.Point 0,$keep
@@ -2092,7 +2135,7 @@ function New-PresetCard($preset,[int]$y){
         param($s,$ev)
         if(-not (Test-InPresetButton $ev.X $ev.Y)){ return }
         Import-PresetIntoState $s.Tag.P
-        Select-Page $script:sel
+        Refresh-View
         Set-Status "$($s.Tag.P.name) loaded - $($s.Tag.P.count) policies staged. Nothing is written until Apply."
     })
     return $p
@@ -2192,13 +2235,6 @@ function Build-DnsPage {
         if([string]::IsNullOrEmpty($this.Tag)){ $this.Text="" }
         $this.ForeColor=$script:F.Text
     })
-    $tmpl.Add_Leave({
-        $this.Tag=$this.Text
-        Sync-TmplHint $this
-    })
-    $tmpl.Add_TextChanged({
-        if($this.Focused){ $this.Tag=$this.Text }
-    })
     Sync-TmplHint $tmpl
 
     $card.Add_MouseMove({
@@ -2249,24 +2285,60 @@ function Build-DnsPage {
     $m0=$script:dnsModes[$script:dnsState.Mode]
     $tmpl.Enabled=($m0 -eq "custom" -or $m0 -eq "secure")
     if($script:dnsState.Tmpl){ $tmpl.Tag=$script:dnsState.Tmpl; $tmpl.Text=$script:dnsState.Tmpl; $tmpl.ForeColor=$F.Text }
+    # One TextChanged and one Leave. The prototype's hint-mirroring pair and
+    # the engine's validating pair were both registered, so each event ran
+    # twice in registration order - benign, but order-dependent.
     $tmpl.Add_TextChanged({ if($this.Focused){ $this.Tag=$this.Text; $script:dnsState.Tmpl=$this.Text } })
     $tmpl.Add_Leave({
+        $this.Tag=$this.Text
         # normalise on the way out so the stored value is what Apply writes
         if(-not [string]::IsNullOrWhiteSpace($this.Tag)){
             $chk=Test-DohTemplate $this.Tag
             if($chk.Ok){ $this.Tag=$chk.Value; $this.Text=$chk.Value; $script:dnsState.Tmpl=$chk.Value }
             else { Set-Status "DoH template: $($chk.Reason)" }
         }
+        Sync-TmplHint $this
     })
     $page.Controls.Add($card)
 }
 
 # --------------------------------------------------------------- page switch
+function Get-SearchStem([string]$w){
+    # "passwords" -> "password", but "dns", "https" and "class" keep their s:
+    # only a trailing s after at least three other letters, not doubled, is
+    # treated as a plural.
+    if($w.Length -ge 4 -and $w.EndsWith("s") -and -not $w.EndsWith("ss")){ return $w.Substring(0,$w.Length-1) }
+    return $w
+}
+function Get-SearchWords([string]$text){
+    # The words of a haystack, each present as itself and as its stem. Policy
+    # keys are CamelCase, so they are split at case changes too - a user who
+    # types "blocklist" should find ExtensionInstallBlocklist - and kept whole
+    # as well, so a pasted key still matches by prefix.
+    $out=@{}
+    $spaced=$text -creplace '([a-z0-9])([A-Z])','$1 $2'
+    foreach($w in (("$text $spaced").ToLower() -split '[^a-z0-9]+')){
+        if($w){ $out[$w]=$true; $out[(Get-SearchStem $w)]=$true }
+    }
+    return $out
+}
+function Test-SearchHit($words,[string]$tok,[string]$stem){
+    # A token hits when it IS a word (or a word's stem), or when it is the
+    # start of one and long enough to mean something - three characters, so
+    # "tel" finds telemetry but "is" cannot match every row that has an "i".
+    if($words.ContainsKey($tok) -or $words.ContainsKey($stem)){ return $true }
+    if($stem.Length -ge 3){
+        foreach($w in $words.Keys){ if($w.StartsWith($stem)){ return $true } }
+    }
+    return $false
+}
 function Get-SearchMatches([string]$query){
     # Token matching over name + key + full description, so a word that only
     # appears in the prose still finds the row. Each token must hit somewhere
     # (AND), which makes "password leak" narrower than either word alone.
-    # Trailing "s" is trimmed on both sides so "passwords" finds "password".
+    # Words, not substrings: the previous version stripped a trailing "s" from
+    # every haystack word and then matched anywhere inside the text, so "is"
+    # became "i" and matched every row, and "ads" matched "read" and "shadow".
     $tokens=@($query.ToLower() -split '\s+' | Where-Object { $_ })
     if(-not $tokens){ return @() }
     $hits=@()
@@ -2276,16 +2348,14 @@ function Get-SearchMatches([string]$query){
             $name=[string]$row.name
             $desc=[string]$row.full
             $key=[string]$row.key
-            $hay=("$name $key $desc $($cat.name)").ToLower()
-            $stemHay=($hay -replace 's\b','')
-            $titleHay=("$name $key").ToLower()
-            $titleStem=($titleHay -replace 's\b','')
+            $hayWords=Get-SearchWords "$name $key $desc $($cat.name)"
+            $titleWords=Get-SearchWords "$name $key"
             $all=$true; $score=0
             foreach($tok in $tokens){
-                $stem=$tok -replace 's$',''
-                if($hay.Contains($tok) -or $stemHay.Contains($stem)){
+                $stem=Get-SearchStem $tok
+                if(Test-SearchHit $hayWords $tok $stem){
                     # a title or key hit ranks above a description-only hit
-                    if($titleHay.Contains($tok) -or $titleStem.Contains($stem)){ $score+=10 }
+                    if(Test-SearchHit $titleWords $tok $stem){ $score+=10 }
                     else { $score+=3 }
                 } else { $all=$false; break }
             }
@@ -2320,16 +2390,25 @@ function Show-SearchResults([string]$query){
         foreach($h in $hits){
             if($h.Cat -ne $lastCat){
                 $hd=New-SectionHeader $h.Cat $y 0
-                $page.Controls.Add($hd); $script:rowPanels+=$hd; $y+=S 42
+                $page.Controls.Add($hd); $script:rowPanels+=$hd; $y+=$hd.Height+(S 4)
                 $lastCat=$h.Cat
             }
             $rp=New-FluentRow $h.Row $y
-            $page.Controls.Add($rp); $script:rowPanels+=$rp; $y+=S 68
+            $page.Controls.Add($rp); $script:rowPanels+=$rp; $y+=$rp.Height+(S 4)
         }
     }
     $page.ResumeLayout()
     $page.AutoScrollPosition=New-Object System.Drawing.Point 0,0
     $page.Invalidate($true); $page.Update()
+}
+
+function Refresh-View {
+    # Rebuild whatever the user is looking at. Apply, Reset, Re-sync, Import
+    # and a preset Load used to call Select-Page directly, which replaced an
+    # open search-results view with the page behind it while the box kept
+    # its query.
+    $q=""; if($script:searchBox){ $q=$script:searchBox.Text.Trim() }
+    if([string]::IsNullOrWhiteSpace($q)){ Select-Page $script:sel } else { Show-SearchResults $q }
 }
 
 function Select-Page([int]$idx){
@@ -2357,10 +2436,10 @@ function Select-Page([int]$idx){
         $y=S 4; $total=0
         foreach($cat in $script:cats){
             $hd=New-SectionHeader $cat.name $y $cat.rows.Count
-            $page.Controls.Add($hd); $script:rowPanels+=$hd; $y+=S 42
+            $page.Controls.Add($hd); $script:rowPanels+=$hd; $y+=$hd.Height+(S 4)
             foreach($row in $cat.rows){
                 $rp=New-FluentRow $row $y; $page.Controls.Add($rp)
-                $script:rowPanels+=$rp; $y+=S 68; $total++
+                $script:rowPanels+=$rp; $y+=$rp.Height+(S 4); $total++
             }
             $y+=S 10
         }
@@ -2372,7 +2451,7 @@ function Select-Page([int]$idx){
         $cat=$script:cats[$idx-2]; $y=S 4
         foreach($row in $cat.rows){
             $rp=New-FluentRow $row $y; $page.Controls.Add($rp)
-            $script:rowPanels+=$rp; $y+=S 68
+            $script:rowPanels+=$rp; $y+=$rp.Height+(S 4)
         }
     }
     $page.ResumeLayout()

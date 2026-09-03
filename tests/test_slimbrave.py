@@ -2492,3 +2492,28 @@ def test_ps1_gui_paint_calls_take_no_bare_pixel_literal():
             bad.append(line.strip())
     assert not bad, "bare pixel literal(s) in GUI paint calls - wrap each in S():\n" + "\n".join(bad)
 
+
+def test_ps1_dark_title_bar_is_actually_requested():
+    """DwmSetWindowAttribute was declared in the DPI block and never called,
+    so the dark UI opened under Windows' light title bar. Same class as the
+    ownership guard that was defined and never used: pin the call."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    calls = re.findall(r"::DwmSetWindowAttribute\(", text)
+    assert len(calls) >= 1, "DwmSetWindowAttribute is declared but never called"
+    assert "Add_HandleCreated" in text, "the dark-mode attribute must be set once the handle exists"
+
+
+def test_ps1_gui_fonts_follow_the_layout_factor():
+    """Fonts are built through New-UiFont in pixel units from $script:DPI, so
+    that when the factor is clamped to the screen width the glyphs shrink
+    with the grid. A point-unit font in the GUI region would outgrow its row
+    on exactly the screens the clamp exists for."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    gui = text[text.index("$form = New-Object System.Windows.Forms.Form"):]
+    assert 'New-Object System.Drawing.Font "' not in gui, "a GUI font is built in points, bypassing the factor"
+    assert "function New-UiFont" in text
+    assert re.search(r"\$fitDpi\s*=", text), "the width-factor clamp is missing"
+    assert text.index("$fitDpi") < text.index("$clientH=[math]::Max"), (
+        "the factor must be clamped before the first S() call"
+    )
+
