@@ -161,10 +161,18 @@ powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1
 **No git?** One line:
 
 ```powershell
-iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/main/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; .\SlimBrave.ps1
+iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/main/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1
 ```
 
 This pulls the current `main`. If you'd rather pin an exact, unchanging version and check it against a published checksum before running, [`SECURITY.md`](SECURITY.md) covers tagged releases and SHA-256 sums.
+
+> **"running scripts is disabled on this system"?**
+> That is Windows' default execution policy (`Restricted`) refusing to run any
+> `.ps1`, and it is why both commands above end in
+> `powershell -ExecutionPolicy Bypass -File` rather than `.\SlimBrave.ps1`.
+> The bypass applies to that one launch only — it changes no setting on your
+> machine, and you never need `Set-ExecutionPolicy`. If you hit the error, you
+> ran a copy of the one-liner without that part; re-run the version above.
 
 **Prefer the previous layout?** [v2.1.0](https://github.com/ChaoticSi1ence/SlimBrave-Neo/releases/tag/v2.1.0)
 is the last release with the three-column window. It keeps working; it just won't
@@ -177,7 +185,7 @@ powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1
 ```
 
 ```powershell
-iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/v2.1.0/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; .\SlimBrave.ps1
+iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/v2.1.0/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1
 ```
 
 A tag never moves, so both of those fetch the same file every time.
