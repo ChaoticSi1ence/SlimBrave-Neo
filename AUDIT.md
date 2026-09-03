@@ -28,10 +28,36 @@ label comes from that probe, never from the mapping above.
 ## Re-audit log
 
 Every pass records the upstream revisions it read, so the next one can diff
-against them instead of re-verifying 75 keys from scratch. A row marked
+against them instead of re-verifying every key from scratch. A row marked
 **stale as of `<date>`** below has been superseded by a later pass: the
 original wording is kept because the *reasoning* is the audit trail, and
 knowing why a decision was made — and what changed under it — is the point.
+
+### 2026-09-03 — targeted: `HardwareAccelerationModeEnabled` second value
+
+**Not a full pass.** One key re-read to answer a user report that the tool could
+pin GPU acceleration on but not off.
+
+- **Read at:** `chromium/main`,
+  `components/policy/resources/templates/policy_definitions/Miscellaneous/HardwareAccelerationModeEnabled.yaml`
+  (HTTP 200). `schema: type boolean`, `default: true`, `supported_on: chrome.*:46-`,
+  `dynamic_refresh: false`, `per_profile: false`. Both members named in `items:`
+  — `true` "Enable graphics acceleration", `false` "Disable graphics acceleration".
+- **Verdict:** no new key and no new policy surface. The `false` state of a key
+  already audited and already written by this project is now reachable, as a
+  mutually exclusive pair beside the force-on row, matching the three existing
+  same-key pairs (`IncognitoModeAvailability`, `ChromeVariations`,
+  `DefaultBraveReferrersSetting`). Inventory 78 → **79 rows**, still 78 distinct
+  keys. All three implementations updated together; PS1↔Python parity green.
+- **Deliberately in no preset.** Chromium's default is on, so forcing it off
+  costs rendering performance and battery; it is a troubleshooting lever for a
+  faulty GPU driver, a VM or RDP session, or screen-sharing corruption — not a
+  privacy posture. Same reasoning that keeps the device-permission guards out of
+  every preset.
+- **No point release.** Nothing shipped in v2.2.0 changed behaviour; this exposes
+  a third state of an existing key and rides the next release.
+- **Not re-verified in this pass:** every other key, and the upstream revisions
+  the 2026-08-29 entry pinned. Those still stand as that pass left them.
 
 ### 2026-08-29 — all 75 keys re-verified, no change required
 
@@ -123,7 +149,7 @@ knowing why a decision was made — and what changed under it — is the point.
 | SafeSitesFilterBehavior | ✅ active (cr69+) | int enum | 1 (= filter) | **added July 2026**; not a local filter — it sends every navigation URL, iframes included, to Google's Safe Search API for classification (`tags: [filtering, google-sharing]`). Disclosed in the tooltip and the README because the same tool ships `SafeBrowsingProtectionLevel = 0` |
 | BrowserGuestModeEnabled | ✅ active (cr38+) | bool | false | **added July 2026**; guest windows bypass profile restrictions — parental hole |
 | HighEfficiencyModeEnabled | ✅ active (cr108+) | bool | true | **added July 2026**; forces Memory Saver tab discarding on |
-| HardwareAccelerationModeEnabled | ✅ active (cr46+) | bool | true | **added July 2026**; `dynamic_refresh: false` — needs browser restart |
+| HardwareAccelerationModeEnabled | ✅ active (cr46+) | bool | true / false | **added July 2026**, opposite value **September 2026**; both states exposed as a mutually exclusive pair (`Group = "hwaccel"`) because unset is not the same as off — Chromium's default is on, so absent means user-controlled and `false` means forced off. `dynamic_refresh: false` — needs browser restart |
 | EnableMediaRouter | ✅ active (cr52+) | bool | false | **added July 2026**; disables Cast + its LAN device discovery; `dynamic_refresh: false` — needs browser restart |
 | MediaRecommendationsEnabled | ✅ active (cr87+) | bool | false | **added July 2026** |
 | ChromeVariations | ✅ active (cr83+) | int enum | 1 or 2 | **added August 2026**; 0 = all variations, 1 = critical fixes only, 2 = none. Closes the last remote-configuration channel: Brave fetches a Griffin seed from `variations.brave.com` that flips features in an installed browser. Maps to `variations::prefs::kVariationsRestrictionsByPolicy`; brave-core does not override the restriction path. Exposed as two mutually exclusive rows — value 2 also blocks the emergency killswitches used to turn off a broken or unsafe feature, so it is kept out of every preset |
