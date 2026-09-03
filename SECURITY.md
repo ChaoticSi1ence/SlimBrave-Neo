@@ -97,8 +97,22 @@ this is done every time:
 
 1. Tag the reviewed commit with `git tag -a vX.Y.Z` (use `-s` once a signing
    key exists) and push the tag.
-2. Generate the sums from a clean checkout **of that tag**, not from a working
-   tree: `sha256sum SlimBrave.ps1 slimbrave-linux.py slimbrave-mac.py > SHA256SUMS`.
+2. Generate the sums from **the bytes GitHub serves**, which are the bytes in
+   the tag object — not from a working tree, and not from a checkout on a
+   machine with `core.autocrlf=true`, which rewrites every file to CRLF before
+   you hash it and produces sums that match nothing anyone downloads:
+
+   ```bash
+   for f in SlimBrave.ps1 slimbrave-linux.py slimbrave-mac.py; do
+     printf '%s  %s
+' "$(git show "vX.Y.Z:$f" | sha256sum | cut -d' ' -f1)" "$f"
+   done > SHA256SUMS
+   ```
+
+   Then check one against the published URL before attaching it:
+   `curl -sL https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/vX.Y.Z/SlimBrave.ps1 | sha256sum`.
+   The sums for v1.9.5 through v2.1.0 were generated the old way and do **not**
+   match the raw URLs, the `iwr` one-liner, or a `sha256sum` on Linux/macOS.
 3. Paste the sums into the release notes and attach `SHA256SUMS`.
 4. Never move or re-cut a published tag. If a release is bad, yank it and cut
    a new version.
