@@ -2080,14 +2080,16 @@ function New-FluentRow($row,[int]$y){
 }
 
 function Reflow-Page {
-    # AutoScroll makes child Location live in SCROLLED coordinates, and the
-    # AutoScrollPosition getter returns negatives while the setter takes
-    # positives. Repositioning with raw offsets while scrolled throws every
-    # row out of place and leaves dead space above. So: park the scroll at
-    # zero, lay out in unscrolled space, then put the scroll back.
-    $keep=[Math]::Abs($page.AutoScrollPosition.Y)
+    # AutoScroll makes child Location live in SCROLLED coordinates: a child at
+    # absolute y sits at y + AutoScrollPosition.Y, and that offset is negative
+    # when scrolled down. Lay every row out at its absolute y PLUS the current
+    # offset and leave the scroll alone. This used to park the scroll at zero
+    # and restore it afterwards - correct in the end, but each
+    # AutoScrollPosition write scrolls synchronously by blitting the old
+    # pixels, so the user saw the page jump and an after-image of the rows
+    # until the repaint caught up.
+    $off=$page.AutoScrollPosition.Y
     $page.SuspendLayout()
-    $page.AutoScrollPosition=New-Object System.Drawing.Point 0,0
     # Same strides as Select-Page and Show-SearchResults lay the page out
     # with: header S 38 + S 4, row S 64 + S 4, and on All Options an S 10 gap
     # before each category after the first. This used to add S 6 under every
@@ -2097,15 +2099,14 @@ function Reflow-Page {
     $y=S 4; $first=$true
     foreach($p in $script:rowPanels){
         if(($null -ne $p.Tag.T) -and -not $first -and -not $inSearch){ $y+=S 10 }
-        $p.Location=New-Object System.Drawing.Point (S 2),$y
+        $p.Location=New-Object System.Drawing.Point (S 2),($y+$off)
         $y+=$p.Height+(S 4)
         $first=$false
     }
     $page.ResumeLayout()
-    $page.AutoScrollPosition=New-Object System.Drawing.Point 0,$keep
-    # Setting AutoScrollPosition scrolls by blitting, so the region the moved
-    # children used to occupy is never invalidated and their old pixels stay
-    # on screen as ghosts. Repaint the whole page, children included.
+    # Moving children invalidates only their new bounds; the region they
+    # vacated keeps its old pixels. One repaint of the whole page, children
+    # included, and Update() so it happens now rather than after the click.
     $page.Invalidate($true)
     $page.Update()
 }
