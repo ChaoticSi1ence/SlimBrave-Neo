@@ -1446,7 +1446,7 @@ public class DarkMenuColors : ProfessionalColorTable {
 "@ -ReferencedAssemblies System.Drawing, System.Windows.Forms
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "SlimBrave Neo - Fluent GUI (beta)"
+$form.Text = "SlimBrave Neo"
 # Design size is 1180x760 at 96 DPI; scaled it is 1770x1140 at 150%, taller
 # than a 1080p work area, so the HEIGHT yields to the screen (the page is
 # AutoScroll and absorbs it; the bar keeps the bottom edge). Width cannot

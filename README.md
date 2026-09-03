@@ -17,16 +17,6 @@ SlimBrave Neo uses Chromium enterprise managed policies to disable telemetry, bl
 
 </div>
 
-> [!WARNING]
-> **You are on the `experiment/fluent-gui` branch.** The Windows interface here is a
-> rewrite that has not been released yet: a category sidebar, an All Options page,
-> search across policy descriptions, and expandable help text. It writes real policy
-> and passes the full test suite, but it has had far less real-world use than `main`.
->
-> Everything below describes **this branch**. For the released version, switch to
-> [`main`](https://github.com/ChaoticSi1ence/SlimBrave-Neo). Linux and macOS are
-> identical on both — only `SlimBrave.ps1` differs.
-
 > [!NOTE]
 > **Provenance and AI use.** SlimBrave Neo is a fork of [SlimBrave](https://github.com/ltx0101/SlimBrave) by [@ltx0101](https://github.com/ltx0101), extended to Linux and macOS and released under the same GPL-3.0 license.
 >
@@ -155,7 +145,7 @@ After applying, restart Brave and verify at `brave://policy`.
 ### Windows
 
 ```powershell
-git clone -b experiment/fluent-gui https://github.com/ChaoticSi1ence/SlimBrave-Neo.git
+git clone https://github.com/ChaoticSi1ence/SlimBrave-Neo.git
 cd SlimBrave-Neo
 powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1
 ```
@@ -171,13 +161,10 @@ powershell -ExecutionPolicy Bypass -File .\SlimBrave.ps1
 **No git?** One line:
 
 ```powershell
-iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/experiment/fluent-gui/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; .\SlimBrave.ps1
+iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/main/SlimBrave.ps1" -OutFile "SlimBrave.ps1"; .\SlimBrave.ps1
 ```
 
-This pulls this branch's head, which moves. There is no tag or published checksum for
-a branch — swap `experiment/fluent-gui` for `main` in that URL to get the released
-version instead, and see [`SECURITY.md`](SECURITY.md) for its tagged releases and
-SHA-256 sums.
+This pulls the current `main`. If you'd rather pin an exact, unchanging version and check it against a published checksum before running, [`SECURITY.md`](SECURITY.md) covers tagged releases and SHA-256 sums.
 
 **Prefer the previous layout?** [v2.1.0](https://github.com/ChaoticSi1ence/SlimBrave-Neo/releases/tag/v2.1.0)
 is the last release with the three-column window. It keeps working; it just won't
