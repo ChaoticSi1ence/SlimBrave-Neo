@@ -1499,7 +1499,7 @@ $rail.Size=New-Object System.Drawing.Size (S 250),$form.ClientSize.Height
 # ClientSize still reports the request, so the derived sizes must follow the
 # client the OS actually grants, not the one asked for.
 $rail.Anchor=[System.Windows.Forms.AnchorStyles]"Top,Bottom,Left"
-$rail.BackColor=$F.Rail; Enable-DoubleBuffer $rail; $form.Controls.Add($rail)
+$rail.BackColor=$F.Rail; Enable-DoubleBuffer $rail; $form.Controls.Add($rail); $rail.TabIndex=0
 
 $script:railTitleFont=New-UiFont "Segoe UI Semibold" 15
 $script:railSubFont=New-UiFont "Segoe UI" 9
@@ -1537,6 +1537,69 @@ foreach($c in $script:cats){ $script:pages+=$c.name }
 $script:pages+="DNS Over HTTPS"
 $script:navItems=@(); $script:sel=0
 
+# ---------------------------------------------------------------------------
+# Keyboard access
+#
+# Every interactive control here is an owner-drawn Panel, and a Panel is not
+# selectable by default - so nothing but the two TextBoxes could take focus and
+# the window was unusable without a mouse. The previous GUI, built from real
+# CheckBoxes and Buttons, never had this problem. ControlStyles.Selectable is
+# set through the protected SetStyle by reflection; a probe confirmed Paint and
+# MouseDown are unaffected by it, so no compiled Panel subclass is needed.
+#
+# Activation goes through the SAME handler the mouse uses, raised at the centre
+# of the control's own hit zone. Click, hover and keyboard then share one code
+# path - the way Zone-Of already unified the first two. A separate keyboard
+# branch is how the two drift apart.
+# ---------------------------------------------------------------------------
+$script:miSetStyle    = [System.Windows.Forms.Control].GetMethod('SetStyle',    [Reflection.BindingFlags]'Instance,NonPublic')
+$script:miOnMouseDown = [System.Windows.Forms.Control].GetMethod('OnMouseDown', [Reflection.BindingFlags]'Instance,NonPublic')
+$script:miOnClick     = [System.Windows.Forms.Control].GetMethod('OnClick',     [Reflection.BindingFlags]'Instance,NonPublic')
+
+function Enable-Focusable($c){
+    # [void]: Invoke on a void method returns $null, and PowerShell EMITS that -
+    # without the cast every factory returned @($null, $panel) and the bar's
+    # packing loop died setting .Left on an array. Text-level tests cannot see
+    # this class of bug; the render harness can.
+    [void]$script:miSetStyle.Invoke($c, @([System.Windows.Forms.ControlStyles]::Selectable, $true))
+    $c.TabStop = $true
+    $c.Add_GotFocus({ $this.Invalidate() })
+    $c.Add_LostFocus({ $this.Invalidate() })
+    # Return, Left and Right are dialog keys - the form would eat them as
+    # navigation before KeyDown ever saw them. Claim them as input keys.
+    $c.Add_PreviewKeyDown({
+        param($s,$e)
+        if($e.KeyCode -eq [System.Windows.Forms.Keys]::Return -or
+           $e.KeyCode -eq [System.Windows.Forms.Keys]::Left -or
+           $e.KeyCode -eq [System.Windows.Forms.Keys]::Right){ $e.IsInputKey = $true }
+    })
+}
+
+function Invoke-MouseAt($c, [int]$x, [int]$y){
+    # ::new(), not New-Object: New-Object hands back a PSObject wrapper, and
+    # reflection's Invoke will not convert that to MouseEventArgs.
+    $mea = [System.Windows.Forms.MouseEventArgs]::new([System.Windows.Forms.MouseButtons]::Left, 1, $x, $y, 0)
+    [void]$script:miOnMouseDown.Invoke($c, [object[]]@($mea))
+}
+
+function Invoke-ClickOn($c){
+    [void]$script:miOnClick.Invoke($c, @([System.EventArgs]::Empty))
+}
+
+function Test-ActivateKey($ev){
+    return ($ev.KeyCode -eq [System.Windows.Forms.Keys]::Space -or
+            $ev.KeyCode -eq [System.Windows.Forms.Keys]::Return)
+}
+
+function Draw-FocusRing($g, $w, $h){
+    # Distinct from hover: hover fills, focus outlines. A keyboard user must be
+    # able to tell where they are on a row the mouse is also sitting on.
+    $p = New-Object System.Drawing.Pen $script:F.Accent, 1
+    $p.DashStyle = [System.Drawing.Drawing2D.DashStyle]::Dot
+    $g.DrawRectangle($p, 1, 1, ($w - 3), ($h - 3))
+    $p.Dispose()
+}
+
 function New-NavItem([int]$idx,[string]$name,[int]$y){
     $it=New-Object System.Windows.Forms.Panel
     $it.Location=New-Object System.Drawing.Point (S 8),$y
@@ -1565,6 +1628,7 @@ function New-NavItem([int]$idx,[string]$name,[int]$y){
         $ink=$script:F.TextSub; if($isSel){$ink=$script:F.Text}
         $nb=New-Object System.Drawing.SolidBrush $ink
         $g.DrawString($st.Name,$script:navFont,$nb,(S 44),(S 9),$script:SF); $nb.Dispose()
+        if($s.Focused){ Draw-FocusRing $g $s.Width $s.Height }
     })
     $it.Add_MouseEnter({$this.Tag.Hot=$true;$this.Invalidate()})
     $it.Add_MouseLeave({$this.Tag.Hot=$false;$this.Invalidate()})
@@ -1572,6 +1636,11 @@ function New-NavItem([int]$idx,[string]$name,[int]$y){
         if($script:searchBox -and $script:searchBox.Text){ $script:searchBox.Text="" }
         Select-Page $this.Tag.Idx
     })
+    $it.Add_KeyDown({
+        param($s,$ev)
+        if(Test-ActivateKey $ev){ Invoke-ClickOn $s; $ev.Handled=$true; $ev.SuppressKeyPress=$true }
+    })
+    Enable-Focusable $it
     $it.Cursor=[System.Windows.Forms.Cursors]::Hand
     $rail.Controls.Add($it); return $it
 }
@@ -1617,7 +1686,7 @@ $searchHost.Add_Paint({
         $pb.Dispose()
     }
 })
-$form.Controls.Add($searchHost)
+$form.Controls.Add($searchHost); $searchHost.TabIndex=1
 
 $script:searchBox=New-Object System.Windows.Forms.TextBox
 $script:searchBox.BorderStyle=[System.Windows.Forms.BorderStyle]::None
@@ -1635,14 +1704,14 @@ $page.Location=New-Object System.Drawing.Point (S 270),(S 80)
 $page.Size=New-Object System.Drawing.Size (S 900),($form.ClientSize.Height-(S 152))   # 80 above, 68 bar, 4 gap
 $page.Anchor=[System.Windows.Forms.AnchorStyles]"Top,Bottom,Left"
 $page.BackColor=$F.Bg; $page.AutoScroll=$true
-Enable-DoubleBuffer $page; $form.Controls.Add($page)
+Enable-DoubleBuffer $page; $form.Controls.Add($page); $page.TabIndex=2
 
 # --------------------------------------------------------------- action bar
 $bar=New-Object System.Windows.Forms.Panel
 $bar.Location=New-Object System.Drawing.Point (S 250),($form.ClientSize.Height-(S 68))
 $bar.Size=New-Object System.Drawing.Size (S 930),(S 68)
 $bar.Anchor=[System.Windows.Forms.AnchorStyles]"Bottom,Left"
-$bar.BackColor=$F.Bar; Enable-DoubleBuffer $bar; $form.Controls.Add($bar)
+$bar.BackColor=$F.Bar; Enable-DoubleBuffer $bar; $form.Controls.Add($bar); $bar.TabIndex=3
 $script:statusText="Ready"
 $script:BAR_PAD=S 20   # status text left margin, button row right margin
 $script:BAR_GAP=S 8    # between buttons
@@ -1753,6 +1822,7 @@ function New-BarButton([string]$label,[bool]$accent){
         $sz=$g.MeasureString($s.Tag.L,$script:btnFont,1000,$script:SF)
         $g.DrawString($s.Tag.L,$script:btnFont,$tb,(($s.Width-$sz.Width)/2),(($s.Height-$sz.Height)/2),$script:SF)
         $tb.Dispose()
+        if($s.Focused){ Draw-FocusRing $g $s.Width $s.Height }
     })
     $b.Add_MouseEnter({$this.Tag.Hot=$true;$this.Invalidate()})
     $b.Add_MouseLeave({$this.Tag.Hot=$false;$this.Invalidate()})
@@ -1828,6 +1898,11 @@ function New-BarButton([string]$label,[bool]$accent){
             }
         }
     })
+    $b.Add_KeyDown({
+        param($s,$ev)
+        if(Test-ActivateKey $ev){ Invoke-ClickOn $s; $ev.Handled=$true; $ev.SuppressKeyPress=$true }
+    })
+    Enable-Focusable $b
     $b.Cursor=[System.Windows.Forms.Cursors]::Hand
     $bar.Controls.Add($b); return $b
 }
@@ -1998,6 +2073,7 @@ function New-FluentRow($row,[int]$y){
                 $g.FillEllipse($th,($tx+(S 4)),($ty+(S 3)),(S 14),(S 14)); $th.Dispose()
             }
         }
+        if($s.Focused){ Draw-FocusRing $g $s.Width $s.Height }
     })
     $p.Add_MouseDown({
         param($s,$ev)
@@ -2075,6 +2151,27 @@ function New-FluentRow($row,[int]$y){
         $this.Cursor=[System.Windows.Forms.Cursors]::Default
         $this.Invalidate()
     })
+    $p.Add_KeyDown({
+        param($s,$ev)
+        $st=$s.Tag
+        if(Test-ActivateKey $ev){
+            # the centre of the live control, so this is the mouse's own path
+            if($st.IsChoice){ Invoke-MouseAt $s ($script:DD_X+[int]($script:DD_W/2)) (S 32) }
+            else            { Invoke-MouseAt $s ($script:TG_X+[int]($script:TG_W/2)) ($script:TG_Y+[int]($script:TG_H/2)) }
+            $ev.Handled=$true; $ev.SuppressKeyPress=$true; return
+        }
+        # Right opens the description, Left closes it - the tree-view idiom.
+        # Zone-Of says "" for a row with no chevron, so those ignore both.
+        if($ev.KeyCode -eq [System.Windows.Forms.Keys]::Right -or
+           $ev.KeyCode -eq [System.Windows.Forms.Keys]::Left){
+            $want=($ev.KeyCode -eq [System.Windows.Forms.Keys]::Right)
+            $ecol=$script:EXP_X; if($st.IsChoice){ $ecol=$script:EXP_X_CHOICE }
+            $cx=$ecol+(S 13); $cy=S 32
+            if(($st.Open -ne $want) -and ((Zone-Of $s $cx $cy) -eq "exp")){ Invoke-MouseAt $s $cx $cy }
+            $ev.Handled=$true; $ev.SuppressKeyPress=$true
+        }
+    })
+    Enable-Focusable $p
     $p.Add_MouseMove({
         param($s,$ev)
         $z=Zone-Of $s $ev.X $ev.Y
@@ -2175,6 +2272,7 @@ function New-PresetCard($preset,[int]$y){
         $lb=New-Object System.Drawing.SolidBrush $ink
         $sz=$g.MeasureString("Load",$script:btnFont,1000,$script:SF)
         $g.DrawString("Load",$script:btnFont,$lb,($br.X+($bw-$sz.Width)/2),($br.Y+(S 7)),$script:SF); $lb.Dispose()
+        if($s.Focused){ Draw-FocusRing $g $s.Width $s.Height }
     })
     # Same zone discipline as the setting rows: loading a preset DISCARDS every
     # staged selection, so a stray click on the blurb the user is reading must
@@ -2187,6 +2285,14 @@ function New-PresetCard($preset,[int]$y){
         else     { $s.Cursor=[System.Windows.Forms.Cursors]::Default }
     })
     $p.Add_MouseLeave({$this.Tag.Hot=$false;$this.Invalidate()})
+    $p.Add_KeyDown({
+        param($s,$ev)
+        if(Test-ActivateKey $ev){
+            Invoke-MouseAt $s ($script:PC_BX+[int]($script:PC_BW/2)) ($script:PC_BY+[int]($script:PC_BH/2))
+            $ev.Handled=$true; $ev.SuppressKeyPress=$true
+        }
+    })
+    Enable-Focusable $p
     $p.Add_MouseDown({
         param($s,$ev)
         if(-not (Test-InPresetButton $ev.X $ev.Y)){ return }
@@ -2546,6 +2652,19 @@ $script:searchBox.Add_KeyDown({
     # Without suppressing both, the edit control beeps on every press.
     if($ev.KeyCode -eq [System.Windows.Forms.Keys]::Escape -or
        $ev.KeyCode -eq [System.Windows.Forms.Keys]::Return){ $ev.SuppressKeyPress=$true }
+})
+
+# Escape follows the TUI: clears an active search (the box handles that
+# itself), otherwise closes the window. Wired here, with the rest of the GUI,
+# rather than beside ShowDialog - the render harness slices the GUI off just
+# below this point, and a handler past the cut is one it can never exercise.
+$form.KeyPreview=$true
+$form.Add_KeyDown({
+    param($s,$ev)
+    if($ev.KeyCode -ne [System.Windows.Forms.Keys]::Escape){ return }
+    if($script:searchBox.Focused -and $script:searchBox.Text){ return }
+    $ev.Handled=$true; $ev.SuppressKeyPress=$true
+    $s.Close()
 })
 
 if(Test-Path $script:machineReg){ Sync-FromRegistry } else { Set-Status "No Brave policy set on this machine" }
