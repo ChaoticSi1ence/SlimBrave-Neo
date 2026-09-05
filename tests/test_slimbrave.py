@@ -2348,18 +2348,23 @@ def test_ps1_action_bar_row_is_right_anchored_and_status_is_bounded():
     assert m, "the action-bar section is no longer delimited where this test looks"
     bar = m.group(1)
 
-    assert re.search(r"^\$bx\s*=\s*\$bar\.Width\s*-\s*\$script:BAR_PAD", bar, re.M), (
-        "the button row no longer starts from the bar's right edge"
+    # Pin the RELATIONS, not the spelling of the locals: renaming $bx or
+    # $specs is behaviour-preserving and used to fail this test with a message
+    # ("no longer starts from the bar's right edge") that was simply untrue.
+    m = re.search(r"^(\$\w+)\s*=\s*\$bar\.Width\s*-\s*\$script:BAR_PAD", bar, re.M)
+    assert m, "the button row no longer starts from the bar's right edge"
+    bx = re.escape(m.group(1))
+    assert not re.search(r"^\$\w+\s*=\s*\d+\s*$", bar, re.M), (
+        "the button row is packed from a fixed x again"
     )
-    assert not re.search(r"^\$bx\s*=\s*\d+", bar, re.M), "the button row is packed from a fixed x again"
-    assert re.search(r"for\s*\(\s*\$i\s*=\s*\$specs\.Count\s*-\s*1\s*;.*\$i--\s*\)", bar), (
+    assert re.search(r"for\s*\(\s*\$\w+\s*=\s*\$\w+\.Count\s*-\s*1\s*;.*--\s*\)", bar), (
         "the specs are not walked last-first, so Apply Settings would not land rightmost"
     )
     # a newline may separate the two statements as well as a semicolon
-    assert re.search(r"\$bx\s*-=\s*\$btn\.Width\s*;?\s*\$btn\.Left\s*=\s*\$bx", bar), (
+    assert re.search(rf"{bx}\s*-=\s*\$\w+\.Width\s*;?\s*\$\w+\.Left\s*=\s*{bx}", bar), (
         "a button is placed before its width is subtracted, so the row overruns the bar"
     )
-    assert re.search(r"^\$script:barButtonsLeft\s*=\s*\$bx\s*\+\s*\$script:BAR_GAP", bar, re.M), (
+    assert re.search(rf"^\$script:barButtonsLeft\s*=\s*{bx}\s*\+\s*\$script:BAR_GAP", bar, re.M), (
         "the leftmost button's x is not recorded where the row is built"
     )
 
@@ -2626,4 +2631,33 @@ def test_ps1_legacy_array_import_takes_the_first_row_per_key():
     assert re.search(r"\$handled\.ContainsKey\(\$row\.key\)", branch), (
         "the first-row-per-key guard does not key on $row.key"
     )
+
+
+def test_ps1_paint_handlers_agree_on_text_rendering():
+    """Three handlers forced ClearTypeGridFit and six inherited SystemDefault,
+    so the same font rendered differently in the rail than in a row. Either
+    all nine choose, or none does - a split is the bug."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    blocks = re.split(r"\.Add_Paint\(\{", text)[1:]
+    with_hint = sum(1 for b in blocks if "TextRenderingHint" in b[:4000])
+    assert with_hint in (0, len(blocks)), (
+        f"{with_hint} of {len(blocks)} Paint handlers set TextRenderingHint - "
+        "text renders inconsistently between them"
+    )
+
+
+def test_ps1_transient_gui_objects_are_disposed():
+    """Two leaks the review found: pages were detached with Controls.Clear()
+    instead of disposed (~85 handles per All Options visit), and a fresh
+    ContextMenuStrip was built on every dropdown click and never released."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    assert "$page.Controls.Clear()" not in text, (
+        "a view builder detaches its children instead of disposing them"
+    )
+    assert re.search(r"while\(\$page\.Controls\.Count -gt 0\)\{ \$page\.Controls\[0\]\.Dispose\(\) \}", text), (
+        "no disposing sweep in the view builders"
+    )
+    menus = len(re.findall(r"New-Object System\.Windows\.Forms\.ContextMenuStrip", text))
+    disposes = len(re.findall(r"\$script:ddMenu\.Dispose\(\)", text))
+    assert disposes == menus, f"{menus} ContextMenuStrip sites but {disposes} dispose the previous one"
 

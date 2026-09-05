@@ -1019,6 +1019,20 @@ function Join-Status([string]$lead, $repair) {
     return "$lead $n"
 }
 
+function Get-InvokerDocs {
+    # Under over-the-shoulder UAC the elevated process is the ADMIN, so the
+    # dialogs' default folder was the admin's Documents. The invoking user's
+    # profile is already forwarded through the relaunch; derive theirs from it.
+    if([string]::IsNullOrWhiteSpace($script:OriginalLocalAppData)){
+        return [Environment]::GetFolderPath('MyDocuments')
+    }
+    $prof = Split-Path (Split-Path $script:OriginalLocalAppData -Parent) -Parent
+    $docs = Join-Path $prof 'Documents'
+    if(Test-Path $docs){ return $docs }
+    if(Test-Path $prof){ return $prof }
+    return [Environment]::GetFolderPath('MyDocuments')
+}
+
 function Get-RepairNote($repair) {
     if ($repair.Skipped) {
         # Leads with the action: this is the one line the user has to do
@@ -1531,6 +1545,7 @@ function New-NavItem([int]$idx,[string]$name,[int]$y){
     Enable-DoubleBuffer $it
     $it.Add_Paint({
         param($s,$e); $g=$e.Graphics
+    $g.TextRenderingHint=[System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
         $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
         $st=$s.Tag; $g.Clear($script:F.Rail)
         $isSel=($st.Idx -eq $script:sel)
@@ -1585,6 +1600,7 @@ $searchHost.BackColor=$F.Bg
 Enable-DoubleBuffer $searchHost
 $searchHost.Add_Paint({
     param($s,$e); $g=$e.Graphics
+    $g.TextRenderingHint=[System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
     $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
     $g.Clear($script:F.Bg)
     $r=New-Object System.Drawing.RectangleF 0,0,($s.Width-1),($s.Height-1)
@@ -1638,6 +1654,7 @@ $script:barTip=New-Object System.Windows.Forms.ToolTip
 $script:barTip.AutoPopDelay=30000; $script:barTip.InitialDelay=300; $script:barTip.ReshowDelay=100
 $bar.Add_Paint({
     param($s,$e); $g=$e.Graphics
+    $g.TextRenderingHint=[System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
     $p=New-Object System.Drawing.Pen $script:F.RowEdge
     $g.DrawLine($p,0,0,$s.Width,0); $p.Dispose()
     # The buttons are child panels, so status text drawn past the leftmost
@@ -1662,7 +1679,21 @@ $bar.Add_Paint({
     # hence the explicit $room guard.
     $fit=0; $nl=0
     [void]$g.MeasureString($script:statusText,$script:capFont,$rect.Size,$fmt,[ref]$fit,[ref]$nl)
-    $tip=""; if($room -le 0 -or $fit -lt $script:statusText.Length){ $tip=$script:statusText }
+    $tip=""
+    if($room -le 0 -or $fit -lt $script:statusText.Length){
+        # A WinForms ToolTip never wraps on its own - it sends no
+        # TTM_SETMAXTIPWIDTH and exposes no max width - so a 350-character
+        # Apply status rendered as one ~1800 px line. Break it on words; the
+        # control does honour embedded newlines.
+        $ln=@(); $cur=""
+        foreach($w in ($script:statusText -split '\s+')){
+            if($cur.Length -eq 0){ $cur=$w }
+            elseif(($cur.Length+1+$w.Length) -le 90){ $cur="$cur $w" }
+            else { $ln+=$cur; $cur=$w }
+        }
+        if($cur){ $ln+=$cur }
+        $tip=($ln -join "`r`n")
+    }
     if($script:barTip.GetToolTip($s) -ne $tip){ $script:barTip.SetToolTip($s,$tip) }
     $b=New-Object System.Drawing.SolidBrush $script:F.TextSub
     if($room -gt 0){ $g.DrawString($script:statusText,$script:capFont,$b,$rect,$fmt) }
@@ -1707,6 +1738,7 @@ function New-BarButton([string]$label,[bool]$accent){
     Enable-DoubleBuffer $b
     $b.Add_Paint({
         param($s,$e); $g=$e.Graphics
+    $g.TextRenderingHint=[System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
         $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
         $g.Clear($script:F.Bar)
         $r=New-Object System.Drawing.RectangleF 0,0,($s.Width-1),($s.Height-1)
@@ -1738,6 +1770,7 @@ function New-BarButton([string]$label,[bool]$accent){
             "Export" {
                 $dlg=New-Object System.Windows.Forms.SaveFileDialog
                 $dlg.Filter="JSON files (*.json)|*.json"
+                $dlg.InitialDirectory=Get-InvokerDocs
                 $dlg.FileName="SlimBraveNeoSettings.json"
                 if($dlg.ShowDialog() -eq "OK"){
                     $feat=@{}
@@ -1770,6 +1803,7 @@ function New-BarButton([string]$label,[bool]$accent){
             "Import" {
                 $dlg=New-Object System.Windows.Forms.OpenFileDialog
                 $dlg.Filter="JSON files (*.json)|*.json"
+                $dlg.InitialDirectory=Get-InvokerDocs
                 if($dlg.ShowDialog() -eq "OK"){
                     try{
                         $cfg=Get-Content $dlg.FileName -Raw | ConvertFrom-Json
@@ -1845,10 +1879,16 @@ function Fit-Text([System.Drawing.Graphics]$g,[string]$text,[System.Drawing.Font
 function Zone-Of($panel,[int]$x,[int]$y){
     $st=$panel.Tag
     $ecol=$script:EXP_X; if($st.IsChoice){ $ecol=$script:EXP_X_CHOICE }
-    $g2=$panel.CreateGraphics()
-    $hasExp = ($st.Row.full -and ($st.Row.full -ne $st.Row.short -or
-        $g2.MeasureString($st.Row.short,$script:capFont,10000,$script:SF).Width -gt (Get-CapWidth $st.IsChoice)))
-    $g2.Dispose()
+    # Whether a row has a chevron is fixed once the GUI is built - the text,
+    # the font and the cap width never change - but this measured it on every
+    # MouseMove, taking an HDC each time. Cache it on the panel's own Tag.
+    if($null -eq $st.HasExp){
+        $g2=$panel.CreateGraphics()
+        $st.HasExp = [bool]($st.Row.full -and ($st.Row.full -ne $st.Row.short -or
+            $g2.MeasureString($st.Row.short,$script:capFont,10000,$script:SF).Width -gt (Get-CapWidth $st.IsChoice)))
+        $g2.Dispose()
+    }
+    $hasExp = $st.HasExp
     if($hasExp -and $x -ge $ecol -and $x -le ($ecol+(S 26)) -and $y -ge (S 14) -and $y -le (S 50)){ return "exp" }
     if($st.IsChoice){
         # bounded exactly like the toggle: clicking a label or empty space
@@ -1982,6 +2022,11 @@ function New-FluentRow($row,[int]$y){
         }
         if($st.IsChoice){
             if($zone -eq "ctl"){
+                # Only one dropdown can be open at a time, so one slot covers
+                # both call sites. NOT Add_Closed: the strip closes BEFORE the
+                # item's Click handler runs, so disposing there tears it down
+                # under the handler that is still reading $this.Tag.
+                if($script:ddMenu -and -not $script:ddMenu.IsDisposed){ $script:ddMenu.Dispose() }
                 $menu=New-Object System.Windows.Forms.ContextMenuStrip
                 $menu.BackColor=$script:F.RowHot
                 $menu.ForeColor=$script:F.Text
@@ -2002,6 +2047,7 @@ function New-FluentRow($row,[int]$y){
                     $i++
                 }
                 $menu.Show($s,(New-Object System.Drawing.Point $script:DD_X,(S 47)))
+                $script:ddMenu=$menu
             }
             return
         }
@@ -2083,6 +2129,7 @@ function New-SectionHeader([string]$text,[int]$y,[int]$count){
     Enable-DoubleBuffer $h
     $h.Add_Paint({
         param($s,$e); $g=$e.Graphics
+    $g.TextRenderingHint=[System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
         $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
         $g.Clear($script:F.Bg)
         $tb=New-Object System.Drawing.SolidBrush $script:F.Text
@@ -2106,6 +2153,7 @@ function New-PresetCard($preset,[int]$y){
     Enable-DoubleBuffer $p
     $p.Add_Paint({
         param($s,$e); $g=$e.Graphics
+    $g.TextRenderingHint=[System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
         $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
         $st=$s.Tag; $g.Clear($script:F.Bg)
         $r=New-Object System.Drawing.RectangleF 0,0,($s.Width-1),($s.Height-2)
@@ -2264,6 +2312,7 @@ function Build-DnsPage {
         param($s,$ev)
         # bounded exactly like every other control: label clicks do nothing
         if($s.Tag.Zone -ne "ctl"){ return }
+        if($script:ddMenu -and -not $script:ddMenu.IsDisposed){ $script:ddMenu.Dispose() }
         $menu=New-Object System.Windows.Forms.ContextMenuStrip
         $menu.BackColor=$script:F.RowHot
         $menu.ForeColor=$script:F.Text
@@ -2289,6 +2338,7 @@ function Build-DnsPage {
             $i++
         }
         $menu.Show($s,(New-Object System.Drawing.Point $script:DD_X,(S 46)))
+        $script:ddMenu=$menu
     })
     $m0=$script:dnsModes[$script:dnsState.Mode]
     $tmpl.Enabled=($m0 -eq "custom" -or $m0 -eq "secure")
@@ -2391,7 +2441,12 @@ function Show-SearchResults([string]$query){
     $page.SuspendLayout()
     $page.AutoScrollPosition=New-Object System.Drawing.Point 0,0
     $page.AutoScrollMinSize=New-Object System.Drawing.Size 0,0
-    $page.Controls.Clear(); $script:rowPanels=@()
+    # Dispose, don't just detach: Controls.Clear() drops the reference but
+    # leaves every child's window handle alive until a GC runs, and All Options
+    # builds ~85 of them per visit. Dispose() removes itself from the parent
+    # collection, so this terminates.
+    while($page.Controls.Count -gt 0){ $page.Controls[0].Dispose() }
+    $script:rowPanels=@()
     $y=S 4
     if($n -eq 0){
         $empty=New-Object System.Windows.Forms.Label
@@ -2440,7 +2495,12 @@ function Select-Page([int]$idx){
     # before reaching the content.
     $page.AutoScrollPosition=New-Object System.Drawing.Point 0,0
     $page.AutoScrollMinSize=New-Object System.Drawing.Size 0,0
-    $page.Controls.Clear(); $script:rowPanels=@()
+    # Dispose, don't just detach: Controls.Clear() drops the reference but
+    # leaves every child's window handle alive until a GC runs, and All Options
+    # builds ~85 of them per visit. Dispose() removes itself from the parent
+    # collection, so this terminates.
+    while($page.Controls.Count -gt 0){ $page.Controls[0].Dispose() }
+    $script:rowPanels=@()
     if($idx -eq 0){
         $y=S 4
         foreach($pr in $script:presets){
@@ -2482,6 +2542,10 @@ $script:searchBox.Add_TextChanged({
 $script:searchBox.Add_KeyDown({
     param($s,$ev)
     if($ev.KeyCode -eq [System.Windows.Forms.Keys]::Escape){ $s.Text="" }
+    # Search is live through TextChanged, so Return has nothing left to do.
+    # Without suppressing both, the edit control beeps on every press.
+    if($ev.KeyCode -eq [System.Windows.Forms.Keys]::Escape -or
+       $ev.KeyCode -eq [System.Windows.Forms.Keys]::Return){ $ev.SuppressKeyPress=$true }
 })
 
 if(Test-Path $script:machineReg){ Sync-FromRegistry } else { Set-Status "No Brave policy set on this machine" }
