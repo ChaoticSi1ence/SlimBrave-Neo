@@ -26,6 +26,7 @@ import os
 import shutil
 import subprocess
 import sys
+import textwrap
 import tempfile
 
 POLICY_DIR = "/etc/brave/policies/managed"
@@ -348,39 +349,67 @@ CATEGORIES = [
     {
         "name": "Telemetry & Reporting",
         "features": [
-            {"name": "Disable Metrics Reporting", "key": "MetricsReportingEnabled", "value": False},
-            {"name": "Disable Safe Browsing Reporting", "key": "SafeBrowsingExtendedReportingEnabled", "value": False},
-            {"name": "Disable URL Data Collection", "key": "UrlKeyedAnonymizedDataCollectionEnabled", "value": False},
-            {"name": "Disable P3A Analytics", "key": "BraveP3AEnabled", "value": False},
-            {"name": "Disable Stats Ping", "key": "BraveStatsPingEnabled", "value": False},
-            {"name": "Limit Variations to Critical Fixes", "key": "ChromeVariations", "value": 1, "group": "variations"},
-            {"name": "Disable Variations / Griffin Experiments", "key": "ChromeVariations", "value": 2, "group": "variations"},
-            {"name": "Disable Enhanced Spell Check", "key": "SpellCheckServiceEnabled", "value": False, "group": "spellcheck"},
+            {"name": "Disable Metrics Reporting", "key": "MetricsReportingEnabled", "value": False, "desc": "Stops Brave from sending anonymous usage statistics and crash reports to Brave's servers."},
+
+            {"name": "Disable Safe Browsing Reporting", "key": "SafeBrowsingExtendedReportingEnabled", "value": False, "desc": "Stops extended Safe Browsing reports (details about suspicious pages and downloads) from being sent to Google. Safe Browsing protection itself stays on."},
+
+            {"name": "Disable URL Data Collection", "key": "UrlKeyedAnonymizedDataCollectionEnabled", "value": False, "desc": "Stops URL-keyed anonymized data collection, which reports the URLs you visit to improve suggestion and safety features."},
+
+            {"name": "Disable P3A Analytics", "key": "BraveP3AEnabled", "value": False, "desc": "Disables P3A (Privacy-Preserving Product Analytics), Brave's anonymized product usage telemetry."},
+
+            {"name": "Disable Stats Ping", "key": "BraveStatsPingEnabled", "value": False, "desc": "Stops the daily usage ping that counts this install in Brave's active-user statistics."},
+
+            {"name": "Limit Variations to Critical Fixes", "key": "ChromeVariations", "value": 1, "group": "variations", "desc": "Restricts Brave's remote experiment seed (Griffin) to critical security and stability fixes, instead of the full set of A/B experiments. The safe choice of the two. Mutually exclusive with Disable Variations."},
+
+            {"name": "Disable Variations / Griffin Experiments", "key": "ChromeVariations", "value": 2, "group": "variations", "desc": "Blocks the remote experiment seed entirely, so Brave can no longer flip features in your installed browser from its servers. This also blocks the emergency killswitches Brave uses to turn off a broken or unsafe feature - pick Limit Variations to Critical Fixes unless you accept that. Mutually exclusive with Limit Variations to Critical Fixes."},
+
+            {"name": "Disable Enhanced Spell Check", "key": "SpellCheckServiceEnabled", "value": False, "group": "spellcheck", "desc": "Stops enhanced spell check, which sends the text you type in web forms to Google's servers to be checked. Offline spell checking keeps working. Mutually exclusive with Disable Spellcheck, which turns spell checking off altogether and makes this row do nothing."},
+
         ],
     },
     {
         "name": "Privacy & Security",
         "features": [
-            {"name": "Disable Safe Browsing (security downgrade)", "key": "SafeBrowsingProtectionLevel", "value": 0},
-            {"name": "Disable Autofill (Addresses)", "key": "AutofillAddressEnabled", "value": False},
-            {"name": "Disable Autofill (Credit Cards)", "key": "AutofillCreditCardEnabled", "value": False},
-            {"name": "Disable Password Manager", "key": "PasswordManagerEnabled", "value": False},
-            {"name": "Disable Password Leak Detection", "key": "PasswordLeakDetectionEnabled", "value": False},
-            {"name": "Disable Browser Sign-in", "key": "BrowserSignin", "value": 0},
-            {"name": "Enable Global Privacy Control", "key": "BraveGlobalPrivacyControlEnabled", "value": True},
-            {"name": "Enable De-AMP", "key": "BraveDeAmpEnabled", "value": True},
-            {"name": "Enable Debouncing", "key": "BraveDebouncingEnabled", "value": True},
-            {"name": "Strip Tracking URL Parameters", "key": "BraveTrackingQueryParametersFilteringEnabled", "value": True},
-            {"name": "Reduce Language Fingerprinting", "key": "BraveReduceLanguageEnabled", "value": True},
-            {"name": "Disable WebRTC IP Leak", "key": "WebRtcIPHandling", "value": "disable_non_proxied_udp"},
-            {"name": "Disable QUIC Protocol", "key": "QuicAllowed", "value": False},
-            {"name": "Disable Network Prediction (Prefetch)", "key": "NetworkPredictionOptions", "value": 2},
-            {"name": "Block Third Party Cookies", "key": "BlockThirdPartyCookies", "value": True},
-            {"name": "Block Payment Method Probing", "key": "PaymentMethodQueryEnabled", "value": False},
-            {"name": "Disable Alternate Error Pages", "key": "AlternateErrorPagesEnabled", "value": False},
-            {"name": "Block Remote Debugging", "key": "RemoteDebuggingAllowed", "value": False},
-            {"name": "Disable DNS Interception Probes", "key": "DNSInterceptionChecksEnabled", "value": False},
-            {"name": "Require HTTPS for Basic Auth", "key": "BasicAuthOverHttpEnabled", "value": False},
+            {"name": "Disable Safe Browsing (security downgrade)", "key": "SafeBrowsingProtectionLevel", "value": 0, "desc": "Turns Safe Browsing fully off. Brave already routes these lookups through its own servers, so Google never sees the sites you visit even with Safe Browsing on - turning it off buys almost no privacy and costs you the phishing and malware warning pages. Excluded from every preset for that reason."},
+
+            {"name": "Disable Autofill (Addresses)", "key": "AutofillAddressEnabled", "value": False, "desc": "Stops Brave from saving and auto-filling street addresses in web forms."},
+
+            {"name": "Disable Autofill (Credit Cards)", "key": "AutofillCreditCardEnabled", "value": False, "desc": "Stops Brave from saving and auto-filling credit card numbers in web forms."},
+
+            {"name": "Disable Password Manager", "key": "PasswordManagerEnabled", "value": False, "desc": "Disables the built-in password manager (no save prompts, no autofill). Recommended if you use a dedicated password manager."},
+
+            {"name": "Disable Password Leak Detection", "key": "PasswordLeakDetectionEnabled", "value": False, "desc": "Stops the online check that compares your saved credentials against known breach lists. Defense in depth if you audit passwords with your own manager instead."},
+
+            {"name": "Disable Browser Sign-in", "key": "BrowserSignin", "value": 0, "desc": "Prevents signing in to the browser itself with an account."},
+
+            {"name": "Enable Global Privacy Control", "key": "BraveGlobalPrivacyControlEnabled", "value": True, "desc": "Sends the GPC signal with every request, telling sites not to sell or share your data. Legally binding in some regions (e.g. under CCPA)."},
+
+            {"name": "Enable De-AMP", "key": "BraveDeAmpEnabled", "value": True, "desc": "Skips Google AMP pages and loads the publisher's original page instead."},
+
+            {"name": "Enable Debouncing", "key": "BraveDebouncingEnabled", "value": True, "desc": "Skips known tracking redirects and navigates straight to the final destination URL."},
+
+            {"name": "Strip Tracking URL Parameters", "key": "BraveTrackingQueryParametersFilteringEnabled", "value": True, "desc": "Removes known tracking parameters (fbclid, gclid, mc_eid, ...) from URLs before they load."},
+
+            {"name": "Reduce Language Fingerprinting", "key": "BraveReduceLanguageEnabled", "value": True, "desc": "Reports a generic language configuration to sites, making your browser harder to fingerprint."},
+
+            {"name": "Disable WebRTC IP Leak", "key": "WebRtcIPHandling", "value": "disable_non_proxied_udp", "desc": "Restricts WebRTC to proxied connections so video/voice calls can't expose your real IP address behind a VPN or proxy."},
+
+            {"name": "Disable QUIC Protocol", "key": "QuicAllowed", "value": False, "desc": "Disables the QUIC (HTTP/3) transport so all traffic uses TCP. Useful when a firewall or filter can't inspect QUIC; may slightly slow some Google sites."},
+
+            {"name": "Disable Network Prediction (Prefetch)", "key": "NetworkPredictionOptions", "value": 2, "desc": "Stops Brave from pre-resolving DNS and pre-connecting to links it guesses you might click, so no network requests are made for pages you never visit."},
+
+            {"name": "Block Third Party Cookies", "key": "BlockThirdPartyCookies", "value": True, "desc": "Blocks cookies set by domains other than the site you are visiting. Can break some embedded logins."},
+
+            {"name": "Block Payment Method Probing", "key": "PaymentMethodQueryEnabled", "value": False, "desc": "Stops sites from querying whether you have payment methods saved (canMakePayment) - they are always told none are available."},
+
+            {"name": "Disable Alternate Error Pages", "key": "AlternateErrorPagesEnabled", "value": False, "desc": "Uses plain local error pages for navigation errors instead of a web-service-assisted suggestion page. Belt-and-braces: Brave already ships this off."},
+
+            {"name": "Block Remote Debugging", "key": "RemoteDebuggingAllowed", "value": False, "desc": "Blocks the remote debugging port and pipe, the interface automation tools use to drive the browser and read your cookies and logged-in sessions. Disable Developer Tools does not cover this. Breaks Puppeteer, Playwright and brave://inspect."},
+
+            {"name": "Disable DNS Interception Probes", "key": "DNSInterceptionChecksEnabled", "value": False, "desc": "Stops Brave from resolving three random hostnames at startup and again on every network change to detect a hijacking DNS provider. Those lookups are visible to your ISP or DoH resolver and mark each launch."},
+
+            {"name": "Require HTTPS for Basic Auth", "key": "BasicAuthOverHttpEnabled", "value": False, "desc": "Refuses HTTP Basic authentication over plain HTTP so your username and password are never sent in the clear. Breaks logins on legacy routers, printers and other appliances that only serve HTTP."},
+
         ],
     },
     {
@@ -389,14 +418,22 @@ CATEGORIES = [
         # has one), never a checkbox.
         "name": "Site Permissions",
         "features": [
-            {"name": "Web Notifications", "key": "DefaultNotificationsSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK},
-            {"name": "Location Access", "key": "DefaultGeolocationSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK},
-            {"name": "Motion Sensors", "key": "DefaultSensorsSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK},
-            {"name": "WebUSB Access", "key": "DefaultWebUsbGuardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK},
-            {"name": "Web Serial Access", "key": "DefaultSerialGuardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK},
-            {"name": "WebHID Access", "key": "DefaultWebHidGuardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK},
-            {"name": "Local Font Enumeration", "key": "DefaultLocalFontsSetting", "value": 2, "choices": CHOICES_ASK_BLOCK},
-            {"name": "Multi-Screen Access", "key": "DefaultWindowManagementSetting", "value": 2, "choices": CHOICES_ASK_BLOCK},
+            {"name": "Web Notifications", "key": "DefaultNotificationsSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK, "desc": "Sets the default for desktop notifications. Block stops every site from asking or showing them, Ask keeps the permission prompt, Allow grants it to every site."},
+
+            {"name": "Location Access", "key": "DefaultGeolocationSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK, "desc": "Sets the default for reading your physical location. Block removes the prompt entirely, so maps and delivery sites will need the location typed manually; Ask keeps the prompt."},
+
+            {"name": "Motion Sensors", "key": "DefaultSensorsSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK, "desc": "Sets the default for motion and orientation sensors, a known fingerprinting vector. Blocking rarely breaks anything on desktop."},
+
+            {"name": "WebUSB Access", "key": "DefaultWebUsbGuardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK, "desc": "Sets the default for sites talking to USB devices. Block removes the prompt and breaks web-based hardware wallets (Ledger, Trezor) and in-browser firmware flashers; Ask keeps the prompt. Chromium has no Allow state for this key."},
+
+            {"name": "Web Serial Access", "key": "DefaultSerialGuardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK, "desc": "Sets the default for sites opening serial ports. Block removes the prompt and breaks in-browser microcontroller and device programming tools; Ask keeps the prompt. Chromium has no Allow state for this key."},
+
+            {"name": "WebHID Access", "key": "DefaultWebHidGuardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK, "desc": "Sets the default for sites talking to human interface devices. Block removes the prompt and may break security keys and gamepad configurators that use WebHID rather than WebAuthn. Chromium has no Allow state for this key."},
+
+            {"name": "Local Font Enumeration", "key": "DefaultLocalFontsSetting", "value": 2, "choices": CHOICES_ASK_BLOCK, "desc": "Sets the default for sites asking which fonts are installed on your machine - a strong fingerprinting signal that Shields' font protections don't cover. Blocking rarely breaks anything outside web design tools. Chromium has no Allow state for this key."},
+
+            {"name": "Multi-Screen Access", "key": "DefaultWindowManagementSetting", "value": 2, "choices": CHOICES_ASK_BLOCK, "desc": "Sets the default for sites reading your monitor layout and placing windows on a chosen screen. Blocking breaks the full-screen presentation mode in some web apps. Chromium has no Allow state for this key."},
+
         ],
     },
     {
@@ -404,33 +441,55 @@ CATEGORIES = [
         # that would otherwise bypass the rest of the policy set.
         "name": "Access Controls",
         "features": [
-            {"name": "Force Google SafeSearch", "key": "ForceGoogleSafeSearch", "value": True},
-            {"name": "Filter Adult Content (SafeSites)", "key": "SafeSitesFilterBehavior", "value": 1},
-            {"name": "Disable Guest Mode", "key": "BrowserGuestModeEnabled", "value": False},
-            {"name": "Block All Extensions", "key": "ExtensionInstallBlocklist", "value": ["*"]},
-            {"name": "Block Sideloaded (External) Extensions", "key": "BlockExternalExtensions", "value": True},
-            {"name": "Disable Incognito Mode", "key": "IncognitoModeAvailability", "value": 1, "group": "incognito"},
-            {"name": "Force Incognito Mode", "key": "IncognitoModeAvailability", "value": 2, "group": "incognito"},
+            {"name": "Force Google SafeSearch", "key": "ForceGoogleSafeSearch", "value": True, "desc": "Forces SafeSearch on for all Google searches. Mainly useful for parental controls."},
+
+            {"name": "Filter Adult Content (SafeSites)", "key": "SafeSitesFilterBehavior", "value": 1, "desc": "Sends every URL you navigate to - including URLs loaded inside frames - to Google's Safe Search API to be classified, and blocks anything rated adult. This is a remote lookup, not a local filter. Mainly useful for parental controls."},
+
+            {"name": "Disable Guest Mode", "key": "BrowserGuestModeEnabled", "value": False, "desc": "Removes guest browsing sessions. Closes the loophole where a guest window bypasses profile-level restrictions and history."},
+
+            {"name": "Block All Extensions", "key": "ExtensionInstallBlocklist", "value": ["*"], "desc": "Blocks installation of every extension and disables ones already installed. For lockdown/parental setups - a proxy or VPN extension would bypass DNS filtering."},
+
+            {"name": "Block Sideloaded (External) Extensions", "key": "BlockExternalExtensions", "value": True, "desc": "Blocks extensions that other programs install for you through the Windows registry or a drop-in file, which is how bundleware gets in. Extensions you install yourself keep working, so this rarely breaks anything."},
+
+            {"name": "Disable Incognito Mode", "key": "IncognitoModeAvailability", "value": 1, "group": "incognito", "desc": "Removes private browsing entirely - no incognito windows can be opened. Mutually exclusive with Force Incognito Mode."},
+
+            {"name": "Force Incognito Mode", "key": "IncognitoModeAvailability", "value": 2, "group": "incognito", "desc": "Every window opens in incognito: no history, and logins and most extensions stop persisting. Mutually exclusive with Disable Incognito Mode."},
+
         ],
     },
     {
         "name": "Brave Features",
         "features": [
-            {"name": "Disable Brave Rewards", "key": "BraveRewardsDisabled", "value": True},
-            {"name": "Disable Brave Wallet", "key": "BraveWalletDisabled", "value": True},
-            {"name": "Disable Brave VPN (no effect on Linux builds)", "key": "BraveVPNDisabled", "value": True},
-            {"name": "Disable Brave AI Chat", "key": "BraveAIChatEnabled", "value": False},
-            {"name": "Disable Local AI (On-Device Models, Brave 1.94+)", "key": "BraveLocalAIEnabled", "value": False},
-            {"name": "Disable Brave Shields", "key": "BraveShieldsDisabledForUrls", "value": ["https://*", "http://*"], "group": "shields"},
-            {"name": "Force Shields On (All Sites)", "key": "BraveShieldsEnabledForUrls", "value": ["https://*", "http://*"], "group": "shields"},
-            {"name": "Disable Brave News", "key": "BraveNewsDisabled", "value": True},
-            {"name": "Disable Brave Talk", "key": "BraveTalkDisabled", "value": True},
-            {"name": "Disable Brave Playlist", "key": "BravePlaylistEnabled", "value": False},
-            {"name": "Disable Web Discovery", "key": "BraveWebDiscoveryEnabled", "value": False},
-            {"name": "Disable Speedreader", "key": "BraveSpeedreaderEnabled", "value": False},
-            {"name": "Disable Tor", "key": "TorDisabled", "value": True},
-            {"name": "Disable Sync", "key": "SyncDisabled", "value": True},
-            {"name": "Disable Email Aliases", "key": "EmailAliasesEnabled", "value": False},
+            {"name": "Disable Brave Rewards", "key": "BraveRewardsDisabled", "value": True, "desc": "Removes Brave Rewards and BAT ads from the browser UI."},
+
+            {"name": "Disable Brave Wallet", "key": "BraveWalletDisabled", "value": True, "desc": "Disables the built-in cryptocurrency wallet and hides its UI."},
+
+            {"name": "Disable Brave VPN (no effect on Linux builds)", "key": "BraveVPNDisabled", "value": True, "desc": "Removes the Brave VPN feature and its upsell prompts. Linux builds have no VPN, so this key changes nothing there."},
+
+            {"name": "Disable Brave AI Chat", "key": "BraveAIChatEnabled", "value": False, "desc": "Disables Leo, Brave's built-in AI assistant, and removes it from the sidebar and address bar."},
+
+            {"name": "Disable Local AI (On-Device Models, Brave 1.94+)", "key": "BraveLocalAIEnabled", "value": False, "desc": "Stops Brave from downloading and running on-device AI models and from building an AI index of your browsing history. Separate from Brave AI Chat - disabling Leo does not cover this. Needs Brave 1.94 or newer - that is current stable, so most installs already have it; older versions ignore the key. Takes effect after a browser restart."},
+
+            {"name": "Disable Brave Shields", "key": "BraveShieldsDisabledForUrls", "value": ["https://*", "http://*"], "group": "shields", "desc": "Turns Shields OFF for every site: no ad blocking, no tracker blocking. Also makes Enforce Ad Blocking, Enforce Fingerprinting Protection, Force HTTPS Upgrades and Cap Referrers do nothing, because Brave skips all four wherever Shields are off. Almost nobody wants this - it exists for kiosk/testing setups. Mutually exclusive with Force Shields On."},
+
+            {"name": "Force Shields On (All Sites)", "key": "BraveShieldsEnabledForUrls", "value": ["https://*", "http://*"], "group": "shields", "desc": "Locks Shields ON for every site; the per-site Shields toggle stops working. Mutually exclusive with Disable Brave Shields."},
+
+            {"name": "Disable Brave News", "key": "BraveNewsDisabled", "value": True, "desc": "Removes the Brave News feed from the new tab page."},
+
+            {"name": "Disable Brave Talk", "key": "BraveTalkDisabled", "value": True, "desc": "Disables Brave Talk video calls."},
+
+            {"name": "Disable Brave Playlist", "key": "BravePlaylistEnabled", "value": False, "desc": "Disables the Playlist feature for saving and playing media in the sidebar."},
+
+            {"name": "Disable Web Discovery", "key": "BraveWebDiscoveryEnabled", "value": False, "desc": "Stops Brave from anonymously contributing pages you visit to the Brave Search index (Web Discovery Project)."},
+
+            {"name": "Disable Speedreader", "key": "BraveSpeedreaderEnabled", "value": False, "desc": "Disables Speedreader, the distraction-free article reading mode."},
+
+            {"name": "Disable Tor", "key": "TorDisabled", "value": True, "desc": "Removes the 'New private window with Tor' option."},
+
+            {"name": "Disable Sync", "key": "SyncDisabled", "value": True, "desc": "Disables Brave Sync, which shares bookmarks, history, and settings across devices via a sync chain."},
+
+            {"name": "Disable Email Aliases", "key": "EmailAliasesEnabled", "value": False, "desc": "Disables the Email Aliases feature for generating throwaway email addresses."},
+
         ],
     },
     {
@@ -440,32 +499,53 @@ CATEGORIES = [
         # page/extension can quietly weaken them.
         "name": "Shields & Content Protection",
         "features": [
-            {"name": "Enforce Ad Blocking", "key": "DefaultBraveAdblockSetting", "value": 2},
-            {"name": "Enforce Fingerprinting Protection", "key": "DefaultBraveFingerprintingV2Setting", "value": 3},
-            {"name": "Force HTTPS Upgrades (Strict)", "key": "DefaultBraveHttpsUpgradeSetting", "value": 2},
-            {"name": "Cap Referrers (Strict Origin)", "key": "DefaultBraveReferrersSetting", "value": 2, "group": "referrers"},
-            {"name": "Allow Permissive Referrers (unsafe-url)", "key": "DefaultBraveReferrersSetting", "value": 1, "group": "referrers"},
-            {"name": "Forget First-Party Storage on Close", "key": "DefaultBraveRemember1PStorageSetting", "value": 2},
+            {"name": "Enforce Ad Blocking", "key": "DefaultBraveAdblockSetting", "value": 2, "desc": "Pins Brave's ad and tracker blocking on as managed policy, so it can't be lowered in settings or per-site."},
+
+            {"name": "Enforce Fingerprinting Protection", "key": "DefaultBraveFingerprintingV2Setting", "value": 3, "desc": "Pins Shields fingerprinting protection on as managed policy, so sites can't be exempted from it."},
+
+            {"name": "Force HTTPS Upgrades (Strict)", "key": "DefaultBraveHttpsUpgradeSetting", "value": 2, "desc": "Always upgrades connections to HTTPS. Sites that can't serve HTTPS show a warning page instead of silently falling back to HTTP."},
+
+            {"name": "Cap Referrers (Strict Origin)", "key": "DefaultBraveReferrersSetting", "value": 2, "group": "referrers", "desc": "Caps the Referer header at the origin for cross-site requests, locked as managed policy. Mutually exclusive with Allow Permissive Referrers."},
+
+            {"name": "Allow Permissive Referrers (unsafe-url)", "key": "DefaultBraveReferrersSetting", "value": 1, "group": "referrers", "desc": "Sends your full referring URL cross-origin when a site requests it. Compatibility escape hatch only - this weakens privacy and is excluded from every preset. Mutually exclusive with Cap Referrers."},
+
+            {"name": "Forget First-Party Storage on Close", "key": "DefaultBraveRemember1PStorageSetting", "value": 2, "desc": "Clears a site's cookies and storage when you close its last tab - sites forget you (and your logins) between visits."},
+
         ],
     },
     {
         "name": "Performance & Bloat",
         "features": [
-            {"name": "Disable Background Mode", "key": "BackgroundModeEnabled", "value": False},
-            {"name": "Enable Memory Saver", "key": "HighEfficiencyModeEnabled", "value": True},
-            {"name": "Force Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": True, "group": "hwaccel"},
-            {"name": "Disable Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": False, "group": "hwaccel"},
-            {"name": "Disable Media Router (Cast)", "key": "EnableMediaRouter", "value": False},
-            {"name": "Disable Media Recommendations", "key": "MediaRecommendationsEnabled", "value": False},
-            {"name": "Disable Shopping List", "key": "ShoppingListEnabled", "value": False},
-            {"name": "Always Open PDF Externally", "key": "AlwaysOpenPdfExternally", "value": True},
-            {"name": "Disable Translate", "key": "TranslateEnabled", "value": False},
-            {"name": "Disable Spellcheck", "key": "SpellcheckEnabled", "value": False, "group": "spellcheck"},
-            {"name": "Disable Search Suggestions", "key": "SearchSuggestEnabled", "value": False},
-            {"name": "Disable Printing", "key": "PrintingEnabled", "value": False},
-            {"name": "Disable Default Browser Prompt", "key": "DefaultBrowserSettingEnabled", "value": False},
-            {"name": "Disable Developer Tools", "key": "DeveloperToolsAvailability", "value": 2},
-            {"name": "Disable Wayback Machine", "key": "BraveWaybackMachineEnabled", "value": False},
+            {"name": "Disable Background Mode", "key": "BackgroundModeEnabled", "value": False, "desc": "Stops Brave from keeping background processes running after the last window is closed."},
+
+            {"name": "Enable Memory Saver", "key": "HighEfficiencyModeEnabled", "value": True, "desc": "Forces Memory Saver on: inactive tabs are discarded to free RAM and reload when you return to them."},
+
+            {"name": "Force Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": True, "group": "hwaccel", "desc": "Pins GPU hardware acceleration on so rendering and video decode stay off the CPU. Takes effect after a browser restart."},
+
+            {"name": "Disable Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": False, "group": "hwaccel", "desc": "Forces GPU acceleration off. This is a departure from Brave's default and costs rendering performance and battery, so use it only when the GPU path is itself the problem: flickering or artifacts from a faulty driver, a VM or RDP session with no usable GPU, or corruption while screen sharing. Takes effect after a browser restart."},
+
+            {"name": "Disable Media Router (Cast)", "key": "EnableMediaRouter", "value": False, "desc": "Disables the Google Cast media router and its background device discovery on the local network. Takes effect after a browser restart."},
+
+            {"name": "Disable Media Recommendations", "key": "MediaRecommendationsEnabled", "value": False, "desc": "Disables the media history and recommendation surfaces built from what you watch."},
+
+            {"name": "Disable Shopping List", "key": "ShoppingListEnabled", "value": False, "desc": "Disables the price-tracking shopping list feature."},
+
+            {"name": "Always Open PDF Externally", "key": "AlwaysOpenPdfExternally", "value": True, "desc": "Downloads PDF files and opens them in your system PDF viewer instead of the built-in viewer."},
+
+            {"name": "Disable Translate", "key": "TranslateEnabled", "value": False, "desc": "Disables the built-in page translation feature and its popup prompts."},
+
+            {"name": "Disable Spellcheck", "key": "SpellcheckEnabled", "value": False, "group": "spellcheck", "desc": "Turns off spell checking in text fields entirely. Mutually exclusive with Disable Enhanced Spell Check, which keeps offline checking and only removes the Google lookup."},
+
+            {"name": "Disable Search Suggestions", "key": "SearchSuggestEnabled", "value": False, "desc": "Stops sending what you type in the address bar to your search engine for live suggestions."},
+
+            {"name": "Disable Printing", "key": "PrintingEnabled", "value": False, "desc": "Disables printing from the browser entirely (including Ctrl+P)."},
+
+            {"name": "Disable Default Browser Prompt", "key": "DefaultBrowserSettingEnabled", "value": False, "desc": "Stops Brave from asking to become your default browser."},
+
+            {"name": "Disable Developer Tools", "key": "DeveloperToolsAvailability", "value": 2, "desc": "Blocks DevTools (F12) and extension debugging everywhere. Don't enable this if you do web development."},
+
+            {"name": "Disable Wayback Machine", "key": "BraveWaybackMachineEnabled", "value": False, "desc": "Stops Brave from offering an archive.org snapshot when a page returns 404."},
+
         ],
     },
 ]
@@ -508,6 +588,7 @@ def build_rows(installations=None):
                     "key": feat["key"],
                     "value": feat["value"],   # what the old checkbox wrote
                     "choices": feat["choices"],
+                    "desc": feat.get("desc", ""),
                     "selected": 0,            # index into choices; 0 = unmanaged
                 })
                 continue
@@ -517,6 +598,7 @@ def build_rows(installations=None):
                 "key": feat["key"],
                 "value": feat["value"],
                 "group": feat.get("group"),
+                "desc": feat.get("desc", ""),
                 "checked": False,
             })
     # DNS mode selector at the end
@@ -1339,6 +1421,177 @@ def disclosure_glyphs():
     return _disclosure_glyphs
 
 
+BOX_UNICODE = ("\u2500", "\u2502", "\u250c", "\u2510", "\u2514", "\u2518", "\u2026")
+BOX_ASCII = ("-", "|", "+", "+", "+", "+", "...")
+_box_glyphs = None
+
+
+def box_glyphs():
+    """Return (h, v, tl, tr, bl, br, ellipsis) as this terminal can encode them.
+
+    The same rule as disclosure_glyphs(): ask the codec before drawing.
+    """
+    global _box_glyphs
+    if _box_glyphs is None:
+        try:
+            enc = locale.getpreferredencoding(False) or "ascii"
+            for glyph in BOX_UNICODE:
+                glyph.encode(enc)
+            _box_glyphs = BOX_UNICODE
+        except (LookupError, UnicodeEncodeError, ValueError):
+            _box_glyphs = BOX_ASCII
+    return _box_glyphs
+
+
+# Rows the list keeps before the description pane gives way to it.
+DESC_PANE_MIN_LIST = 4
+
+
+DESC_PANE_MAX_LINES = 4
+_desc_pane_lines = {}
+
+
+def desc_pane_lines(max_x):
+    """Text lines the pane needs at this width.
+
+    What the longest description wraps to at this width, up to
+    DESC_PANE_MAX_LINES: four lines at 80 columns, where five of the
+    descriptions still end in an ellipsis; three from about 140, where none
+    does. Sized by the content rather than by a constant so a wider
+    terminal gives the list its rows back.
+    """
+    if max_x not in _desc_pane_lines:
+        width = max(1, (max_x - 1) - 4)
+        texts = [f.get("desc", "") for cat in CATEGORIES for f in cat["features"]]
+        texts += list(DNS_DESC.values()) + list(BUTTON_DESC.values())
+        need = max((len(textwrap.wrap(t, width, break_on_hyphens=False))
+                    for t in texts), default=1)
+        _desc_pane_lines[max_x] = max(1, min(DESC_PANE_MAX_LINES, need))
+    return _desc_pane_lines[max_x]
+
+
+def layout(max_y, max_x, show_desc):
+    """The row budget for one frame, shared by draw() and viewport_rows().
+
+    Rows 0-1 are the title and the hints. The list sits in a box, the
+    description pane (if shown) in a second, the buttons in a third, and
+    the status line is the last row. The pane gives way when it would
+    leave the list under DESC_PANE_MIN_LIST rows, so a small terminal
+    keeps its list; under 9 rows the boxes go too, and the screen is the
+    plain stack it was before them - list from row 2, buttons on the
+    second-last row, status on the last - because eight rows of chrome
+    would leave nothing else.
+    """
+    if max_y < 9:
+        list_rows = max(1, max_y - 5)
+        return {
+            "framed": False,
+            "list_top": 2,
+            "list_rows": list_rows,
+            "list_bottom": 2 + list_rows,
+            "pane_top": None,
+            "pane_lines": 0,
+            "btn_top": max_y - 3,
+            "btn_y": max_y - 2,
+            "status_y": max_y - 1,
+        }
+    fixed = 2 + 2 + 3 + 1
+    pane = desc_pane_lines(max_x) if show_desc else 0
+    if pane and max_y - fixed - (pane + 2) < DESC_PANE_MIN_LIST:
+        pane = 0
+    list_rows = max(1, max_y - fixed - (pane + 2 if pane else 0))
+    list_top = 3
+    list_bottom = list_top + list_rows
+    pane_top = list_bottom + 1 if pane else None
+    btn_top = pane_top + pane + 2 if pane else list_bottom + 1
+    return {
+        "framed": True,
+        "list_top": list_top,
+        "list_rows": list_rows,
+        "list_bottom": list_bottom,
+        "pane_top": pane_top,
+        "pane_lines": pane,
+        "btn_top": btn_top,
+        "btn_y": btn_top + 1,
+        "status_y": max_y - 1,
+    }
+
+
+def template_field_width(max_x):
+    """Width of the editable DoH template field inside the list box.
+
+    The row is '    Template: [' + text + ']' plus a margin; draw() and the
+    editing keys in main() must agree on this figure, or the cursor and
+    the text scroll drift apart.
+    """
+    # capped so the closing bracket stays inside the box on a narrow terminal
+    return max(1, min(max_x - 21, max(10, (max_x - 1) - 4 - 22)))
+
+
+def wrap_description(text, width, max_lines, ellipsis="..."):
+    """Word-wrap `text` to at most `max_lines` rows of `width`.
+
+    A description that does not fit ends in `ellipsis`, so a cut is
+    visible rather than silent.
+    """
+    if width < 1 or max_lines < 1:
+        return []
+    # break_on_hyphens off: a resolver URL must not split at "dns-query"
+    lines = textwrap.wrap(text or "", width, break_on_hyphens=False)
+    if len(lines) <= max_lines:
+        return lines
+    lines = lines[:max_lines]
+    room = max(0, width - len(ellipsis))
+    lines[-1] = lines[-1][:room].rstrip() + ellipsis
+    return lines
+
+
+BUTTON_DESC = {
+    "Import": "Load a settings file - a preset from Presets/ or an earlier "
+              "export - into the list. Nothing is written until Apply.",
+    "Export": "Save the current selections as JSON that Import, and the "
+              "other platforms' scripts, read back.",
+    "Apply": "Write the selected policies where Brave reads them at "
+             "startup. A running Brave picks them up when it restarts.",
+    "Reset": "Remove the policy this tool wrote, so Brave returns to its "
+             "own defaults. Asks before it does.",
+    "Quit": "Leave without writing anything.",
+}
+
+DNS_DESC = {
+    "mode": "Secure and custom send every lookup to the template below and "
+            "never fall back, so a wrong template resolves nothing. "
+            "Automatic uses DNS over HTTPS when the resolver offers it and "
+            "plain DNS otherwise. Off never uses it. Not managed leaves "
+            "Brave's own setting alone.",
+    "template": "The DNS-over-HTTPS resolver, as a template such as "
+                "https://dns.example/dns-query. Required by secure and "
+                "custom; automatic uses it when set.",
+}
+
+
+def describe_row(rows, cursor_idx, focus, btn_idx):
+    """The description pane's text for whatever has focus."""
+    if focus == FOCUS_BUTTONS:
+        return BUTTON_DESC.get(BUTTONS[btn_idx], "")
+    if not (0 <= cursor_idx < len(rows)):
+        return ""
+    row = rows[cursor_idx]
+    kind = row["type"]
+    if kind == ROW_HEADER:
+        on, total = header_counts(rows, cursor_idx)
+        if total:
+            return (f"{row['text']}: {total} settings, {on} on. Left folds "
+                    "the section, Right unfolds it, Space toggles it, "
+                    "c folds or unfolds them all.")
+        return f"{row['text']}: the resolver mode and its template."
+    if kind == ROW_DNS:
+        return DNS_DESC["mode"]
+    if kind == ROW_DNS_TEMPLATE:
+        return DNS_DESC["template"]
+    return row.get("desc", "")
+
+
 def header_span(rows, header_idx):
     """Return the (start, end) row range a header owns, end-exclusive."""
     end = header_idx + 1
@@ -1462,10 +1715,10 @@ def resolve_cursor(sel, cursor_idx):
     return pos, sel[pos]
 
 
-def viewport_rows(stdscr):
-    """Return how many list rows fit between the hints and the buttons."""
-    max_y, _ = stdscr.getmaxyx()
-    return max(1, (max_y - 4) - 2)
+def viewport_rows(stdscr, show_desc=False):
+    """Return how many list rows fit inside the list box this frame."""
+    max_y, max_x = stdscr.getmaxyx()
+    return layout(max_y, max_x, show_desc)["list_rows"]
 
 
 def clamp_scroll(rows, vis, scroll_offset, cursor_vpos, visible_count):
@@ -1502,25 +1755,55 @@ def selectable_indices(rows, filter_text=""):
 
 def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
          status_msg, status_ok, install_method="",
-         prompt_label="", prompt_buf="", prompt_cur=0, filter_text=""):
-    """Render the full TUI screen."""
+         prompt_label="", prompt_buf="", prompt_cur=0, filter_text="",
+         show_desc=False, describe_focus=None):
+    """Render the full TUI screen.
+
+    Title and key hints on rows 0-1, the list inside a box, the
+    description pane (when shown) inside a second box, the buttons inside
+    a third, and the status line last. layout() owns the row arithmetic,
+    so this and viewport_rows() cannot disagree about the list's height.
+    """
     stdscr.erase()
     max_y, max_x = stdscr.getmaxyx()
-    usable_w = max_x - 1
+    usable_w = max_x - 1  # avoid writing to the last column
+    hz, vt, tl, tr, bl, br, ellipsis = box_glyphs()
+    lay = layout(max_y, max_x, show_desc)
+    framed = lay["framed"]
+    inner_x = 2 if framed else 0
+    inner_w = max(1, usable_w - 4) if framed else usable_w
+    edge_attr = curses.color_pair(CP_NORMAL) | curses.A_DIM
 
+    def put(y, x, text, n, attr):
+        try:
+            stdscr.addnstr(y, x, text, n, attr)
+        except curses.error:
+            pass
+
+    def frame(top, bottom, label=""):
+        """A box from row `top` to row `bottom`, `label` set in its top edge."""
+        edge = hz * max(0, usable_w - 2)
+        head = edge
+        if label and len(label) + 2 < len(edge):
+            head = hz + label + edge[len(label) + 1:]
+        put(top, 0, tl + head + tr, usable_w, edge_attr)
+        for y in range(top + 1, bottom):
+            put(y, 0, vt, 1, edge_attr)
+            put(y, usable_w - 1, vt, 1, edge_attr)
+        put(bottom, 0, bl + edge + br, usable_w, edge_attr)
+
+    # Title bar
     if install_method:
         title = f" SlimBrave Neo - Brave Browser Debloater [{install_method}] "
     else:
         title = " SlimBrave Neo - Brave Browser Debloater "
     pad = max(0, (usable_w - len(title)) // 2)
-    try:
-        stdscr.addnstr(0, 0, " " * usable_w, usable_w,
-                        curses.color_pair(CP_TITLE) | curses.A_BOLD)
-        stdscr.addnstr(0, pad, title, usable_w - pad,
-                        curses.color_pair(CP_TITLE) | curses.A_BOLD)
-    except curses.error:
-        pass
+    put(0, 0, " " * usable_w, usable_w,
+        curses.color_pair(CP_TITLE) | curses.A_BOLD)
+    put(0, pad, title, usable_w - pad,
+        curses.color_pair(CP_TITLE) | curses.A_BOLD)
 
+    # Key hints below the title, or the live filter and its match count
     vis = visible_indices(rows, filter_text)
     needle = filter_text.strip()
     if needle:
@@ -1528,19 +1811,20 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
         plural = "" if matches == 1 else "es"
         hint = f" Filter: {needle}   {matches} match{plural}   [Esc] Clear "
     else:
-        hint = " [Space/Enter] Toggle  [/] Search  [Q] Quit  [?] Help "
-    try:
-        stdscr.addnstr(1, 0, hint.center(usable_w), usable_w,
-                        curses.color_pair(CP_NORMAL) | curses.A_DIM)
-    except curses.error:
-        pass
+        hint = " [Space/Enter] Toggle  [/] Search  [D] Describe  [Q] Quit  [?] Help "
+        if len(hint) > usable_w:
+            # the shorter hint from before the pane fits down to 55 columns
+            hint = " [Space/Enter] Toggle  [/] Search  [Q] Quit  [?] Help "
+    put(1, 0, hint.center(usable_w), usable_w,
+        curses.color_pair(CP_NORMAL) | curses.A_DIM)
 
-    list_start_y = 2
-    list_end_y = max_y - 4
-    visible_count = list_end_y - list_start_y
-    if visible_count < 1:
-        visible_count = 1
+    # The list, in its box
+    list_start_y = lay["list_top"]
+    visible_count = lay["list_rows"]
+    if framed:
+        frame(list_start_y - 1, lay["list_bottom"], " Settings ")
 
+    # Current DNS mode (for dimming the template row)
     current_dns_mode = get_dns_mode(rows)
 
     for vi in range(visible_count):
@@ -1550,8 +1834,6 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
         ri = vis[vpos]
         row = rows[ri]
         y = list_start_y + vi
-        if y >= max_y - 3:
-            break
 
         is_cursor = (focus == FOCUS_LIST and ri == cursor_idx)
 
@@ -1570,7 +1852,7 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
             if total:
                 counter = f"{on_count}/{total} on"
                 line = line.ljust(max(len(line) + 2,
-                                      usable_w - len(counter) - 2)) + counter
+                                      inner_w - len(counter) - 1)) + counter
         elif row["type"] == ROW_FEATURE:
             mark = "x" if row["checked"] else " "
             line = f"    [{mark}] {row['text']}"
@@ -1593,7 +1875,7 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
             tmpl_active = current_dns_mode in ("custom", "secure")
             val = row["value"] if row["value"] else ""
             if tmpl_active:
-                field_w = max(10, usable_w - 22)
+                field_w = template_field_width(max_x)
                 # The stored offset was computed against whatever width the
                 # terminal had when the user last typed; re-derive it for
                 # the current field so a resize can't strand the text.
@@ -1605,7 +1887,9 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
                     scroll = cur_pos
                 row["scroll"] = scroll
                 visible_text = val[scroll:scroll + field_w]
-                line = f"    Template: [{visible_text}]"
+                # padded to the field width, so the closing bracket keeps
+                # its place when the cursor sits at the end of the text
+                line = f"    Template: [{visible_text.ljust(field_w)}]"
                 attr = curses.color_pair(CP_NORMAL)
             else:
                 line = "    Template: (select custom/secure DNS)"
@@ -1614,75 +1898,70 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
         if is_cursor:
             attr = curses.color_pair(CP_CURSOR) | curses.A_BOLD
 
-        try:
-            stdscr.addnstr(y, 0, line.ljust(usable_w), usable_w, attr)
-        except curses.error:
-            pass
+        put(y, inner_x, line.ljust(inner_w), inner_w, attr)
 
+        # Draw text cursor for active template row
         if (is_cursor and row["type"] == ROW_DNS_TEMPLATE
                 and current_dns_mode in ("custom", "secure")):
             tmpl_val = row["value"]
-            field_start = 15
-            field_w = max(10, usable_w - 22)
+            field_start = inner_x + 15  # len("    Template: [")
+            field_w = template_field_width(max_x)
             scroll = row.get("scroll", 0)
             cur_pos = row.get("cursor", 0)
             cur_screen_pos = field_start + cur_pos - scroll
             # Stay inside the bracketed field, not just inside the line.
-            if field_start <= cur_screen_pos < min(usable_w, field_start + field_w):
-                try:
-                    ch = tmpl_val[cur_pos] if cur_pos < len(tmpl_val) else " "
-                    stdscr.addnstr(y, cur_screen_pos, ch, 1,
-                                   curses.color_pair(CP_BUTTON_ACTIVE))
-                except curses.error:
-                    pass
+            if field_start <= cur_screen_pos < min(inner_x + inner_w,
+                                                   field_start + field_w):
+                ch = tmpl_val[cur_pos] if cur_pos < len(tmpl_val) else " "
+                put(y, cur_screen_pos, ch, 1,
+                    curses.color_pair(CP_BUTTON_ACTIVE))
 
+    # Scroll indicators, set into the box edges
+    mark_x = usable_w - 7 if framed else usable_w - 5
     if scroll_offset > 0:
-        try:
-            stdscr.addnstr(list_start_y - 1, usable_w - 5, " ^^^ ", 5,
-                            curses.color_pair(CP_NORMAL) | curses.A_DIM)
-        except curses.error:
-            pass
+        put(list_start_y - 1, mark_x, " ^^^ ", 5, edge_attr)
     if scroll_offset + visible_count < len(vis):
-        try:
-            stdscr.addnstr(list_end_y, usable_w - 5, " vvv ", 5,
-                            curses.color_pair(CP_NORMAL) | curses.A_DIM)
-        except curses.error:
-            pass
+        put(lay["list_bottom"], mark_x, " vvv ", 5, edge_attr)
 
-    btn_y = max_y - 2
-    btn_x = 2
+    # Description pane: what the cursor is on, or the focused button
+    if lay["pane_lines"]:
+        top = lay["pane_top"]
+        frame(top, top + lay["pane_lines"] + 1, " Description ")
+        what = describe_focus if describe_focus is not None else focus
+        text = describe_row(rows, cursor_idx, what, btn_idx)
+        parts = wrap_description(text, inner_w, lay["pane_lines"], ellipsis)
+        for i, part in enumerate(parts):
+            put(top + 1 + i, inner_x, part, inner_w,
+                curses.color_pair(CP_NORMAL))
+
+    # Bottom buttons, in their box
+    if framed:
+        frame(lay["btn_top"], lay["btn_top"] + 2)
+    btn_y = lay["btn_y"]
+    btn_x = inner_x
     for i, label in enumerate(BUTTONS):
         display = f" {label} "
         if focus == FOCUS_BUTTONS and i == btn_idx:
             attr = curses.color_pair(CP_BUTTON_ACTIVE) | curses.A_BOLD
         else:
             attr = curses.color_pair(CP_BUTTON)
-        try:
-            stdscr.addnstr(btn_y, btn_x, display, usable_w - btn_x, attr)
-        except curses.error:
-            pass
+        put(btn_y, btn_x, display, max(0, inner_x + inner_w - btn_x), attr)
         btn_x += len(display) + 3
 
-    status_y = max_y - 1
+    # Status / prompt line
+    status_y = lay["status_y"]
     if focus == FOCUS_PROMPT:
         prompt_text = f" {prompt_label}: {prompt_buf}"
-        try:
-            stdscr.addnstr(status_y, 0, prompt_text.ljust(usable_w),
-                            usable_w, curses.color_pair(CP_TITLE))
-            cur_x = len(prompt_label) + 3 + prompt_cur
-            if cur_x < usable_w:
-                ch = prompt_buf[prompt_cur] if prompt_cur < len(prompt_buf) else " "
-                stdscr.addnstr(status_y, cur_x, ch, 1,
-                               curses.color_pair(CP_BUTTON_ACTIVE))
-        except curses.error:
-            pass
+        put(status_y, 0, prompt_text.ljust(usable_w), usable_w,
+            curses.color_pair(CP_TITLE))
+        cur_x = len(prompt_label) + 3 + prompt_cur
+        if cur_x < usable_w:
+            ch = prompt_buf[prompt_cur] if prompt_cur < len(prompt_buf) else " "
+            put(status_y, cur_x, ch, 1, curses.color_pair(CP_BUTTON_ACTIVE))
     elif status_msg:
         cp = CP_STATUS_OK if status_ok else CP_STATUS_ERR
-        try:
-            stdscr.addnstr(status_y, 2, status_msg[:usable_w - 3],
-                            usable_w - 3, curses.color_pair(cp))
-        except curses.error:
-            pass
+        put(status_y, 2, status_msg[:usable_w - 3], usable_w - 3,
+            curses.color_pair(cp))
 
     stdscr.refresh()
 
@@ -1697,6 +1976,7 @@ HELP_LINES = [
     "   Left / Right          Cycle a selector; fold / unfold a section",
     "   c                     Fold every section, or unfold them all",
     "   /                     Filter rows by name",
+    "   d                     Show or hide the description pane",
     "   Esc                   Clear the filter, else quit",
     "   ?                     This help",
     "   Tab                   Jump to the button row",
@@ -1726,7 +2006,8 @@ def draw_help(stdscr):
 
 
 def prompt_text_input(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
-                      install_method, label, default="", on_change=None):
+                      install_method, label, default="", on_change=None,
+                      show_desc=False):
     """Show a status-line text prompt and return (ok, text) on Enter.
 
     `on_change` is the live-filter hook: it is handed the buffer after
@@ -1748,7 +2029,11 @@ def prompt_text_input(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
         draw(stdscr, rows, cursor_idx, scroll_offset,
              FOCUS_PROMPT, btn_idx, "", True, install_method,
              prompt_label=label, prompt_buf=text, prompt_cur=cur,
-             filter_text="" if on_change is None else text)
+             filter_text="" if on_change is None else text,
+             show_desc=show_desc,
+             # the filter prompt (on_change) describes the cursor row; the
+             # Import and Export path prompts describe their button
+             describe_focus=None if on_change is not None else FOCUS_BUTTONS)
 
         key = stdscr.getch()
 
@@ -1784,6 +2069,10 @@ def main(stdscr, override_installations=None):
     init_colors()
     stdscr.keypad(True)
     stdscr.timeout(-1)
+    # The description pane starts shown wherever layout() finds room for
+    # it; `d` toggles it, and layout() drops it on its own below that room.
+    max_y, max_x = stdscr.getmaxyx()
+    show_desc = layout(max_y, max_x, True)["pane_lines"] > 0
 
     brave_info = detect_brave()
     if override_installations is not None:
@@ -1830,7 +2119,7 @@ def main(stdscr, override_installations=None):
         status_ok = True
 
     while True:
-        visible_count = viewport_rows(stdscr)
+        visible_count = viewport_rows(stdscr, show_desc)
         # Recomputed every pass: a fold, a filter keystroke or an import can
         # change what is on screen between one getch() and the next.
         vis = visible_indices(rows, filter_text)
@@ -1841,7 +2130,8 @@ def main(stdscr, override_installations=None):
                                      cursor_vpos, visible_count)
 
         draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
-             status_msg, status_ok, install_method, filter_text=filter_text)
+             status_msg, status_ok, install_method, filter_text=filter_text,
+             show_desc=show_desc)
 
         key = stdscr.getch()
         if key == curses.KEY_RESIZE:
@@ -1860,7 +2150,7 @@ def main(stdscr, override_installations=None):
                 row["value"] = val[:cur] + chr(key) + val[cur:]
                 row["cursor"] = cur + 1
                 _, max_x = stdscr.getmaxyx()
-                field_w = max(10, max_x - 1 - 22)
+                field_w = template_field_width(max_x)
                 if row["cursor"] - row["scroll"] >= field_w:
                     row["scroll"] = row["cursor"] - field_w + 1
                 status_msg = ""
@@ -1892,7 +2182,7 @@ def main(stdscr, override_installations=None):
                 if row["cursor"] < len(row["value"]):
                     row["cursor"] += 1
                     _, max_x = stdscr.getmaxyx()
-                    field_w = max(10, max_x - 1 - 22)
+                    field_w = template_field_width(max_x)
                     if row["cursor"] - row["scroll"] >= field_w:
                         row["scroll"] = row["cursor"] - field_w + 1
                 continue
@@ -1903,7 +2193,7 @@ def main(stdscr, override_installations=None):
             elif key == curses.KEY_END:
                 row["cursor"] = len(row["value"])
                 _, max_x = stdscr.getmaxyx()
-                field_w = max(10, max_x - 1 - 22)
+                field_w = template_field_width(max_x)
                 row["scroll"] = max(0, row["cursor"] - field_w + 1)
                 continue
 
@@ -1978,6 +2268,14 @@ def main(stdscr, override_installations=None):
                 header["collapsed"] = fold
             status_msg = ""
 
+        elif key == ord("d"):
+            show_desc = not show_desc
+            status_msg = ""
+            max_y, max_x = stdscr.getmaxyx()
+            if show_desc and layout(max_y, max_x, True)["pane_lines"] == 0:
+                status_msg = "Terminal too short for the description pane."
+                status_ok = False
+
         elif key == ord("?"):
             while True:
                 draw_help(stdscr)
@@ -2006,7 +2304,8 @@ def main(stdscr, override_installations=None):
                 stdscr, rows, cursor_idx, scroll_offset,
                 btn_idx, install_method,
                 "Filter (Esc=clear)",
-                default=filter_text, on_change=preview)
+                default=filter_text, on_change=preview,
+                show_desc=show_desc)
             if ok:
                 filter_text = text
             else:
@@ -2075,7 +2374,8 @@ def main(stdscr, override_installations=None):
                     status_ok = True
                     draw(stdscr, rows, cursor_idx, scroll_offset,
                          focus, btn_idx, status_msg, status_ok,
-                         install_method, filter_text=filter_text)
+                         install_method, filter_text=filter_text,
+                         show_desc=show_desc)
                     confirm = stdscr.getch()
                     if confirm in (curses.KEY_ENTER, 10, 13):
                         status_ok, status_msg = reset_policy(rows, installations)
@@ -2088,7 +2388,7 @@ def main(stdscr, override_installations=None):
                         stdscr, rows, cursor_idx, scroll_offset,
                         btn_idx, install_method,
                         "Import path (Esc=cancel)",
-                        default="./Presets/")
+                        default="./Presets/", show_desc=show_desc)
                     if ok and path:
                         status_ok, status_msg = import_settings(rows, path)
                     else:
@@ -2100,7 +2400,7 @@ def main(stdscr, override_installations=None):
                         stdscr, rows, cursor_idx, scroll_offset,
                         btn_idx, install_method,
                         "Export path (Esc=cancel)",
-                        default="./SlimBraveNeoSettings.json")
+                        default="./SlimBraveNeoSettings.json", show_desc=show_desc)
                     if ok and path:
                         status_ok, status_msg = export_settings(rows, path)
                     else:

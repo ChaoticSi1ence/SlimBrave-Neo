@@ -9,6 +9,7 @@ touches /etc, the registry, or a real Brave profile — filesystem work stays
 in pytest's tmp_path.
 """
 
+import curses
 import importlib.util
 import json
 import os
@@ -1918,7 +1919,8 @@ def test_cycling_a_choice_row_while_filtered_keeps_the_filter(mod):
 #
 # PageUp/PageDown were unbound through v1.9.5, which left an 87-row list
 # reachable one Down at a time. The step is a whole viewport, which on the
-# 80x24 terminal these tests assume is 18 rows.
+# 80x24 terminal these tests assume is 16 rows with the description pane
+# hidden and 10 with it shown.
 # ---------------------------------------------------------------------------
 
 
@@ -1958,8 +1960,13 @@ def test_paging_branch_matches_the_helper_that_mirrors_it(script):
 
 
 def test_viewport_rows_leaves_room_for_the_chrome(mod):
-    assert mod.viewport_rows(_FakeScreen(24, 80)) == 18
-    assert mod.viewport_rows(_FakeScreen(50, 120)) == 44
+    # Title, hints, the list box's two edges, the three-row button box and
+    # the status line: eight rows. The description pane, when shown, takes
+    # its text lines (four at 80 and 120 columns) plus two edges on top.
+    assert mod.viewport_rows(_FakeScreen(24, 80)) == 16
+    assert mod.viewport_rows(_FakeScreen(24, 80), show_desc=True) == 10
+    assert mod.viewport_rows(_FakeScreen(50, 120)) == 42
+    assert mod.viewport_rows(_FakeScreen(50, 120), show_desc=True) == 36
     # Never zero or negative, however small the terminal gets.
     assert mod.viewport_rows(_FakeScreen(6, 20)) == 1
     assert mod.viewport_rows(_FakeScreen(1, 20)) == 1
@@ -2710,4 +2717,359 @@ def test_ps1_owner_drawn_controls_take_keyboard_focus():
     assert "$form.Dispose()" in live, "the form is never disposed while the script scope is alive"
     # Escape in a text box belongs to the box; closing with staged changes asks.
     assert "Add_FormClosing" in live and "Get-StateSnapshot" in live
+
+
+# ---------------------------------------------------------------------------
+# TUI frames and the description pane
+# ---------------------------------------------------------------------------
+#
+# draw() sets the list, the description pane and the buttons in boxes, and
+# `d` shows or hides the pane. The row arithmetic lives in layout(), which
+# viewport_rows() shares with draw(); wrap_description() and describe_row()
+# are pure over rows[]. The descriptions themselves are the PS1 Tips,
+# copied into the Python tables so the three scripts explain a policy in
+# the same words - the parity test below is what keeps them the same.
+
+_PS1_TIP_RE = re.compile(r'Tip\s*=\s*"((?:[^"]|"")*)"')
+
+
+def _ps1_tips():
+    """Return {(key, value): tip} for every PS1 feature row."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    rows = list(_PS1_FEATURE_RE.finditer(text))
+    tips = {}
+    for i, m in enumerate(rows):
+        end = rows[i + 1].start() if i + 1 < len(rows) else len(text)
+        tip = _PS1_TIP_RE.search(text, m.start(), end)
+        assert tip, f"PS1 row without a Tip: {m.group(1)}"
+        value = _parse_ps1_value(m.group(3))
+        if isinstance(value, list):
+            value = tuple(value)
+        tips[(m.group(2), value)] = tip.group(1).replace('""', '"')
+    assert len(tips) == text.count('Key = "'), (
+        "a PS1 row lost its Tip, or two rows share a key and value"
+    )
+    return tips
+
+
+def _py_identity(feat):
+    """(key, value) the way the PS1 table spells it: no bools, no lists."""
+    value = feat["value"]
+    if isinstance(value, bool):
+        value = int(value)
+    if isinstance(value, list):
+        value = tuple(value)
+    return (feat["key"], value)
+
+
+# One script may append a platform note to a Tip - the PS1 text first, word
+# for word, then its own sentence. Linux's VPN row is the only case: the key
+# is honoured on Windows and macOS and compiled out of Linux builds.
+PS1_DESC_SUFFIX_ALLOWED = {"slimbrave_linux": {("BraveVPNDisabled", 1)}}
+
+
+def test_every_python_row_carries_the_ps1_description(mod):
+    tips = _ps1_tips()
+    allowed = PS1_DESC_SUFFIX_ALLOWED.get(mod.__name__, set())
+    for cat in mod.CATEGORIES:
+        for feat in cat["features"]:
+            ident = _py_identity(feat)
+            assert feat.get("desc"), f"{feat['name']} has no description"
+            assert ident in tips, f"{feat['name']} {ident} has no PS1 row to take a Tip from"
+            if ident in allowed:
+                assert feat["desc"].startswith(tips[ident] + " ") and feat["desc"] != tips[ident], (
+                    f"{feat['name']}: the platform note must follow the PS1 Tip, not replace it"
+                )
+            else:
+                assert feat["desc"] == tips[ident], (
+                    f"{feat['name']}: the description differs from the PS1 Tip"
+                )
+
+
+def test_the_mac_scripts_linux_only_row_carries_its_description():
+    """slimbrave-mac.py inserts BackgroundModeEnabled at import time when it
+    runs on Linux, outside the table literal - so the parity test above only
+    meets that row on a Linux runner. Pin it by text, on every platform."""
+    text = (ROOT / "slimbrave-mac.py").read_text(encoding="utf-8")
+    m = re.search(r'"key": "BackgroundModeEnabled", "value": False,\s*"desc": "([^"]*)"\}\)', text)
+    assert m, "the Linux-only BackgroundModeEnabled row has no description"
+    assert m.group(1) == _ps1_tips()[("BackgroundModeEnabled", 0)]
+
+
+def test_build_rows_carries_the_description_onto_every_setting_row(mod):
+    for row in mod.build_rows():
+        if row["type"] in (mod.ROW_FEATURE, mod.ROW_CHOICE):
+            assert row["desc"], f"{row['text']} reached the TUI without its description"
+
+
+def test_pane_lines_follow_the_longest_description_at_that_width(mod):
+    # At 80 columns the longest descriptions want five lines; the pane
+    # stops at four and they end in an ellipsis. From about 140 columns
+    # nothing needs more than three, and the list gets a row back.
+    assert mod.desc_pane_lines(80) == 4
+    assert mod.desc_pane_lines(120) == 4
+    assert mod.desc_pane_lines(140) == 3
+    assert mod.desc_pane_lines(20) == mod.DESC_PANE_MAX_LINES
+
+
+def test_layout_budgets_the_rows_and_drops_the_pane_when_cramped(mod):
+    lay = mod.layout(24, 80, True)
+    assert lay["framed"]
+    assert (lay["list_top"], lay["list_rows"], lay["list_bottom"]) == (3, 10, 13)
+    assert (lay["pane_top"], lay["pane_lines"]) == (14, 4)
+    assert (lay["btn_top"], lay["btn_y"], lay["status_y"]) == (20, 21, 23)
+    assert mod.layout(24, 80, False)["list_rows"] == 16
+    # 17 rows leave the list 3 with the four-line pane, under the minimum
+    # of 4: the pane gives way and the list keeps 9. One more row and it fits.
+    assert mod.layout(17, 80, True)["pane_lines"] == 0
+    assert mod.layout(17, 80, True)["list_rows"] == 9
+    assert mod.layout(18, 80, True)["pane_lines"] == 4
+    # Every framed screen ends on its last row: the button box's bottom
+    # edge sits right above the status line.
+    for max_y in range(9, 60):
+        for show in (False, True):
+            lay = mod.layout(max_y, 80, show)
+            assert lay["framed"]
+            assert lay["btn_top"] + 2 == lay["status_y"] - 1, (
+                f"{max_y} rows, pane={show}: the boxes do not fill the screen"
+            )
+            assert lay["list_bottom"] < lay["btn_top"]
+    # Under nine rows the frames go and the old stack comes back: list from
+    # row 2, buttons on the second-last row, status on the last, no pane.
+    for max_y in range(5, 9):
+        for show in (False, True):
+            lay = mod.layout(max_y, 80, show)
+            assert not lay["framed"] and lay["pane_lines"] == 0
+            assert lay["list_top"] == 2 and lay["list_rows"] == max(1, max_y - 5)
+            assert (lay["btn_y"], lay["status_y"]) == (max_y - 2, max_y - 1)
+
+
+def test_wrap_description_marks_a_cut(mod):
+    text = "one two three four five six seven eight nine ten"
+    assert mod.wrap_description(text, 20, 5) == [
+        "one two three four", "five six seven eight", "nine ten",
+    ]
+    cut = mod.wrap_description(text, 20, 2, "...")
+    assert len(cut) == 2 and cut[-1].endswith("...") and len(cut[-1]) <= 20
+    # A resolver URL stays whole: no break at its hyphen.
+    lines = mod.wrap_description("see https://dns.example/dns-query now", 30, 3)
+    assert "https://dns.example/dns-query" in lines
+    assert mod.wrap_description("", 20, 3) == []
+    assert mod.wrap_description(text, 0, 3) == []
+    assert mod.wrap_description(text, 20, 0) == []
+
+
+def test_describe_row_covers_every_kind_of_row_and_the_buttons(mod):
+    rows = mod.build_rows()
+    for i, row in enumerate(rows):
+        text = mod.describe_row(rows, i, mod.FOCUS_LIST, 0)
+        assert text, f"row {row['text']!r} has nothing to say"
+        if row["type"] in (mod.ROW_FEATURE, mod.ROW_CHOICE):
+            assert text == row["desc"]
+    for i, label in enumerate(mod.BUTTONS):
+        assert mod.describe_row(rows, 0, mod.FOCUS_BUTTONS, i) == mod.BUTTON_DESC[label]
+    # A filter matching nothing leaves the cursor on no row at all.
+    assert mod.describe_row(rows, -1, mod.FOCUS_LIST, 0) == ""
+    assert mod.describe_row(rows, len(rows), mod.FOCUS_LIST, 0) == ""
+    # A header states its live count.
+    hdr = _header_index(mod, rows, "Telemetry & Reporting")
+    text = mod.describe_row(rows, hdr, mod.FOCUS_LIST, 0)
+    on, total = mod.header_counts(rows, hdr)
+    assert text.startswith(f"Telemetry & Reporting: {total} settings, {on} on")
+
+
+def test_box_glyphs_fall_back_to_ascii_when_the_codec_cannot_encode_them(mod, monkeypatch):
+    monkeypatch.setattr(mod, "_box_glyphs", None)
+    monkeypatch.setattr(mod.locale, "getpreferredencoding", lambda do_setlocale=False: "ascii")
+    assert mod.box_glyphs() == mod.BOX_ASCII
+    monkeypatch.setattr(mod, "_box_glyphs", None)
+    monkeypatch.setattr(mod.locale, "getpreferredencoding", lambda do_setlocale=False: "utf-8")
+    assert mod.box_glyphs() == mod.BOX_UNICODE
+
+
+def _call_spans(text, name):
+    """Yield the source of every call to `name(...)`.
+
+    The def line is excluded, and so is a bare `name()` - that is how a
+    docstring mentions a function, never how the scripts call these.
+    """
+    for m in re.finditer(rf"(?<!def )\b{re.escape(name)}\(", text):
+        depth, i = 0, m.end() - 1
+        while i < len(text):
+            if text[i] == "(":
+                depth += 1
+            elif text[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        span = text[m.start():i + 1]
+        if span != f"{name}()":
+            yield span
+
+
+def test_the_pane_flag_reaches_every_frame_and_d_toggles_it(mod):
+    """A draw() or viewport_rows() call that forgets show_desc paints the
+    old layout for one frame - the list jumps - so every call site passes
+    it, and `d` is the key that flips it."""
+    text = open(mod.__file__, encoding="utf-8").read()
+    live = re.sub(r"(?m)^\s*#.*$", "", text)
+    draws = list(_call_spans(live, "draw"))
+    assert len(draws) >= 3, "draw() call sites went missing"
+    for call in draws:
+        assert "show_desc=show_desc" in call, f"a frame is drawn without the pane flag:\n{call}"
+    for call in _call_spans(live, "viewport_rows"):
+        assert "show_desc" in call, f"a viewport is sized without the pane flag: {call}"
+    for name in ("prompt_text_input", "prompt_channel_selection", "prompt_persist_mode"):
+        for call in _call_spans(live, name):
+            assert "show_desc=show_desc" in call, f"{name} is called without the pane flag:\n{call}"
+    assert re.search(r'^        elif key == ord\("d"\):\n            show_desc = not show_desc', live, re.M)
+    assert re.search(r'^    show_desc = layout\(max_y, max_x, True\)\["pane_lines"\] > 0', live, re.M), (
+        "the pane does not start shown wherever layout() finds room for it"
+    )
+    assert any(line.strip().startswith("d ") for line in mod.HELP_LINES), "the help overlay does not list d"
+    assert "[D] Describe" in live, "the hint line does not mention the pane"
+    # The DoH field width is one figure, shared by draw() and the editing keys.
+    assert "max_x - 1 - 22" not in live, "a template-field width is computed by hand"
+    assert live.count("template_field_width(max_x)") >= 4
+
+
+def test_mac_prompt_overlay_sits_on_the_buttons_row():
+    """The Apply-time overlay covers the buttons row and the status line.
+    It takes both rows from layout(), inside the button box, so a moved
+    box cannot leave it painting over an edge."""
+    text = (ROOT / "slimbrave-mac.py").read_text(encoding="utf-8")
+    start = text.index("def _draw_prompt_overlay(")
+    body = text[start:text.index("\ndef ", start + 1)]
+    assert 'layout(max_y, max_x, False)' in body
+    assert 'lay["btn_y"]' in body and 'lay["status_y"]' in body
+    assert "max_y - 3" not in body and "max_y - 2" not in body
+
+
+def test_the_two_scripts_explain_the_same_things_in_the_same_words():
+    """The pane's fixed texts and the help are one copy per script; they
+    must not drift. macOS's Apply is the one deliberate difference: it asks
+    its two questions first, and its description says so."""
+    assert LINUX_MOD.DNS_DESC == MAC_MOD.DNS_DESC
+    assert LINUX_MOD.HELP_LINES == MAC_MOD.HELP_LINES
+    for label in LINUX_MOD.BUTTONS:
+        if label != "Apply":
+            assert LINUX_MOD.BUTTON_DESC[label] == MAC_MOD.BUTTON_DESC[label], label
+    assert MAC_MOD.BUTTON_DESC["Apply"].startswith("Asks whether to persist")
+    assert LINUX_MOD.BUTTON_DESC["Apply"].startswith("Write the selected policies")
+
+
+# ---------------------------------------------------------------------------
+# Rendering draw() itself
+#
+# Everything above is pure over rows[]; nothing renders. These two run
+# main() against a window that keeps its cells, with curses swapped for a
+# shim, so the frames, the pane and the tiny-terminal stack are pinned by
+# what actually lands on screen.
+# ---------------------------------------------------------------------------
+
+
+class _FakeCurses:
+    """The curses surface the scripts touch, minus the terminal."""
+
+    error = curses.error
+
+    def __init__(self):
+        for name in dir(curses):
+            if name.startswith(("KEY_", "A_", "COLOR_")):
+                setattr(self, name, getattr(curses, name))
+
+    def curs_set(self, v):
+        pass
+
+    def start_color(self):
+        pass
+
+    def use_default_colors(self):
+        pass
+
+    def init_pair(self, *args):
+        pass
+
+    def color_pair(self, n):
+        return n << 8
+
+    def update_lines_cols(self):
+        pass
+
+
+class _GridScreen:
+    """A curses window that keeps its cells."""
+
+    def __init__(self, lines, cols, keys=()):
+        self.lines, self.cols, self.keys = lines, cols, list(keys)
+        self.frames = []
+        self.erase()
+
+    def erase(self):
+        self.cells = [[" "] * self.cols for _ in range(self.lines)]
+
+    def getmaxyx(self):
+        return (self.lines, self.cols)
+
+    def addnstr(self, y, x, s, n, attr=0):
+        if not (0 <= y < self.lines and 0 <= x < self.cols):
+            raise curses.error("outside the window")
+        s = str(s)[:max(0, n)][:self.cols - x]
+        for i, ch in enumerate(s):
+            self.cells[y][x + i] = ch
+
+    def refresh(self):
+        self.frames.append(["".join(row) for row in self.cells])
+
+    def getch(self):
+        return self.keys.pop(0) if self.keys else 27   # Esc: quit
+
+    def keypad(self, v):
+        pass
+
+    def timeout(self, v):
+        pass
+
+
+def _render(mod, monkeypatch, tmp_path, lines, cols, keys=()):
+    monkeypatch.setattr(mod, "curses", _FakeCurses())
+    monkeypatch.setattr(mod, "detect_brave",
+                        lambda: {"installations": [], "method": "", "warnings": []})
+    # locale-independent frames
+    monkeypatch.setattr(mod, "_box_glyphs", mod.BOX_ASCII)
+    monkeypatch.setattr(mod, "_disclosure_glyphs", mod.DISCLOSURE_ASCII)
+    chan = {"id": "stable", "label": "Brave", "process_name": "brave",
+            "user_data_dir": "BraveSoftware/Brave-Browser"}
+    inst = mod._make_installation(chan, plist_path=str(tmp_path / "slimbrave.json"),
+                                  prefs_path=str(tmp_path / "Preferences"))
+    screen = _GridScreen(lines, cols, keys)
+    mod.main(screen, override_installations=[inst])
+    return screen.frames
+
+
+def test_draw_frames_the_list_the_pane_and_the_buttons_at_80x24(mod, monkeypatch, tmp_path):
+    frame = _render(mod, monkeypatch, tmp_path, 24, 80)[-1]
+    lay = mod.layout(24, 80, True)
+    top, bottom = lay["list_top"] - 1, lay["list_bottom"]
+    assert frame[top].startswith("+- Settings ") and frame[top][78] == "+"
+    assert frame[bottom][0] == "+" and frame[bottom][78] == "+"
+    assert set(frame[bottom][1:78]) <= {"-"}          # nothing to scroll: no marker
+    first = frame[lay["list_top"]]
+    assert first[0] == "|" and first[78] == "|" and "0/8 on" in first
+    assert first.index("0/8 on") + len("0/8 on") <= 77   # counter inside the edge
+    assert frame[lay["pane_top"]].startswith("+- Description ")
+    assert frame[lay["btn_top"]][0] == "+" and frame[lay["btn_top"] + 2][0] == "+"
+    assert " Import " in frame[lay["btn_y"]] and frame[lay["btn_y"]][0] == "|"
+    assert frame[lay["status_y"]].strip() == ""
+    # every frame stays inside the usable width: the last column is untouched
+    assert all(row[79] == " " for row in frame)
+
+
+def test_draw_keeps_the_old_stack_under_nine_rows(mod, monkeypatch, tmp_path):
+    frame = _render(mod, monkeypatch, tmp_path, 7, 80)[-1]
+    assert not any("+-" in row or row.startswith("|") for row in frame)
+    assert frame[2].lstrip().startswith((">", "v"))     # the list, from row 2
+    assert " Import " in frame[5] and " Quit " in frame[5]   # buttons, second-last row
+    assert frame[6].strip() == ""                        # status, last row
 

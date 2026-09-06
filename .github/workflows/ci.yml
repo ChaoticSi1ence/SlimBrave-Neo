@@ -43,6 +43,33 @@ jobs:
         run: ruff check --output-format=github .
       - run: pytest -q
 
+  tui-smoke:
+    name: TUI in a real terminal (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            script: slimbrave-linux.py
+            policy: /etc/brave/policies/managed/slimbrave-smoke.json
+          - os: macos-latest
+            script: slimbrave-mac.py
+            policy: /Library/Preferences/slimbrave-smoke.plist
+    steps:
+      - uses: actions/checkout@v7
+      # tmux is the terminal here: a real emulator at 80x24, driven with
+      # send-keys and read back with capture-pane, so the frames are checked
+      # as ncurses actually painted them. The Ubuntu image ships tmux; the
+      # macOS image may not.
+      - if: runner.os == 'macOS'
+        run: command -v tmux >/dev/null || brew install tmux
+      # The scripts refuse to run without root; the runners grant sudo
+      # without a password. The TUI is quit without Apply, so it writes
+      # nothing, and the policy path only has to sit inside the script's
+      # allowed directories to get past its own path check.
+      - run: python3 tests/tui_smoke.py ${{ matrix.script }} ${{ matrix.policy }}
+
   powershell:
     name: parse + PSScriptAnalyzer
     # Windows PowerShell 5.1 is the only engine SlimBrave.ps1 targets, and it
