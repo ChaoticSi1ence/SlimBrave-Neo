@@ -104,7 +104,7 @@ Every row of Site Permissions is a dropdown rather than a checkbox: **Not manage
 
 <img src="assets/tui-screenshot.png" width="620" alt="SlimBrave Neo Linux TUI">
 
-*The Linux/macOS TUI: collapsible categories with a live count of what each one is managing, `/` to search, `?` for keys. Zero dependencies, runs in any terminal.*
+*The Linux/macOS TUI: collapsible categories with a live count of what each one is managing, a description pane for whatever the cursor is on, `/` to search, `?` for keys. Zero dependencies, runs in any terminal.*
 
 </div>
 
@@ -127,7 +127,7 @@ Each category header carries a disclosure marker and a live `n/m on` count of th
 
 The eight tri-state permission rows render as `Web Notifications: < Block >` and are cycled with Left/Right, the same way the DNS mode selector has always worked; Space or Enter steps forward through the same states. A row sitting off *Not managed* is highlighted and counts toward the header above it.
 
-**Every row explains itself here too.** A boxed pane under the list shows the plain-English description of whatever the cursor is on - the same text the Windows GUI shows under each row - and, on the button row, what each button does. `d` hides it to give the list the rows back; on a terminal too short to hold both, it steps aside on its own. The list and the buttons sit in frames of their own.
+**Every row explains itself here too.** A boxed pane under the list shows the plain-English description of whatever the cursor is on - the same text the Windows GUI shows under each row - and, on the button row, what each button does. It starts shown wherever there is room for it; `d` hides it to give the list the rows back, and on a terminal too short to hold both it steps aside on its own. The pane takes as many lines as the longest description needs at that width, up to four; one that still does not fit ends in an ellipsis, and a wider terminal shows more of it. The list and the buttons sit in frames of their own.
 
 `?` opens a key overlay over the list.
 

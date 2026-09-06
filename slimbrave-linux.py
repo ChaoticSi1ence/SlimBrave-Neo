@@ -449,7 +449,7 @@ CATEGORIES = [
 
             {"name": "Block All Extensions", "key": "ExtensionInstallBlocklist", "value": ["*"], "desc": "Blocks installation of every extension and disables ones already installed. For lockdown/parental setups - a proxy or VPN extension would bypass DNS filtering."},
 
-            {"name": "Block Sideloaded (External) Extensions", "key": "BlockExternalExtensions", "value": True, "desc": "Blocks extensions that other programs install for you through the registry or a drop-in file, which is how bundleware gets in. Extensions you install yourself keep working, so this rarely breaks anything."},
+            {"name": "Block Sideloaded (External) Extensions", "key": "BlockExternalExtensions", "value": True, "desc": "Blocks extensions that other programs install for you through the Windows registry or a drop-in file, which is how bundleware gets in. Extensions you install yourself keep working, so this rarely breaks anything."},
 
             {"name": "Disable Incognito Mode", "key": "IncognitoModeAvailability", "value": 1, "group": "incognito", "desc": "Removes private browsing entirely - no incognito windows can be opened. Mutually exclusive with Force Incognito Mode."},
 
@@ -464,7 +464,7 @@ CATEGORIES = [
 
             {"name": "Disable Brave Wallet", "key": "BraveWalletDisabled", "value": True, "desc": "Disables the built-in cryptocurrency wallet and hides its UI."},
 
-            {"name": "Disable Brave VPN (no effect on Linux builds)", "key": "BraveVPNDisabled", "value": True, "desc": "Removes the Brave VPN feature and its upsell prompts."},
+            {"name": "Disable Brave VPN (no effect on Linux builds)", "key": "BraveVPNDisabled", "value": True, "desc": "Removes the Brave VPN feature and its upsell prompts. Linux builds have no VPN, so this key changes nothing there."},
 
             {"name": "Disable Brave AI Chat", "key": "BraveAIChatEnabled", "value": False, "desc": "Disables Leo, Brave's built-in AI assistant, and removes it from the sidebar and address bar."},
 
@@ -1447,22 +1447,56 @@ def box_glyphs():
 DESC_PANE_MIN_LIST = 4
 
 
-def desc_pane_lines(max_y):
-    """Text lines in the description pane: three, four on a tall terminal."""
-    return 4 if max_y >= 30 else 3
+DESC_PANE_MAX_LINES = 4
+_desc_pane_lines = {}
 
 
-def layout(max_y, show_desc):
+def desc_pane_lines(max_x):
+    """Text lines the pane needs at this width.
+
+    What the longest description wraps to at this width, up to
+    DESC_PANE_MAX_LINES: four lines at 80 columns, where five of the
+    descriptions still end in an ellipsis; three from about 140, where none
+    does. Sized by the content rather than by a constant so a wider
+    terminal gives the list its rows back.
+    """
+    if max_x not in _desc_pane_lines:
+        width = max(1, (max_x - 1) - 4)
+        texts = [f.get("desc", "") for cat in CATEGORIES for f in cat["features"]]
+        texts += list(DNS_DESC.values()) + list(BUTTON_DESC.values())
+        need = max((len(textwrap.wrap(t, width, break_on_hyphens=False))
+                    for t in texts), default=1)
+        _desc_pane_lines[max_x] = max(1, min(DESC_PANE_MAX_LINES, need))
+    return _desc_pane_lines[max_x]
+
+
+def layout(max_y, max_x, show_desc):
     """The row budget for one frame, shared by draw() and viewport_rows().
 
     Rows 0-1 are the title and the hints. The list sits in a box, the
     description pane (if shown) in a second, the buttons in a third, and
     the status line is the last row. The pane gives way when it would
     leave the list under DESC_PANE_MIN_LIST rows, so a small terminal
-    keeps its list.
+    keeps its list; under 9 rows the boxes go too, and the screen is the
+    plain stack it was before them - list from row 2, buttons on the
+    second-last row, status on the last - because eight rows of chrome
+    would leave nothing else.
     """
+    if max_y < 9:
+        list_rows = max(1, max_y - 5)
+        return {
+            "framed": False,
+            "list_top": 2,
+            "list_rows": list_rows,
+            "list_bottom": 2 + list_rows,
+            "pane_top": None,
+            "pane_lines": 0,
+            "btn_top": max_y - 3,
+            "btn_y": max_y - 2,
+            "status_y": max_y - 1,
+        }
     fixed = 2 + 2 + 3 + 1
-    pane = desc_pane_lines(max_y) if show_desc else 0
+    pane = desc_pane_lines(max_x) if show_desc else 0
     if pane and max_y - fixed - (pane + 2) < DESC_PANE_MIN_LIST:
         pane = 0
     list_rows = max(1, max_y - fixed - (pane + 2 if pane else 0))
@@ -1471,6 +1505,7 @@ def layout(max_y, show_desc):
     pane_top = list_bottom + 1 if pane else None
     btn_top = pane_top + pane + 2 if pane else list_bottom + 1
     return {
+        "framed": True,
         "list_top": list_top,
         "list_rows": list_rows,
         "list_bottom": list_bottom,
@@ -1489,7 +1524,8 @@ def template_field_width(max_x):
     editing keys in main() must agree on this figure, or the cursor and
     the text scroll drift apart.
     """
-    return max(10, (max_x - 1) - 4 - 22)
+    # capped so the closing bracket stays inside the box on a narrow terminal
+    return max(1, min(max_x - 21, max(10, (max_x - 1) - 4 - 22)))
 
 
 def wrap_description(text, width, max_lines, ellipsis="..."):
@@ -1500,7 +1536,8 @@ def wrap_description(text, width, max_lines, ellipsis="..."):
     """
     if width < 1 or max_lines < 1:
         return []
-    lines = textwrap.wrap(text or "", width)
+    # break_on_hyphens off: a resolver URL must not split at "dns-query"
+    lines = textwrap.wrap(text or "", width, break_on_hyphens=False)
     if len(lines) <= max_lines:
         return lines
     lines = lines[:max_lines]
@@ -1522,11 +1559,11 @@ BUTTON_DESC = {
 }
 
 DNS_DESC = {
-    "mode": "How Brave resolves names. Not managed leaves Brave's own "
-            "setting alone. Automatic uses DNS over HTTPS when the resolver "
-            "offers it and plain DNS otherwise. Off never uses it. Secure "
-            "and custom send every lookup to the template below and never "
-            "fall back, so a wrong template resolves nothing.",
+    "mode": "Secure and custom send every lookup to the template below and "
+            "never fall back, so a wrong template resolves nothing. "
+            "Automatic uses DNS over HTTPS when the resolver offers it and "
+            "plain DNS otherwise. Off never uses it. Not managed leaves "
+            "Brave's own setting alone.",
     "template": "The DNS-over-HTTPS resolver, as a template such as "
                 "https://dns.example/dns-query. Required by secure and "
                 "custom; automatic uses it when set.",
@@ -1545,7 +1582,8 @@ def describe_row(rows, cursor_idx, focus, btn_idx):
         on, total = header_counts(rows, cursor_idx)
         if total:
             return (f"{row['text']}: {total} settings, {on} on. Left folds "
-                    "the section, Right unfolds it, c folds them all.")
+                    "the section, Right unfolds it, Space toggles it, "
+                    "c folds or unfolds them all.")
         return f"{row['text']}: the resolver mode and its template."
     if kind == ROW_DNS:
         return DNS_DESC["mode"]
@@ -1679,8 +1717,8 @@ def resolve_cursor(sel, cursor_idx):
 
 def viewport_rows(stdscr, show_desc=False):
     """Return how many list rows fit inside the list box this frame."""
-    max_y, _ = stdscr.getmaxyx()
-    return layout(max_y, show_desc)["list_rows"]
+    max_y, max_x = stdscr.getmaxyx()
+    return layout(max_y, max_x, show_desc)["list_rows"]
 
 
 def clamp_scroll(rows, vis, scroll_offset, cursor_vpos, visible_count):
@@ -1718,7 +1756,7 @@ def selectable_indices(rows, filter_text=""):
 def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
          status_msg, status_ok, install_method="",
          prompt_label="", prompt_buf="", prompt_cur=0, filter_text="",
-         show_desc=False):
+         show_desc=False, describe_focus=None):
     """Render the full TUI screen.
 
     Title and key hints on rows 0-1, the list inside a box, the
@@ -1730,9 +1768,10 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
     max_y, max_x = stdscr.getmaxyx()
     usable_w = max_x - 1  # avoid writing to the last column
     hz, vt, tl, tr, bl, br, ellipsis = box_glyphs()
-    lay = layout(max_y, show_desc)
-    inner_x = 2
-    inner_w = max(1, usable_w - 4)
+    lay = layout(max_y, max_x, show_desc)
+    framed = lay["framed"]
+    inner_x = 2 if framed else 0
+    inner_w = max(1, usable_w - 4) if framed else usable_w
     edge_attr = curses.color_pair(CP_NORMAL) | curses.A_DIM
 
     def put(y, x, text, n, attr):
@@ -1773,13 +1812,17 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
         hint = f" Filter: {needle}   {matches} match{plural}   [Esc] Clear "
     else:
         hint = " [Space/Enter] Toggle  [/] Search  [D] Describe  [Q] Quit  [?] Help "
+        if len(hint) > usable_w:
+            # the shorter hint from before the pane fits down to 55 columns
+            hint = " [Space/Enter] Toggle  [/] Search  [Q] Quit  [?] Help "
     put(1, 0, hint.center(usable_w), usable_w,
         curses.color_pair(CP_NORMAL) | curses.A_DIM)
 
     # The list, in its box
     list_start_y = lay["list_top"]
     visible_count = lay["list_rows"]
-    frame(list_start_y - 1, lay["list_bottom"], " Settings ")
+    if framed:
+        frame(list_start_y - 1, lay["list_bottom"], " Settings ")
 
     # Current DNS mode (for dimming the template row)
     current_dns_mode = get_dns_mode(rows)
@@ -1874,23 +1917,26 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
                     curses.color_pair(CP_BUTTON_ACTIVE))
 
     # Scroll indicators, set into the box edges
+    mark_x = usable_w - 7 if framed else usable_w - 5
     if scroll_offset > 0:
-        put(list_start_y - 1, usable_w - 7, " ^^^ ", 5, edge_attr)
+        put(list_start_y - 1, mark_x, " ^^^ ", 5, edge_attr)
     if scroll_offset + visible_count < len(vis):
-        put(lay["list_bottom"], usable_w - 7, " vvv ", 5, edge_attr)
+        put(lay["list_bottom"], mark_x, " vvv ", 5, edge_attr)
 
     # Description pane: what the cursor is on, or the focused button
     if lay["pane_lines"]:
         top = lay["pane_top"]
         frame(top, top + lay["pane_lines"] + 1, " Description ")
-        text = describe_row(rows, cursor_idx, focus, btn_idx)
+        what = describe_focus if describe_focus is not None else focus
+        text = describe_row(rows, cursor_idx, what, btn_idx)
         parts = wrap_description(text, inner_w, lay["pane_lines"], ellipsis)
         for i, part in enumerate(parts):
             put(top + 1 + i, inner_x, part, inner_w,
                 curses.color_pair(CP_NORMAL))
 
     # Bottom buttons, in their box
-    frame(lay["btn_top"], lay["btn_top"] + 2)
+    if framed:
+        frame(lay["btn_top"], lay["btn_top"] + 2)
     btn_y = lay["btn_y"]
     btn_x = inner_x
     for i, label in enumerate(BUTTONS):
@@ -1984,7 +2030,10 @@ def prompt_text_input(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
              FOCUS_PROMPT, btn_idx, "", True, install_method,
              prompt_label=label, prompt_buf=text, prompt_cur=cur,
              filter_text="" if on_change is None else text,
-             show_desc=show_desc)
+             show_desc=show_desc,
+             # the filter prompt (on_change) describes the cursor row; the
+             # Import and Export path prompts describe their button
+             describe_focus=None if on_change is not None else FOCUS_BUTTONS)
 
         key = stdscr.getch()
 
@@ -2020,9 +2069,10 @@ def main(stdscr, override_installations=None):
     init_colors()
     stdscr.keypad(True)
     stdscr.timeout(-1)
-    # The description pane starts shown where there is room for it; `d`
-    # toggles it, and layout() drops it on its own below that room.
-    show_desc = stdscr.getmaxyx()[0] >= 24
+    # The description pane starts shown wherever layout() finds room for
+    # it; `d` toggles it, and layout() drops it on its own below that room.
+    max_y, max_x = stdscr.getmaxyx()
+    show_desc = layout(max_y, max_x, True)["pane_lines"] > 0
 
     brave_info = detect_brave()
     if override_installations is not None:
@@ -2221,6 +2271,10 @@ def main(stdscr, override_installations=None):
         elif key == ord("d"):
             show_desc = not show_desc
             status_msg = ""
+            max_y, max_x = stdscr.getmaxyx()
+            if show_desc and layout(max_y, max_x, True)["pane_lines"] == 0:
+                status_msg = "Terminal too short for the description pane."
+                status_ok = False
 
         elif key == ord("?"):
             while True:

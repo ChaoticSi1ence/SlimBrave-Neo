@@ -9,6 +9,7 @@ touches /etc, the registry, or a real Brave profile — filesystem work stays
 in pytest's tmp_path.
 """
 
+import curses
 import importlib.util
 import json
 import os
@@ -1918,7 +1919,8 @@ def test_cycling_a_choice_row_while_filtered_keeps_the_filter(mod):
 #
 # PageUp/PageDown were unbound through v1.9.5, which left an 87-row list
 # reachable one Down at a time. The step is a whole viewport, which on the
-# 80x24 terminal these tests assume is 18 rows.
+# 80x24 terminal these tests assume is 16 rows with the description pane
+# hidden and 10 with it shown.
 # ---------------------------------------------------------------------------
 
 
@@ -1960,9 +1962,9 @@ def test_paging_branch_matches_the_helper_that_mirrors_it(script):
 def test_viewport_rows_leaves_room_for_the_chrome(mod):
     # Title, hints, the list box's two edges, the three-row button box and
     # the status line: eight rows. The description pane, when shown, takes
-    # its text lines plus two edges on top of that.
+    # its text lines (four at 80 and 120 columns) plus two edges on top.
     assert mod.viewport_rows(_FakeScreen(24, 80)) == 16
-    assert mod.viewport_rows(_FakeScreen(24, 80), show_desc=True) == 11
+    assert mod.viewport_rows(_FakeScreen(24, 80), show_desc=True) == 10
     assert mod.viewport_rows(_FakeScreen(50, 120)) == 42
     assert mod.viewport_rows(_FakeScreen(50, 120), show_desc=True) == 36
     # Never zero or negative, however small the terminal gets.
@@ -2710,16 +2712,28 @@ def _py_identity(feat):
     return (feat["key"], value)
 
 
+# One script may append a platform note to a Tip - the PS1 text first, word
+# for word, then its own sentence. Linux's VPN row is the only case: the key
+# is honoured on Windows and macOS and compiled out of Linux builds.
+PS1_DESC_SUFFIX_ALLOWED = {"slimbrave_linux": {("BraveVPNDisabled", 1)}}
+
+
 def test_every_python_row_carries_the_ps1_description(mod):
     tips = _ps1_tips()
+    allowed = PS1_DESC_SUFFIX_ALLOWED.get(mod.__name__, set())
     for cat in mod.CATEGORIES:
         for feat in cat["features"]:
             ident = _py_identity(feat)
             assert feat.get("desc"), f"{feat['name']} has no description"
             assert ident in tips, f"{feat['name']} {ident} has no PS1 row to take a Tip from"
-            assert feat["desc"] == tips[ident], (
-                f"{feat['name']}: the description differs from the PS1 Tip"
-            )
+            if ident in allowed:
+                assert feat["desc"].startswith(tips[ident] + " ") and feat["desc"] != tips[ident], (
+                    f"{feat['name']}: the platform note must follow the PS1 Tip, not replace it"
+                )
+            else:
+                assert feat["desc"] == tips[ident], (
+                    f"{feat['name']}: the description differs from the PS1 Tip"
+                )
 
 
 def test_the_mac_scripts_linux_only_row_carries_its_description():
@@ -2738,26 +2752,46 @@ def test_build_rows_carries_the_description_onto_every_setting_row(mod):
             assert row["desc"], f"{row['text']} reached the TUI without its description"
 
 
+def test_pane_lines_follow_the_longest_description_at_that_width(mod):
+    # At 80 columns the longest descriptions want five lines; the pane
+    # stops at four and they end in an ellipsis. From about 140 columns
+    # nothing needs more than three, and the list gets a row back.
+    assert mod.desc_pane_lines(80) == 4
+    assert mod.desc_pane_lines(120) == 4
+    assert mod.desc_pane_lines(140) == 3
+    assert mod.desc_pane_lines(20) == mod.DESC_PANE_MAX_LINES
+
+
 def test_layout_budgets_the_rows_and_drops_the_pane_when_cramped(mod):
-    lay = mod.layout(24, True)
-    assert (lay["list_top"], lay["list_rows"], lay["list_bottom"]) == (3, 11, 14)
-    assert (lay["pane_top"], lay["pane_lines"]) == (15, 3)
+    lay = mod.layout(24, 80, True)
+    assert lay["framed"]
+    assert (lay["list_top"], lay["list_rows"], lay["list_bottom"]) == (3, 10, 13)
+    assert (lay["pane_top"], lay["pane_lines"]) == (14, 4)
     assert (lay["btn_top"], lay["btn_y"], lay["status_y"]) == (20, 21, 23)
-    assert mod.layout(24, False)["list_rows"] == 16
-    assert mod.layout(30, True)["pane_lines"] == 4
-    # 16 rows leave the list 3 with the pane, under the minimum of 4: the
-    # pane gives way and the list keeps 8. One more row and it fits.
-    assert mod.layout(16, True)["pane_lines"] == 0
-    assert mod.layout(16, True)["list_rows"] == 8
-    assert mod.layout(17, True)["pane_lines"] == 3
-    # Every frame ends on the last row: the button box's bottom edge sits
-    # right above the status line, unless the list is already clamped to 1.
-    for max_y in range(8, 60):
+    assert mod.layout(24, 80, False)["list_rows"] == 16
+    # 17 rows leave the list 3 with the four-line pane, under the minimum
+    # of 4: the pane gives way and the list keeps 9. One more row and it fits.
+    assert mod.layout(17, 80, True)["pane_lines"] == 0
+    assert mod.layout(17, 80, True)["list_rows"] == 9
+    assert mod.layout(18, 80, True)["pane_lines"] == 4
+    # Every framed screen ends on its last row: the button box's bottom
+    # edge sits right above the status line.
+    for max_y in range(9, 60):
         for show in (False, True):
-            lay = mod.layout(max_y, show)
-            assert lay["btn_top"] + 2 == lay["status_y"] - 1 or lay["list_rows"] == 1, (
+            lay = mod.layout(max_y, 80, show)
+            assert lay["framed"]
+            assert lay["btn_top"] + 2 == lay["status_y"] - 1, (
                 f"{max_y} rows, pane={show}: the boxes do not fill the screen"
             )
+            assert lay["list_bottom"] < lay["btn_top"]
+    # Under nine rows the frames go and the old stack comes back: list from
+    # row 2, buttons on the second-last row, status on the last, no pane.
+    for max_y in range(5, 9):
+        for show in (False, True):
+            lay = mod.layout(max_y, 80, show)
+            assert not lay["framed"] and lay["pane_lines"] == 0
+            assert lay["list_top"] == 2 and lay["list_rows"] == max(1, max_y - 5)
+            assert (lay["btn_y"], lay["status_y"]) == (max_y - 2, max_y - 1)
 
 
 def test_wrap_description_marks_a_cut(mod):
@@ -2767,6 +2801,9 @@ def test_wrap_description_marks_a_cut(mod):
     ]
     cut = mod.wrap_description(text, 20, 2, "...")
     assert len(cut) == 2 and cut[-1].endswith("...") and len(cut[-1]) <= 20
+    # A resolver URL stays whole: no break at its hyphen.
+    lines = mod.wrap_description("see https://dns.example/dns-query now", 30, 3)
+    assert "https://dns.example/dns-query" in lines
     assert mod.wrap_description("", 20, 3) == []
     assert mod.wrap_description(text, 0, 3) == []
     assert mod.wrap_description(text, 20, 0) == []
@@ -2837,8 +2874,8 @@ def test_the_pane_flag_reaches_every_frame_and_d_toggles_it(mod):
         for call in _call_spans(live, name):
             assert "show_desc=show_desc" in call, f"{name} is called without the pane flag:\n{call}"
     assert re.search(r'^        elif key == ord\("d"\):\n            show_desc = not show_desc', live, re.M)
-    assert re.search(r"^    show_desc = stdscr\.getmaxyx\(\)\[0\] >= 24", live, re.M), (
-        "the pane does not start shown on a terminal that has room for it"
+    assert re.search(r'^    show_desc = layout\(max_y, max_x, True\)\["pane_lines"\] > 0', live, re.M), (
+        "the pane does not start shown wherever layout() finds room for it"
     )
     assert any(line.strip().startswith("d ") for line in mod.HELP_LINES), "the help overlay does not list d"
     assert "[D] Describe" in live, "the hint line does not mention the pane"
@@ -2848,8 +2885,141 @@ def test_the_pane_flag_reaches_every_frame_and_d_toggles_it(mod):
 
 
 def test_mac_prompt_overlay_sits_on_the_buttons_row():
-    """The Apply-time overlay covered the buttons row and the status line;
-    the button box moved that row up by one."""
+    """The Apply-time overlay covers the buttons row and the status line.
+    It takes both rows from layout(), inside the button box, so a moved
+    box cannot leave it painting over an edge."""
     text = (ROOT / "slimbrave-mac.py").read_text(encoding="utf-8")
-    assert "max_y - 3, 0, desc_line.ljust(usable_w)[:usable_w]," in text
+    start = text.index("def _draw_prompt_overlay(")
+    body = text[start:text.index("\ndef ", start + 1)]
+    assert 'layout(max_y, max_x, False)' in body
+    assert 'lay["btn_y"]' in body and 'lay["status_y"]' in body
+    assert "max_y - 3" not in body and "max_y - 2" not in body
+
+
+def test_the_two_scripts_explain_the_same_things_in_the_same_words():
+    """The pane's fixed texts and the help are one copy per script; they
+    must not drift. macOS's Apply is the one deliberate difference: it asks
+    its two questions first, and its description says so."""
+    assert LINUX_MOD.DNS_DESC == MAC_MOD.DNS_DESC
+    assert LINUX_MOD.HELP_LINES == MAC_MOD.HELP_LINES
+    for label in LINUX_MOD.BUTTONS:
+        if label != "Apply":
+            assert LINUX_MOD.BUTTON_DESC[label] == MAC_MOD.BUTTON_DESC[label], label
+    assert MAC_MOD.BUTTON_DESC["Apply"].startswith("Asks whether to persist")
+    assert LINUX_MOD.BUTTON_DESC["Apply"].startswith("Write the selected policies")
+
+
+# ---------------------------------------------------------------------------
+# Rendering draw() itself
+#
+# Everything above is pure over rows[]; nothing renders. These two run
+# main() against a window that keeps its cells, with curses swapped for a
+# shim, so the frames, the pane and the tiny-terminal stack are pinned by
+# what actually lands on screen.
+# ---------------------------------------------------------------------------
+
+
+class _FakeCurses:
+    """The curses surface the scripts touch, minus the terminal."""
+
+    error = curses.error
+
+    def __init__(self):
+        for name in dir(curses):
+            if name.startswith(("KEY_", "A_", "COLOR_")):
+                setattr(self, name, getattr(curses, name))
+
+    def curs_set(self, v):
+        pass
+
+    def start_color(self):
+        pass
+
+    def use_default_colors(self):
+        pass
+
+    def init_pair(self, *args):
+        pass
+
+    def color_pair(self, n):
+        return n << 8
+
+    def update_lines_cols(self):
+        pass
+
+
+class _GridScreen:
+    """A curses window that keeps its cells."""
+
+    def __init__(self, lines, cols, keys=()):
+        self.lines, self.cols, self.keys = lines, cols, list(keys)
+        self.frames = []
+        self.erase()
+
+    def erase(self):
+        self.cells = [[" "] * self.cols for _ in range(self.lines)]
+
+    def getmaxyx(self):
+        return (self.lines, self.cols)
+
+    def addnstr(self, y, x, s, n, attr=0):
+        if not (0 <= y < self.lines and 0 <= x < self.cols):
+            raise curses.error("outside the window")
+        s = str(s)[:max(0, n)][:self.cols - x]
+        for i, ch in enumerate(s):
+            self.cells[y][x + i] = ch
+
+    def refresh(self):
+        self.frames.append(["".join(row) for row in self.cells])
+
+    def getch(self):
+        return self.keys.pop(0) if self.keys else 27   # Esc: quit
+
+    def keypad(self, v):
+        pass
+
+    def timeout(self, v):
+        pass
+
+
+def _render(mod, monkeypatch, tmp_path, lines, cols, keys=()):
+    monkeypatch.setattr(mod, "curses", _FakeCurses())
+    monkeypatch.setattr(mod, "detect_brave",
+                        lambda: {"installations": [], "method": "", "warnings": []})
+    # locale-independent frames
+    monkeypatch.setattr(mod, "_box_glyphs", mod.BOX_ASCII)
+    monkeypatch.setattr(mod, "_disclosure_glyphs", mod.DISCLOSURE_ASCII)
+    chan = {"id": "stable", "label": "Brave", "process_name": "brave",
+            "user_data_dir": "BraveSoftware/Brave-Browser"}
+    inst = mod._make_installation(chan, plist_path=str(tmp_path / "slimbrave.json"),
+                                  prefs_path=str(tmp_path / "Preferences"))
+    screen = _GridScreen(lines, cols, keys)
+    mod.main(screen, override_installations=[inst])
+    return screen.frames
+
+
+def test_draw_frames_the_list_the_pane_and_the_buttons_at_80x24(mod, monkeypatch, tmp_path):
+    frame = _render(mod, monkeypatch, tmp_path, 24, 80)[-1]
+    lay = mod.layout(24, 80, True)
+    top, bottom = lay["list_top"] - 1, lay["list_bottom"]
+    assert frame[top].startswith("+- Settings ") and frame[top][78] == "+"
+    assert frame[bottom][0] == "+" and frame[bottom][78] == "+"
+    assert set(frame[bottom][1:78]) <= {"-"}          # nothing to scroll: no marker
+    first = frame[lay["list_top"]]
+    assert first[0] == "|" and first[78] == "|" and "0/8 on" in first
+    assert first.index("0/8 on") + len("0/8 on") <= 77   # counter inside the edge
+    assert frame[lay["pane_top"]].startswith("+- Description ")
+    assert frame[lay["btn_top"]][0] == "+" and frame[lay["btn_top"] + 2][0] == "+"
+    assert " Import " in frame[lay["btn_y"]] and frame[lay["btn_y"]][0] == "|"
+    assert frame[lay["status_y"]].strip() == ""
+    # every frame stays inside the usable width: the last column is untouched
+    assert all(row[79] == " " for row in frame)
+
+
+def test_draw_keeps_the_old_stack_under_nine_rows(mod, monkeypatch, tmp_path):
+    frame = _render(mod, monkeypatch, tmp_path, 7, 80)[-1]
+    assert not any("+-" in row or row.startswith("|") for row in frame)
+    assert frame[2].lstrip().startswith((">", "v"))     # the list, from row 2
+    assert " Import " in frame[5] and " Quit " in frame[5]   # buttons, second-last row
+    assert frame[6].strip() == ""                        # status, last row
 
