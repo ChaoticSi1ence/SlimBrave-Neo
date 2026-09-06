@@ -2674,7 +2674,7 @@ def test_ps1_owner_drawn_controls_take_keyboard_focus():
         start = live.index(f"function {fn}(")
         body = live[start:live.index("\n}\n", start)]
         assert "Enable-Focusable" in body, f"{fn} does not make its control focusable"
-        assert "Add_KeyDown" in body, f"{fn} has no keyboard handler"
+        assert "Add-KeyActivation" in body, f"{fn} does not arm on KeyDown and fire on KeyUp"
         assert "Draw-FocusRing" in body, f"{fn} draws no focus indicator"
         assert re.search(r"Invoke-(MouseAt|ClickOn)", body), (
             f"{fn} activates from the keyboard through a separate path, not the mouse's"
@@ -2690,4 +2690,24 @@ def test_ps1_owner_drawn_controls_take_keyboard_focus():
     assert re.search(r"^\$form\.KeyPreview\s*=\s*\$true", live, re.M), "the form does not see Escape"
     for i, name in enumerate(("rail", "searchHost", "page", "bar")):
         assert re.search(rf"\${name}\.TabIndex\s*=\s*{i}\b", live), f"{name} is not region {i} in Tab order"
+    # Activation is armed on KeyDown and fired on KeyUp through one latch:
+    # KeyDown auto-repeats while a key is held, KeyUp never does, so a held
+    # Space flips a toggle once and a held Enter on Reset cannot answer its
+    # own confirm box. The DNS card is the fifth control that uses it.
+    act = live[live.index("function Add-KeyActivation"):]
+    assert "Add_KeyDown" in act and "Add_KeyUp" in act and "Tag.Armed" in act
+    assert live.count("Add-KeyActivation $") >= 5, "a control activates on KeyDown alone"
+    # An exception that escapes a handler must be reported, not turned into
+    # .NET's crash dialog, which ends the process with the staged changes in
+    # it. A handler that runs while a PowerShell try block is active up the
+    # chain is exactly what produces that dialog, so no page rebuild may sit
+    # inside one: Import rebuilds after its try, not in it.
+    assert "add_ThreadException" in live, "no thread-exception guard"
+    imp = live[live.index('"Import" {'):]
+    assert re.search(r"\} catch \{ \$ok=\$false \}[\s\S]*?if\(\$ok\)\{[\s\S]*?Refresh-View", imp), (
+        "Import rebuilds the page inside its try block"
+    )
+    assert "$form.Dispose()" in live, "the form is never disposed while the script scope is alive"
+    # Escape in a text box belongs to the box; closing with staged changes asks.
+    assert "Add_FormClosing" in live and "Get-StateSnapshot" in live
 
