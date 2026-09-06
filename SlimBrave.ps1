@@ -1420,6 +1420,19 @@ public class DarkMenuColors : ProfessionalColorTable {
 }
 "@ -ReferencedAssemblies System.Drawing, System.Windows.Forms
 
+# An exception that escapes a window handler would otherwise raise .NET's
+# "Unhandled exception" dialog, whose Quit button ends the process with every
+# staged change in it. Seen once, in a real elevated session, from the DoH
+# template box's Leave handler ("Test-DohTemplate is not recognized") - not
+# reproduced since, in the harness or in the real dialog loop. Handler errors
+# normally print to the console and the window carries on; this makes the
+# escaped kind do the same. Pure .NET on purpose: it has to work even when the
+# script's own functions are out of reach, which is what that error said.
+[System.Windows.Forms.Application]::add_ThreadException([System.Threading.ThreadExceptionEventHandler]{
+    param($sender,$e)
+    [Console]::Error.WriteLine("SlimBrave Neo: error in a window handler, ignored - " + $e.Exception.Message)
+})
+
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "SlimBrave Neo"
 # Design size is 1180x760 at 96 DPI; scaled it is 1770x1140 at 150%, taller
@@ -1499,7 +1512,7 @@ $rail.Size=New-Object System.Drawing.Size (S 250),$form.ClientSize.Height
 # ClientSize still reports the request, so the derived sizes must follow the
 # client the OS actually grants, not the one asked for.
 $rail.Anchor=[System.Windows.Forms.AnchorStyles]"Top,Bottom,Left"
-$rail.BackColor=$F.Rail; Enable-DoubleBuffer $rail; $form.Controls.Add($rail)
+$rail.BackColor=$F.Rail; Enable-DoubleBuffer $rail; $form.Controls.Add($rail); $rail.TabIndex=0
 
 $script:railTitleFont=New-UiFont "Segoe UI Semibold" 15
 $script:railSubFont=New-UiFont "Segoe UI" 9
@@ -1537,6 +1550,105 @@ foreach($c in $script:cats){ $script:pages+=$c.name }
 $script:pages+="DNS Over HTTPS"
 $script:navItems=@(); $script:sel=0
 
+# ---------------------------------------------------------------------------
+# Keyboard access
+#
+# Every interactive control here is an owner-drawn Panel, and a Panel is not
+# selectable by default - so nothing but the two TextBoxes could take focus and
+# the window was unusable without a mouse. The previous GUI, built from real
+# CheckBoxes and Buttons, never had this problem. ControlStyles.Selectable is
+# set through the protected SetStyle by reflection; a probe confirmed Paint and
+# MouseDown are unaffected by it, so no compiled Panel subclass is needed.
+#
+# Activation goes through the SAME handler the mouse uses, raised at the centre
+# of the control's own hit zone. Click, hover and keyboard then share one code
+# path - the way Zone-Of already unified the first two. A separate keyboard
+# branch is how the two drift apart.
+# ---------------------------------------------------------------------------
+$script:miSetStyle    = [System.Windows.Forms.Control].GetMethod('SetStyle',    [Reflection.BindingFlags]'Instance,NonPublic')
+$script:miOnMouseDown = [System.Windows.Forms.Control].GetMethod('OnMouseDown', [Reflection.BindingFlags]'Instance,NonPublic')
+$script:miOnClick     = [System.Windows.Forms.Control].GetMethod('OnClick',     [Reflection.BindingFlags]'Instance,NonPublic')
+
+function Enable-Focusable($c,[switch]$Arrows){
+    # [void]: Invoke on a void method returns $null, and PowerShell EMITS that -
+    # without the cast every factory returned @($null, $panel) and the bar's
+    # packing loop died setting .Left on an array. Text-level tests cannot see
+    # this class of bug; the render harness can.
+    [void]$script:miSetStyle.Invoke($c, @([System.Windows.Forms.ControlStyles]::Selectable, $true))
+    $c.TabStop = $true
+    $c.Add_GotFocus({ $this.Invalidate() })
+    # Armed is the activation latch (Add-KeyActivation). A KeyUp swallowed by
+    # a dialog must not leave it set for the next press.
+    $c.Add_LostFocus({ $this.Tag.Armed=$false; $this.Invalidate() })
+    # Return is a dialog key - the form would eat it as navigation before
+    # KeyDown ever saw it. Left and Right are too, but only rows use them; on
+    # the rail and the bar they fall through to WinForms' own arrow movement.
+    $c.Add_PreviewKeyDown({
+        param($s,$e)
+        if($e.KeyCode -eq [System.Windows.Forms.Keys]::Return){ $e.IsInputKey = $true }
+    })
+    if($Arrows){
+        $c.Add_PreviewKeyDown({
+            param($s,$e)
+            if($e.KeyCode -eq [System.Windows.Forms.Keys]::Left -or
+               $e.KeyCode -eq [System.Windows.Forms.Keys]::Right){ $e.IsInputKey = $true }
+        })
+    }
+}
+
+function Invoke-MouseAt($c, [int]$x, [int]$y){
+    # ::new(), not New-Object: New-Object hands back a PSObject wrapper, and
+    # reflection's Invoke will not convert that to MouseEventArgs.
+    $mea = [System.Windows.Forms.MouseEventArgs]::new([System.Windows.Forms.MouseButtons]::Left, 1, $x, $y, 0)
+    [void]$script:miOnMouseDown.Invoke($c, [object[]]@($mea))
+}
+
+function Invoke-ClickOn($c){
+    [void]$script:miOnClick.Invoke($c, @([System.EventArgs]::Empty))
+}
+
+function Test-ActivateKey($ev){
+    return ($ev.KeyCode -eq [System.Windows.Forms.Keys]::Space -or
+            $ev.KeyCode -eq [System.Windows.Forms.Keys]::Return)
+}
+
+function Add-KeyActivation($c,[scriptblock]$fire){
+    # Arm on KeyDown, fire on KeyUp - a real Win32 button's own pattern.
+    # KeyDown auto-repeats while a key is held and KeyUp never does, so a held
+    # Space flips a toggle once instead of every repeat tick, and a held Enter
+    # on Reset cannot answer its own confirm box: the Enter that dismisses a
+    # dialog delivers its KeyUp to the button underneath, and the latch,
+    # cleared before firing, ignores it.
+    $c.Tag.Fire=$fire
+    $c.Add_KeyDown({
+        param($s,$ev)
+        if(Test-ActivateKey $ev){ $s.Tag.Armed=$true; $ev.Handled=$true; $ev.SuppressKeyPress=$true }
+    })
+    $c.Add_KeyUp({
+        param($s,$ev)
+        if((Test-ActivateKey $ev) -and $s.Tag.Armed){
+            $s.Tag.Armed=$false
+            & $s.Tag.Fire $s
+            $ev.Handled=$true
+        }
+    })
+}
+
+function Draw-FocusRing($g, $w, $h, $col=$null){
+    # Distinct from hover: hover fills, focus outlines. A keyboard user must be
+    # able to tell where they are on a row the mouse is also sitting on.
+    # Anti-aliasing turns a 1px dotted line on integer coordinates into a solid
+    # half-strength one, so it is off for the ring alone.
+    if($null -eq $col){ $col=$script:F.Accent }
+    $sm=$g.SmoothingMode
+    $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::None
+    $p = New-Object System.Drawing.Pen $col, 1
+    $p.DashStyle = [System.Drawing.Drawing2D.DashStyle]::Dot
+    $g.DrawRectangle($p, 1, 1, ($w - 3), ($h - 3))
+    $p.Dispose()
+    $g.SmoothingMode=$sm
+}
+
 function New-NavItem([int]$idx,[string]$name,[int]$y){
     $it=New-Object System.Windows.Forms.Panel
     $it.Location=New-Object System.Drawing.Point (S 8),$y
@@ -1565,6 +1677,7 @@ function New-NavItem([int]$idx,[string]$name,[int]$y){
         $ink=$script:F.TextSub; if($isSel){$ink=$script:F.Text}
         $nb=New-Object System.Drawing.SolidBrush $ink
         $g.DrawString($st.Name,$script:navFont,$nb,(S 44),(S 9),$script:SF); $nb.Dispose()
+        if($s.Focused){ Draw-FocusRing $g $s.Width $s.Height }
     })
     $it.Add_MouseEnter({$this.Tag.Hot=$true;$this.Invalidate()})
     $it.Add_MouseLeave({$this.Tag.Hot=$false;$this.Invalidate()})
@@ -1572,6 +1685,9 @@ function New-NavItem([int]$idx,[string]$name,[int]$y){
         if($script:searchBox -and $script:searchBox.Text){ $script:searchBox.Text="" }
         Select-Page $this.Tag.Idx
     })
+    Add-KeyActivation $it { param($s) Invoke-ClickOn $s }
+    Enable-Focusable $it
+    $it.AccessibleName=$name; $it.AccessibleRole=[System.Windows.Forms.AccessibleRole]::ListItem
     $it.Cursor=[System.Windows.Forms.Cursors]::Hand
     $rail.Controls.Add($it); return $it
 }
@@ -1617,7 +1733,7 @@ $searchHost.Add_Paint({
         $pb.Dispose()
     }
 })
-$form.Controls.Add($searchHost)
+$form.Controls.Add($searchHost); $searchHost.TabIndex=1
 
 $script:searchBox=New-Object System.Windows.Forms.TextBox
 $script:searchBox.BorderStyle=[System.Windows.Forms.BorderStyle]::None
@@ -1629,20 +1745,21 @@ $script:searchBox.Size=New-Object System.Drawing.Size (S 228),(S 20)
 $searchHost.Controls.Add($script:searchBox)
 $script:searchBox.Add_GotFocus({ $searchHost.Invalidate() })
 $script:searchBox.Add_LostFocus({ $searchHost.Invalidate() })
+$script:searchBox.AccessibleName="Search policies and descriptions"
 
 $page=New-Object System.Windows.Forms.Panel
 $page.Location=New-Object System.Drawing.Point (S 270),(S 80)
 $page.Size=New-Object System.Drawing.Size (S 900),($form.ClientSize.Height-(S 152))   # 80 above, 68 bar, 4 gap
 $page.Anchor=[System.Windows.Forms.AnchorStyles]"Top,Bottom,Left"
 $page.BackColor=$F.Bg; $page.AutoScroll=$true
-Enable-DoubleBuffer $page; $form.Controls.Add($page)
+Enable-DoubleBuffer $page; $form.Controls.Add($page); $page.TabIndex=2
 
 # --------------------------------------------------------------- action bar
 $bar=New-Object System.Windows.Forms.Panel
 $bar.Location=New-Object System.Drawing.Point (S 250),($form.ClientSize.Height-(S 68))
 $bar.Size=New-Object System.Drawing.Size (S 930),(S 68)
 $bar.Anchor=[System.Windows.Forms.AnchorStyles]"Bottom,Left"
-$bar.BackColor=$F.Bar; Enable-DoubleBuffer $bar; $form.Controls.Add($bar)
+$bar.BackColor=$F.Bar; Enable-DoubleBuffer $bar; $form.Controls.Add($bar); $bar.TabIndex=3
 $script:statusText="Ready"
 $script:BAR_PAD=S 20   # status text left margin, button row right margin
 $script:BAR_GAP=S 8    # between buttons
@@ -1753,20 +1870,22 @@ function New-BarButton([string]$label,[bool]$accent){
         $sz=$g.MeasureString($s.Tag.L,$script:btnFont,1000,$script:SF)
         $g.DrawString($s.Tag.L,$script:btnFont,$tb,(($s.Width-$sz.Width)/2),(($s.Height-$sz.Height)/2),$script:SF)
         $tb.Dispose()
+        # accent pen on the accent fill is invisible: the ring takes the ink
+        if($s.Focused){ Draw-FocusRing $g $s.Width $s.Height $(if($s.Tag.A){$ink}else{$script:F.Accent}) }
     })
     $b.Add_MouseEnter({$this.Tag.Hot=$true;$this.Invalidate()})
     $b.Add_MouseLeave({$this.Tag.Hot=$false;$this.Invalidate()})
     $b.Add_Click({
         switch($this.Tag.L){
-            "Apply Settings" { if(Invoke-ApplyPolicy){ Refresh-View } }
+            "Apply Settings" { if(Invoke-ApplyPolicy){ $script:applied=Get-StateSnapshot; Refresh-View } }
             "Reset" {
                 $ans=[System.Windows.Forms.MessageBox]::Show(
                     "Remove every policy SlimBrave Neo manages? Policies set by group policy or another tool are left alone.",
                     "Confirm reset",[System.Windows.Forms.MessageBoxButtons]::YesNo,
                     [System.Windows.Forms.MessageBoxIcon]::Warning)
-                if($ans -eq "Yes"){ if(Invoke-ResetPolicy){ Refresh-View } }
+                if($ans -eq "Yes"){ if(Invoke-ResetPolicy){ $script:applied=Get-StateSnapshot; Refresh-View } }
             }
-            "Re-sync" { Sync-FromRegistry; Refresh-View }
+            "Re-sync" { Sync-FromRegistry; $script:applied=Get-StateSnapshot; Refresh-View }
             "Export" {
                 $dlg=New-Object System.Windows.Forms.SaveFileDialog
                 $dlg.Filter="JSON files (*.json)|*.json"
@@ -1790,14 +1909,18 @@ function New-BarButton([string]$label,[bool]$accent){
                     # Set-Content failure is NON-terminating, so without this
                     # the success status ran even when nothing was written -
                     # a locked, read-only or full target reported "Exported".
+                    # Only the write sits inside the try. A handler that runs
+                    # while a try block is active anywhere up the chain turns
+                    # its own errors into the .NET crash dialog instead of
+                    # console text, and Set-Status repaints the bar.
+                    $err=$null
                     try{
                         [System.IO.File]::WriteAllText($dlg.FileName,
                             ($out | ConvertTo-Json -Depth 5),
                             (New-Object System.Text.UTF8Encoding $false))
-                        Set-Status "Exported $($feat.Count) policies"
-                    } catch {
-                        Set-Status "Export failed - $($_.Exception.Message)"
-                    }
+                    } catch { $err=$_.Exception.Message }
+                    if($null -eq $err){ Set-Status "Exported $($feat.Count) policies" }
+                    else { Set-Status "Export failed - $err" }
                 }
             }
             "Import" {
@@ -1805,6 +1928,7 @@ function New-BarButton([string]$label,[bool]$accent){
                 $dlg.Filter="JSON files (*.json)|*.json"
                 $dlg.InitialDirectory=Get-InvokerDocs
                 if($dlg.ShowDialog() -eq "OK"){
+                    $ok=$false
                     try{
                         $cfg=Get-Content $dlg.FileName -Raw | ConvertFrom-Json
                         # ConvertFrom-Json only throws on malformed JSON. Any other
@@ -1817,17 +1941,26 @@ function New-BarButton([string]$label,[bool]$accent){
                            $null -eq $cfg.PSObject.Properties['Features'] -or
                            $null -eq $cfg.Features){ throw "no Features block" }
                         Import-PresetIntoState @{features=$cfg.Features;dns=$cfg.DnsMode;tmpl=$cfg.DnsTemplates}
+                        $ok=$true
+                    } catch { $ok=$false }
+                    # The rebuild and the status run OUTSIDE the try: a handler
+                    # that fires while a try block is active anywhere up the
+                    # chain turns its own errors into the .NET crash dialog.
+                    if($ok){
                         Refresh-View
                         $msg="Imported from $([System.IO.Path]::GetFileName($dlg.FileName))"
                         if($script:importNotes.Count -gt 0){
                             $msg+=" Left unmanaged, because the imported value is not one this policy accepts: "+(($script:importNotes | Sort-Object) -join ", ")+"."
                         }
                         Set-Status $msg
-                    } catch { Set-Status "Import failed - not a SlimBrave config" }
+                    } else { Set-Status "Import failed - not a SlimBrave config" }
                 }
             }
         }
     })
+    Add-KeyActivation $b { param($s) Invoke-ClickOn $s }
+    Enable-Focusable $b
+    $b.AccessibleName=$label; $b.AccessibleRole=[System.Windows.Forms.AccessibleRole]::PushButton
     $b.Cursor=[System.Windows.Forms.Cursors]::Hand
     $bar.Controls.Add($b); return $b
 }
@@ -1839,6 +1972,7 @@ $specs=@(@("Export",$false),@("Import",$false),@("Re-sync",$false),@("Reset",$fa
 $bx=$bar.Width-$script:BAR_PAD
 for($i=$specs.Count-1;$i -ge 0;$i--){
     $btn=New-BarButton $specs[$i][0] $specs[$i][1]
+    $btn.TabIndex=$i   # Tab walks the bar in visual order, Export first
     $bx-=$btn.Width; $btn.Left=$bx; $bx-=$script:BAR_GAP
 }
 $script:barButtonsLeft=$bx+$script:BAR_GAP
@@ -1910,6 +2044,8 @@ function New-FluentRow($row,[int]$y){
     $p.BackColor=$F.Bg
     $isChoice=($null -ne $row.PSObject.Properties['choices'])
     $p.Tag=@{Row=$row;Hot=$false;IsChoice=$isChoice;Open=$false;Zone=''}
+    $p.AccessibleName=$row.name; $p.AccessibleDescription=$row.full
+    $p.AccessibleRole=$(if($isChoice){[System.Windows.Forms.AccessibleRole]::ComboBox}else{[System.Windows.Forms.AccessibleRole]::CheckButton})
     Enable-DoubleBuffer $p
     $p.Add_Paint({
         param($s,$e); $g=$e.Graphics
@@ -1998,6 +2134,7 @@ function New-FluentRow($row,[int]$y){
                 $g.FillEllipse($th,($tx+(S 4)),($ty+(S 3)),(S 14),(S 14)); $th.Dispose()
             }
         }
+        if($s.Focused){ Draw-FocusRing $g $s.Width $s.Height }
     })
     $p.Add_MouseDown({
         param($s,$ev)
@@ -2047,6 +2184,8 @@ function New-FluentRow($row,[int]$y){
                     $i++
                 }
                 $menu.Show($s,(New-Object System.Drawing.Point $script:DD_X,(S 47)))
+                # a keyboard user lands on the current value; hover moves it as before
+                $menu.Items[$script:state[$st.Row.Id].Sel].Select()
                 $script:ddMenu=$menu
             }
             return
@@ -2075,6 +2214,42 @@ function New-FluentRow($row,[int]$y){
         $this.Cursor=[System.Windows.Forms.Cursors]::Default
         $this.Invalidate()
     })
+    Add-KeyActivation $p { param($s)
+        $st=$s.Tag
+        # the centre of the live control, so this is the mouse's own path
+        if($st.IsChoice){ Invoke-MouseAt $s ($script:DD_X+[int]($script:DD_W/2)) (S 32) }
+        else            { Invoke-MouseAt $s ($script:TG_X+[int]($script:TG_W/2)) ($script:TG_Y+[int]($script:TG_H/2)) }
+    }
+    $p.Add_KeyDown({
+        param($s,$ev)
+        $st=$s.Tag
+        # Right opens the description, Left closes it - the tree-view idiom.
+        # Zone-Of says "" for a row with no chevron, so those ignore both.
+        if($ev.KeyCode -eq [System.Windows.Forms.Keys]::Right -or
+           $ev.KeyCode -eq [System.Windows.Forms.Keys]::Left){
+            $want=($ev.KeyCode -eq [System.Windows.Forms.Keys]::Right)
+            $ecol=$script:EXP_X; if($st.IsChoice){ $ecol=$script:EXP_X_CHOICE }
+            $cx=$ecol+(S 13); $cy=S 32
+            if(($st.Open -ne $want) -and ((Zone-Of $s $cx $cy) -eq "exp")){
+                Invoke-MouseAt $s $cx $cy
+                # keyboard only: a description opened below the fold is
+                # otherwise unreachable, the mouse is already where it clicked
+                if($st.Open){ $page.ScrollControlIntoView($s) }
+            }
+            $ev.Handled=$true; $ev.SuppressKeyPress=$true; return
+        }
+        # Home, End, PageUp and PageDown walk the list the way a ListView does.
+        $k=$ev.KeyCode
+        if($k -eq [System.Windows.Forms.Keys]::Home){ [void]$form.SelectNextControl($page,$true,$true,$true,$false); $ev.Handled=$true }
+        elseif($k -eq [System.Windows.Forms.Keys]::End){ [void]$form.SelectNextControl($bar,$false,$true,$true,$true); $ev.Handled=$true }
+        elseif($k -eq [System.Windows.Forms.Keys]::PageDown -or $k -eq [System.Windows.Forms.Keys]::PageUp){
+            $fwd=($k -eq [System.Windows.Forms.Keys]::PageDown)
+            $n=[math]::Max(1,[int]($page.ClientSize.Height/($script:COLLAPSED+(S 4))))
+            for($i=0;$i -lt $n;$i++){ if(-not $page.SelectNextControl($form.ActiveControl,$fwd,$true,$false,$false)){ break } }
+            $ev.Handled=$true
+        }
+    })
+    Enable-Focusable $p -Arrows
     $p.Add_MouseMove({
         param($s,$ev)
         $z=Zone-Of $s $ev.X $ev.Y
@@ -2175,6 +2350,7 @@ function New-PresetCard($preset,[int]$y){
         $lb=New-Object System.Drawing.SolidBrush $ink
         $sz=$g.MeasureString("Load",$script:btnFont,1000,$script:SF)
         $g.DrawString("Load",$script:btnFont,$lb,($br.X+($bw-$sz.Width)/2),($br.Y+(S 7)),$script:SF); $lb.Dispose()
+        if($s.Focused){ Draw-FocusRing $g $s.Width $s.Height }
     })
     # Same zone discipline as the setting rows: loading a preset DISCARDS every
     # staged selection, so a stray click on the blurb the user is reading must
@@ -2187,6 +2363,12 @@ function New-PresetCard($preset,[int]$y){
         else     { $s.Cursor=[System.Windows.Forms.Cursors]::Default }
     })
     $p.Add_MouseLeave({$this.Tag.Hot=$false;$this.Invalidate()})
+    Add-KeyActivation $p { param($s)
+        Invoke-MouseAt $s ($script:PC_BX+[int]($script:PC_BW/2)) ($script:PC_BY+[int]($script:PC_BH/2))
+    }
+    Enable-Focusable $p
+    $p.AccessibleName="Load $($preset.name) preset"; $p.AccessibleDescription=$preset.blurb
+    $p.AccessibleRole=[System.Windows.Forms.AccessibleRole]::PushButton
     $p.Add_MouseDown({
         param($s,$ev)
         if(-not (Test-InPresetButton $ev.X $ev.Y)){ return }
@@ -2220,6 +2402,12 @@ function Sync-TmplHint($box){
         $box.ForeColor=[System.Drawing.Color]::FromArgb(96,96,96)
         $box.Text=$script:tmplHint
     }
+}
+
+function Test-DnsControlHit([int]$x,[int]$y){
+    # the DNS card's one live zone, the mode dropdown, with the toggle padding
+    $dl=$script:DD_X-$script:TG_PAD; $dr2=$script:DD_X+$script:DD_W+$script:TG_PAD
+    return ($x -ge $dl -and $x -le $dr2 -and $y -ge (S 6) -and $y -le (S 56))
 }
 
 function Build-DnsPage {
@@ -2272,6 +2460,7 @@ function Build-DnsPage {
         $well=New-Object System.Drawing.RectangleF ($script:DD_X-1),(S 89),($script:DD_W+2),(S 28)
         $wedge=$script:F.RowEdge; if($needs){ $wedge=$script:F.Accent }
         Stroke-Round $g $well (S 4) $wedge
+        if($s.Focused){ Draw-FocusRing $g $s.Width $s.Height }
     })
     $tmpl=New-Object System.Windows.Forms.TextBox
     $tmpl.BorderStyle=[System.Windows.Forms.BorderStyle]::None
@@ -2283,6 +2472,7 @@ function Build-DnsPage {
     $tmpl.Text=""
     $card.Controls.Add($tmpl)
     $card.Tag.Tmpl=$tmpl
+    $tmpl.AccessibleName="Custom template URL"
 
     # .NET Framework has no PlaceholderText, so fake one: grey hint while the
     # box is empty and unfocused, cleared the moment the user types.
@@ -2296,8 +2486,7 @@ function Build-DnsPage {
     $card.Add_MouseMove({
         param($s,$ev)
         $z=""
-        $dl=$script:DD_X-$script:TG_PAD; $dr2=$script:DD_X+$script:DD_W+$script:TG_PAD
-        if($ev.X -ge $dl -and $ev.X -le $dr2 -and $ev.Y -ge (S 6) -and $ev.Y -le (S 56)){ $z="ctl" }
+        if(Test-DnsControlHit $ev.X $ev.Y){ $z="ctl" }
         if($z -ne $s.Tag.Zone){
             $s.Tag.Zone=$z
             if($z -eq ""){ $s.Cursor=[System.Windows.Forms.Cursors]::Default }
@@ -2310,8 +2499,10 @@ function Build-DnsPage {
     })
     $card.Add_MouseDown({
         param($s,$ev)
-        # bounded exactly like every other control: label clicks do nothing
-        if($s.Tag.Zone -ne "ctl"){ return }
+        # bounded exactly like every other control: label clicks do nothing.
+        # Hit-tested from the coordinates, not the hover zone, so the keyboard
+        # path (Invoke-MouseAt at the control's centre) takes the same door.
+        if(-not (Test-DnsControlHit $ev.X $ev.Y)){ return }
         if($script:ddMenu -and -not $script:ddMenu.IsDisposed){ $script:ddMenu.Dispose() }
         $menu=New-Object System.Windows.Forms.ContextMenuStrip
         $menu.BackColor=$script:F.RowHot
@@ -2338,8 +2529,15 @@ function Build-DnsPage {
             $i++
         }
         $menu.Show($s,(New-Object System.Drawing.Point $script:DD_X,(S 46)))
+        $menu.Items[$script:dnsState.Mode].Select()
         $script:ddMenu=$menu
     })
+    # The dropdown is the card itself: focusable, Space/Enter opens the menu
+    # through the mouse's own MouseDown, and the template box, being its
+    # child, follows it in Tab order.
+    Add-KeyActivation $card { param($s) Invoke-MouseAt $s ($script:DD_X+[int]($script:DD_W/2)) (S 31) }
+    Enable-Focusable $card
+    $card.AccessibleName="DNS over HTTPS mode"; $card.AccessibleRole=[System.Windows.Forms.AccessibleRole]::ComboBox
     $m0=$script:dnsModes[$script:dnsState.Mode]
     $tmpl.Enabled=($m0 -eq "custom" -or $m0 -eq "secure")
     if($script:dnsState.Tmpl){ $tmpl.Tag=$script:dnsState.Tmpl; $tmpl.Text=$script:dnsState.Tmpl; $tmpl.ForeColor=$F.Text }
@@ -2349,13 +2547,19 @@ function Build-DnsPage {
     $tmpl.Add_TextChanged({ if($this.Focused){ $this.Tag=$this.Text; $script:dnsState.Tmpl=$this.Text } })
     $tmpl.Add_Leave({
         $this.Tag=$this.Text
-        # normalise on the way out so the stored value is what Apply writes
-        if(-not [string]::IsNullOrWhiteSpace($this.Tag)){
-            $chk=Test-DohTemplate $this.Tag
-            if($chk.Ok){ $this.Tag=$chk.Value; $this.Text=$chk.Value; $script:dnsState.Tmpl=$chk.Value }
-            else { Set-Status "DoH template: $($chk.Reason)" }
-        }
-        Sync-TmplHint $this
+        # normalise on the way out so the stored value is what Apply writes.
+        # Guarded: this handler once raised "Test-DohTemplate is not recognized"
+        # in a real session, and an exception out of Leave is the .NET crash
+        # dialog. Apply validates the template again before writing anything,
+        # so a failure here may cost the hint, never the window.
+        try {
+            if(-not [string]::IsNullOrWhiteSpace($this.Tag)){
+                $chk=Test-DohTemplate $this.Tag
+                if($chk.Ok){ $this.Tag=$chk.Value; $this.Text=$chk.Value; $script:dnsState.Tmpl=$chk.Value }
+                else { Set-Status "DoH template: $($chk.Reason)" }
+            }
+            Sync-TmplHint $this
+        } catch { [Console]::Error.WriteLine("SlimBrave Neo: DoH template check skipped - " + $_.Exception.Message) }
     })
     $page.Controls.Add($card)
 }
@@ -2445,6 +2649,11 @@ function Show-SearchResults([string]$query){
     # leaves every child's window handle alive until a GC runs, and All Options
     # builds ~85 of them per visit. Dispose() removes itself from the parent
     # collection, so this terminates.
+    # A rebuild disposes the focused control, and Win32 then hands focus to
+    # the page itself, which nothing paints and no key reaches. Remember the
+    # position and put focus back on whatever is built there.
+    $keepIdx=-1
+    if($page.ContainsFocus){ for($i=0;$i -lt $page.Controls.Count;$i++){ if($page.Controls[$i].ContainsFocus){ $keepIdx=$i; break } } }
     while($page.Controls.Count -gt 0){ $page.Controls[0].Dispose() }
     $script:rowPanels=@()
     $y=S 4
@@ -2470,6 +2679,11 @@ function Show-SearchResults([string]$query){
     $page.ResumeLayout()
     $page.AutoScrollPosition=New-Object System.Drawing.Point 0,0
     $page.Invalidate($true); $page.Update()
+    if($keepIdx -ge 0){
+        $back=$null
+        if($keepIdx -lt $page.Controls.Count -and $page.Controls[$keepIdx].CanSelect){ $back=$page.Controls[$keepIdx] }
+        if($back){ [void]$back.Focus() } else { [void]$page.SelectNextControl($null,$true,$true,$true,$false) }
+    }
 }
 
 function Refresh-View {
@@ -2499,6 +2713,11 @@ function Select-Page([int]$idx){
     # leaves every child's window handle alive until a GC runs, and All Options
     # builds ~85 of them per visit. Dispose() removes itself from the parent
     # collection, so this terminates.
+    # A rebuild disposes the focused control, and Win32 then hands focus to
+    # the page itself, which nothing paints and no key reaches. Remember the
+    # position and put focus back on whatever is built there.
+    $keepIdx=-1
+    if($page.ContainsFocus){ for($i=0;$i -lt $page.Controls.Count;$i++){ if($page.Controls[$i].ContainsFocus){ $keepIdx=$i; break } } }
     while($page.Controls.Count -gt 0){ $page.Controls[0].Dispose() }
     $script:rowPanels=@()
     if($idx -eq 0){
@@ -2532,6 +2751,11 @@ function Select-Page([int]$idx){
     $page.ResumeLayout()
     $page.AutoScrollPosition=New-Object System.Drawing.Point 0,0
     $page.Invalidate($true); $page.Update()
+    if($keepIdx -ge 0){
+        $back=$null
+        if($keepIdx -lt $page.Controls.Count -and $page.Controls[$keepIdx].CanSelect){ $back=$page.Controls[$keepIdx] }
+        if($back){ [void]$back.Focus() } else { [void]$page.SelectNextControl($null,$true,$true,$true,$false) }
+    }
 }
 
 $script:searchBox.Add_TextChanged({
@@ -2548,6 +2772,48 @@ $script:searchBox.Add_KeyDown({
        $ev.KeyCode -eq [System.Windows.Forms.Keys]::Return){ $ev.SuppressKeyPress=$true }
 })
 
+# Escape follows the TUI: clears an active search (the box handles that
+# itself), otherwise closes the window. Wired here, with the rest of the GUI,
+# rather than beside ShowDialog - the render harness slices the GUI off just
+# below this point, and a handler past the cut is one it can never exercise.
+$form.KeyPreview=$true
+$form.Add_KeyDown({
+    param($s,$ev)
+    if($ev.KeyCode -ne [System.Windows.Forms.Keys]::Escape){ return }
+    # A text box owns its Escape: the search box clears itself on the first
+    # press and closes on the second, as the TUI does; the DoH template box
+    # never closes the window.
+    $ac=$s.ActiveControl
+    if($ac -is [System.Windows.Forms.TextBox] -and ($ac -ne $script:searchBox -or $ac.Text)){ return }
+    $ev.Handled=$true; $ev.SuppressKeyPress=$true
+    $s.Close()
+})
+# Focus starts in the search box, as it did before the panels were focusable:
+# typing at launch searches, and no focus ring shows until the keyboard moves
+# it. Shown, not ActiveControl: under ShowDialog the latter is bookkeeping that
+# Win32 focus catches up with late.
+$form.Add_Shown({ [void]$script:searchBox.Focus() })
+# Closing with staged changes - Escape, Alt+F4 or the X - asks first. The
+# baseline is taken whenever the model is known to match the registry.
+$script:applied=$null
+function Get-StateSnapshot {
+    $rows=foreach($kv in ($script:state.GetEnumerator() | Sort-Object Name)){ "$($kv.Name)=$($kv.Value.On)|$($kv.Value.Sel)" }
+    return (($rows -join ";")+"#$($script:dnsState.Mode)|$($script:dnsState.Tmpl)")
+}
+$form.Add_FormClosing({
+    param($s,$e)
+    if($null -eq $script:applied -or (Get-StateSnapshot) -eq $script:applied){ return }
+    $ans=[System.Windows.Forms.MessageBox]::Show(
+        "Staged changes have not been applied. Close and discard them?",
+        "SlimBrave Neo",[System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question)
+    if($ans -ne "Yes"){ $e.Cancel=$true }
+})
+
 if(Test-Path $script:machineReg){ Sync-FromRegistry } else { Set-Status "No Brave policy set on this machine" }
+$script:applied=Get-StateSnapshot
 Select-Page 0
 [void] $form.ShowDialog()
+# ShowDialog does not dispose. Do it here, while the script's own functions
+# still exist for any handler the teardown fires.
+$form.Dispose()

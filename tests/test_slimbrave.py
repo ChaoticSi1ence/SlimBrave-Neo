@@ -2669,6 +2669,56 @@ def test_ps1_transient_gui_objects_are_disposed():
     assert disposes == menus, f"{menus} ContextMenuStrip sites but {disposes} dispose the previous one"
 
 
+def test_ps1_owner_drawn_controls_take_keyboard_focus():
+    """Every interactive control is an owner-drawn Panel, which cannot take
+    focus by default - so before this, nothing but the two TextBoxes was
+    reachable without a mouse, a regression from the pre-Fluent GUI. Each
+    factory must make its control selectable, handle KeyDown, and draw a
+    focus ring; activation must go through the mouse's own handler."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    live = re.sub(r"(?m)^\s*#.*$", "", text)
+    for fn in ("New-NavItem", "New-BarButton", "New-FluentRow", "New-PresetCard"):
+        start = live.index(f"function {fn}(")
+        body = live[start:live.index("\n}\n", start)]
+        assert "Enable-Focusable" in body, f"{fn} does not make its control focusable"
+        assert "Add-KeyActivation" in body, f"{fn} does not arm on KeyDown and fire on KeyUp"
+        assert "Draw-FocusRing" in body, f"{fn} draws no focus indicator"
+        assert re.search(r"Invoke-(MouseAt|ClickOn)", body), (
+            f"{fn} activates from the keyboard through a separate path, not the mouse's"
+        )
+    assert "ControlStyles]::Selectable" in live, "Selectable is never set"
+    # MethodInfo.Invoke on a void method returns $null and PowerShell EMITS it,
+    # so an uncast Invoke inside a factory makes that factory return
+    # @($null, $panel) - the bar's packing loop then dies on $btn.Left. Every
+    # reflective Invoke must be [void]-cast.
+    assert not re.search(r"^\s*\$script:mi\w+\.Invoke\(", live, re.M), (
+        "a reflective .Invoke( is not [void]-cast and will leak $null into a factory's output"
+    )
+    assert re.search(r"^\$form\.KeyPreview\s*=\s*\$true", live, re.M), "the form does not see Escape"
+    for i, name in enumerate(("rail", "searchHost", "page", "bar")):
+        assert re.search(rf"\${name}\.TabIndex\s*=\s*{i}\b", live), f"{name} is not region {i} in Tab order"
+    # Activation is armed on KeyDown and fired on KeyUp through one latch:
+    # KeyDown auto-repeats while a key is held, KeyUp never does, so a held
+    # Space flips a toggle once and a held Enter on Reset cannot answer its
+    # own confirm box. The DNS card is the fifth control that uses it.
+    act = live[live.index("function Add-KeyActivation"):]
+    assert "Add_KeyDown" in act and "Add_KeyUp" in act and "Tag.Armed" in act
+    assert live.count("Add-KeyActivation $") >= 5, "a control activates on KeyDown alone"
+    # An exception that escapes a handler must be reported, not turned into
+    # .NET's crash dialog, which ends the process with the staged changes in
+    # it. A handler that runs while a PowerShell try block is active up the
+    # chain is exactly what produces that dialog, so no page rebuild may sit
+    # inside one: Import rebuilds after its try, not in it.
+    assert "add_ThreadException" in live, "no thread-exception guard"
+    imp = live[live.index('"Import" {'):]
+    assert re.search(r"\} catch \{ \$ok=\$false \}[\s\S]*?if\(\$ok\)\{[\s\S]*?Refresh-View", imp), (
+        "Import rebuilds the page inside its try block"
+    )
+    assert "$form.Dispose()" in live, "the form is never disposed while the script scope is alive"
+    # Escape in a text box belongs to the box; closing with staged changes asks.
+    assert "Add_FormClosing" in live and "Get-StateSnapshot" in live
+
+
 # ---------------------------------------------------------------------------
 # TUI frames and the description pane
 # ---------------------------------------------------------------------------
