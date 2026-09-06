@@ -2722,6 +2722,16 @@ def test_every_python_row_carries_the_ps1_description(mod):
             )
 
 
+def test_the_mac_scripts_linux_only_row_carries_its_description():
+    """slimbrave-mac.py inserts BackgroundModeEnabled at import time when it
+    runs on Linux, outside the table literal - so the parity test above only
+    meets that row on a Linux runner. Pin it by text, on every platform."""
+    text = (ROOT / "slimbrave-mac.py").read_text(encoding="utf-8")
+    m = re.search(r'"key": "BackgroundModeEnabled", "value": False,\s*"desc": "([^"]*)"\}\)', text)
+    assert m, "the Linux-only BackgroundModeEnabled row has no description"
+    assert m.group(1) == _ps1_tips()[("BackgroundModeEnabled", 0)]
+
+
 def test_build_rows_carries_the_description_onto_every_setting_row(mod):
     for row in mod.build_rows():
         if row["type"] in (mod.ROW_FEATURE, mod.ROW_CHOICE):

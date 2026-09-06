@@ -697,7 +697,8 @@ if sys.platform.startswith("linux"):
     for _cat in CATEGORIES:
         if _cat["name"] == "Performance & Bloat":
             _cat["features"].insert(0, {"name": "Disable Background Mode",
-                                        "key": "BackgroundModeEnabled", "value": False})
+                                        "key": "BackgroundModeEnabled", "value": False,
+                                        "desc": "Stops Brave from keeping background processes running after the last window is closed."})
 
 # "unmanaged" (the default) writes no DNS policy at all, leaving Brave's
 # DNS settings user-controlled. The other four are managed-policy values —
