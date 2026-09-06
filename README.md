@@ -92,6 +92,24 @@ Requires Administrator privileges; the script re-launches itself elevated. It op
 
 **Clicking a label does nothing.** Only the toggle and the dropdown respond, each within its own bounds. Opening a menu is reversible; flipping a machine-wide policy is not.
 
+**It works without a mouse.** Tab moves between the sidebar, the search box, the list and the button row; Space or Enter presses whatever has focus, on release, so a held key acts once. Right opens a row's description and Left closes it. Escape clears a search, or closes the window — asking first if there are staged changes.
+
+<details>
+<summary><strong>The GUI — keys</strong></summary>
+
+| Key | Action |
+|-----|--------|
+| Tab / Shift+Tab | Sidebar → search → list → buttons (Export first), and round again |
+| Up / Down | Previous / next item |
+| PageUp / PageDown / Home / End | Move through the list |
+| Space / Enter | Toggle, open a dropdown, load a preset, pick a page, press a button |
+| Right / Left | Open / close a row's description |
+| Escape | Clear the search; otherwise close the window, asking if changes are staged |
+
+A dotted outline marks the focused control. It appears once the keyboard moves focus, so a mouse session never shows it.
+
+</details>
+
 The button row is Export, Import, **Re-sync**, Reset and Apply Settings. Re-sync reads the policy currently in the registry back into the interface, discarding on-screen selections you have not applied. It writes nothing, and goes through the same reader that fills the form at startup, so a re-sync can never disagree with a fresh launch.
 
 Every row of Site Permissions is a dropdown rather than a checkbox: **Not managed / Ask / Block**, plus **Allow** on the keys where Chromium accepts it. Not managed is the default and writes nothing at all. The Site Permissions section below covers what each state does and which keys offer Allow.
@@ -540,6 +558,7 @@ Set-ExecutionPolicy -ExecutionPolicy Undefined   -Scope CurrentUser   # undo
 - [x] Three-state permission settings (Allow / Ask / Block), not just block-or-nothing
 - [x] Collapsible, searchable TUI
 - [x] One-click presets in the Windows GUI
+- [x] Keyboard access in the Windows GUI
 
 ---
 
