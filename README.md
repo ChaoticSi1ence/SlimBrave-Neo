@@ -127,6 +127,8 @@ Each category header carries a disclosure marker and a live `n/m on` count of th
 
 The eight tri-state permission rows render as `Web Notifications: < Block >` and are cycled with Left/Right, the same way the DNS mode selector has always worked; Space or Enter steps forward through the same states. A row sitting off *Not managed* is highlighted and counts toward the header above it.
 
+**Every row explains itself here too.** A boxed pane under the list shows the plain-English description of whatever the cursor is on - the same text the Windows GUI shows under each row - and, on the button row, what each button does. `d` hides it to give the list the rows back; on a terminal too short to hold both, it steps aside on its own. The list and the buttons sit in frames of their own.
+
 `?` opens a key overlay over the list.
 
 | Key | Action |
@@ -139,6 +141,7 @@ The eight tri-state permission rows render as `Web Notifications: < Block >` and
 | Enter | The same, and presses the focused button |
 | `c` | Fold every section, or unfold them all |
 | `/` | Filter rows by name |
+| `d` | Show or hide the description pane |
 | Esc | Clear the filter; quit when no filter is active |
 | `?` | Show the key overlay |
 | Tab | Move between the list and the button row |

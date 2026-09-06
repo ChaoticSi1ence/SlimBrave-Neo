@@ -1958,8 +1958,13 @@ def test_paging_branch_matches_the_helper_that_mirrors_it(script):
 
 
 def test_viewport_rows_leaves_room_for_the_chrome(mod):
-    assert mod.viewport_rows(_FakeScreen(24, 80)) == 18
-    assert mod.viewport_rows(_FakeScreen(50, 120)) == 44
+    # Title, hints, the list box's two edges, the three-row button box and
+    # the status line: eight rows. The description pane, when shown, takes
+    # its text lines plus two edges on top of that.
+    assert mod.viewport_rows(_FakeScreen(24, 80)) == 16
+    assert mod.viewport_rows(_FakeScreen(24, 80), show_desc=True) == 11
+    assert mod.viewport_rows(_FakeScreen(50, 120)) == 42
+    assert mod.viewport_rows(_FakeScreen(50, 120), show_desc=True) == 36
     # Never zero or negative, however small the terminal gets.
     assert mod.viewport_rows(_FakeScreen(6, 20)) == 1
     assert mod.viewport_rows(_FakeScreen(1, 20)) == 1
@@ -2660,4 +2665,181 @@ def test_ps1_transient_gui_objects_are_disposed():
     menus = len(re.findall(r"New-Object System\.Windows\.Forms\.ContextMenuStrip", text))
     disposes = len(re.findall(r"\$script:ddMenu\.Dispose\(\)", text))
     assert disposes == menus, f"{menus} ContextMenuStrip sites but {disposes} dispose the previous one"
+
+
+# ---------------------------------------------------------------------------
+# TUI frames and the description pane
+# ---------------------------------------------------------------------------
+#
+# draw() sets the list, the description pane and the buttons in boxes, and
+# `d` shows or hides the pane. The row arithmetic lives in layout(), which
+# viewport_rows() shares with draw(); wrap_description() and describe_row()
+# are pure over rows[]. The descriptions themselves are the PS1 Tips,
+# copied into the Python tables so the three scripts explain a policy in
+# the same words - the parity test below is what keeps them the same.
+
+_PS1_TIP_RE = re.compile(r'Tip\s*=\s*"((?:[^"]|"")*)"')
+
+
+def _ps1_tips():
+    """Return {(key, value): tip} for every PS1 feature row."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    rows = list(_PS1_FEATURE_RE.finditer(text))
+    tips = {}
+    for i, m in enumerate(rows):
+        end = rows[i + 1].start() if i + 1 < len(rows) else len(text)
+        tip = _PS1_TIP_RE.search(text, m.start(), end)
+        assert tip, f"PS1 row without a Tip: {m.group(1)}"
+        value = _parse_ps1_value(m.group(3))
+        if isinstance(value, list):
+            value = tuple(value)
+        tips[(m.group(2), value)] = tip.group(1).replace('""', '"')
+    assert len(tips) == text.count('Key = "'), (
+        "a PS1 row lost its Tip, or two rows share a key and value"
+    )
+    return tips
+
+
+def _py_identity(feat):
+    """(key, value) the way the PS1 table spells it: no bools, no lists."""
+    value = feat["value"]
+    if isinstance(value, bool):
+        value = int(value)
+    if isinstance(value, list):
+        value = tuple(value)
+    return (feat["key"], value)
+
+
+def test_every_python_row_carries_the_ps1_description(mod):
+    tips = _ps1_tips()
+    for cat in mod.CATEGORIES:
+        for feat in cat["features"]:
+            ident = _py_identity(feat)
+            assert feat.get("desc"), f"{feat['name']} has no description"
+            assert ident in tips, f"{feat['name']} {ident} has no PS1 row to take a Tip from"
+            assert feat["desc"] == tips[ident], (
+                f"{feat['name']}: the description differs from the PS1 Tip"
+            )
+
+
+def test_build_rows_carries_the_description_onto_every_setting_row(mod):
+    for row in mod.build_rows():
+        if row["type"] in (mod.ROW_FEATURE, mod.ROW_CHOICE):
+            assert row["desc"], f"{row['text']} reached the TUI without its description"
+
+
+def test_layout_budgets_the_rows_and_drops_the_pane_when_cramped(mod):
+    lay = mod.layout(24, True)
+    assert (lay["list_top"], lay["list_rows"], lay["list_bottom"]) == (3, 11, 14)
+    assert (lay["pane_top"], lay["pane_lines"]) == (15, 3)
+    assert (lay["btn_top"], lay["btn_y"], lay["status_y"]) == (20, 21, 23)
+    assert mod.layout(24, False)["list_rows"] == 16
+    assert mod.layout(30, True)["pane_lines"] == 4
+    # 16 rows leave the list 3 with the pane, under the minimum of 4: the
+    # pane gives way and the list keeps 8. One more row and it fits.
+    assert mod.layout(16, True)["pane_lines"] == 0
+    assert mod.layout(16, True)["list_rows"] == 8
+    assert mod.layout(17, True)["pane_lines"] == 3
+    # Every frame ends on the last row: the button box's bottom edge sits
+    # right above the status line, unless the list is already clamped to 1.
+    for max_y in range(8, 60):
+        for show in (False, True):
+            lay = mod.layout(max_y, show)
+            assert lay["btn_top"] + 2 == lay["status_y"] - 1 or lay["list_rows"] == 1, (
+                f"{max_y} rows, pane={show}: the boxes do not fill the screen"
+            )
+
+
+def test_wrap_description_marks_a_cut(mod):
+    text = "one two three four five six seven eight nine ten"
+    assert mod.wrap_description(text, 20, 5) == [
+        "one two three four", "five six seven eight", "nine ten",
+    ]
+    cut = mod.wrap_description(text, 20, 2, "...")
+    assert len(cut) == 2 and cut[-1].endswith("...") and len(cut[-1]) <= 20
+    assert mod.wrap_description("", 20, 3) == []
+    assert mod.wrap_description(text, 0, 3) == []
+    assert mod.wrap_description(text, 20, 0) == []
+
+
+def test_describe_row_covers_every_kind_of_row_and_the_buttons(mod):
+    rows = mod.build_rows()
+    for i, row in enumerate(rows):
+        text = mod.describe_row(rows, i, mod.FOCUS_LIST, 0)
+        assert text, f"row {row['text']!r} has nothing to say"
+        if row["type"] in (mod.ROW_FEATURE, mod.ROW_CHOICE):
+            assert text == row["desc"]
+    for i, label in enumerate(mod.BUTTONS):
+        assert mod.describe_row(rows, 0, mod.FOCUS_BUTTONS, i) == mod.BUTTON_DESC[label]
+    # A filter matching nothing leaves the cursor on no row at all.
+    assert mod.describe_row(rows, -1, mod.FOCUS_LIST, 0) == ""
+    assert mod.describe_row(rows, len(rows), mod.FOCUS_LIST, 0) == ""
+    # A header states its live count.
+    hdr = _header_index(mod, rows, "Telemetry & Reporting")
+    text = mod.describe_row(rows, hdr, mod.FOCUS_LIST, 0)
+    on, total = mod.header_counts(rows, hdr)
+    assert text.startswith(f"Telemetry & Reporting: {total} settings, {on} on")
+
+
+def test_box_glyphs_fall_back_to_ascii_when_the_codec_cannot_encode_them(mod, monkeypatch):
+    monkeypatch.setattr(mod, "_box_glyphs", None)
+    monkeypatch.setattr(mod.locale, "getpreferredencoding", lambda do_setlocale=False: "ascii")
+    assert mod.box_glyphs() == mod.BOX_ASCII
+    monkeypatch.setattr(mod, "_box_glyphs", None)
+    monkeypatch.setattr(mod.locale, "getpreferredencoding", lambda do_setlocale=False: "utf-8")
+    assert mod.box_glyphs() == mod.BOX_UNICODE
+
+
+def _call_spans(text, name):
+    """Yield the source of every call to `name(...)`.
+
+    The def line is excluded, and so is a bare `name()` - that is how a
+    docstring mentions a function, never how the scripts call these.
+    """
+    for m in re.finditer(rf"(?<!def )\b{re.escape(name)}\(", text):
+        depth, i = 0, m.end() - 1
+        while i < len(text):
+            if text[i] == "(":
+                depth += 1
+            elif text[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        span = text[m.start():i + 1]
+        if span != f"{name}()":
+            yield span
+
+
+def test_the_pane_flag_reaches_every_frame_and_d_toggles_it(mod):
+    """A draw() or viewport_rows() call that forgets show_desc paints the
+    old layout for one frame - the list jumps - so every call site passes
+    it, and `d` is the key that flips it."""
+    text = open(mod.__file__, encoding="utf-8").read()
+    live = re.sub(r"(?m)^\s*#.*$", "", text)
+    draws = list(_call_spans(live, "draw"))
+    assert len(draws) >= 3, "draw() call sites went missing"
+    for call in draws:
+        assert "show_desc=show_desc" in call, f"a frame is drawn without the pane flag:\n{call}"
+    for call in _call_spans(live, "viewport_rows"):
+        assert "show_desc" in call, f"a viewport is sized without the pane flag: {call}"
+    for name in ("prompt_text_input", "prompt_channel_selection", "prompt_persist_mode"):
+        for call in _call_spans(live, name):
+            assert "show_desc=show_desc" in call, f"{name} is called without the pane flag:\n{call}"
+    assert re.search(r'^        elif key == ord\("d"\):\n            show_desc = not show_desc', live, re.M)
+    assert re.search(r"^    show_desc = stdscr\.getmaxyx\(\)\[0\] >= 24", live, re.M), (
+        "the pane does not start shown on a terminal that has room for it"
+    )
+    assert any(line.strip().startswith("d ") for line in mod.HELP_LINES), "the help overlay does not list d"
+    assert "[D] Describe" in live, "the hint line does not mention the pane"
+    # The DoH field width is one figure, shared by draw() and the editing keys.
+    assert "max_x - 1 - 22" not in live, "a template-field width is computed by hand"
+    assert live.count("template_field_width(max_x)") >= 4
+
+
+def test_mac_prompt_overlay_sits_on_the_buttons_row():
+    """The Apply-time overlay covered the buttons row and the status line;
+    the button box moved that row up by one."""
+    text = (ROOT / "slimbrave-mac.py").read_text(encoding="utf-8")
+    assert "max_y - 3, 0, desc_line.ljust(usable_w)[:usable_w]," in text
 
