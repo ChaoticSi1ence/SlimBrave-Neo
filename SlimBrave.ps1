@@ -665,7 +665,7 @@ $categories = @(
 # The interface wants a lowercase row shape with a description and an ordered
 # choices list. The tables above are the single source of truth and stay in the
 # form the test suite parses, so the translation happens here at startup rather
-# than by maintaining a second copy of all 79 policies.
+# than by maintaining a second copy of all 78 policies.
 #
 # Ids are index-based because a few policy keys legitimately appear on two rows
 # (incognito, referrers). State is keyed by id, never by key.
