@@ -19,7 +19,6 @@
         "HighEfficiencyModeEnabled": true,
         "HardwareAccelerationModeEnabled": true,
         "EnableMediaRouter": false,
-        "MediaRecommendationsEnabled": false,
         "ShoppingListEnabled": false,
         "DefaultBrowserSettingEnabled": false,
         "BraveWaybackMachineEnabled": false,

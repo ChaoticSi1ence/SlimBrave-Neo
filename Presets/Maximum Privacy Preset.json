@@ -43,7 +43,6 @@
         "DefaultBraveRemember1PStorageSetting": 2,
         "BackgroundModeEnabled": false,
         "EnableMediaRouter": false,
-        "MediaRecommendationsEnabled": false,
         "ShoppingListEnabled": false,
         "AlwaysOpenPdfExternally": true,
         "TranslateEnabled": false,

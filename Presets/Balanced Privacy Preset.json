@@ -28,7 +28,6 @@
         "TorDisabled": true,
         "SyncDisabled": true,
         "BackgroundModeEnabled": false,
-        "MediaRecommendationsEnabled": false,
         "ShoppingListEnabled": false,
         "DefaultBrowserSettingEnabled": false,
         "BraveLocalAIEnabled": false,
