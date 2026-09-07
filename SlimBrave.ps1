@@ -382,8 +382,6 @@ $perfFeatures = @(
        Tip = "Forces GPU acceleration off. This is a departure from Brave's default and costs rendering performance and battery, so use it only when the GPU path is itself the problem: flickering or artifacts from a faulty driver, a VM or RDP session with no usable GPU, or corruption while screen sharing. Takes effect after a browser restart." },
     @{ Name = "Disable Media Router (Cast)"; Key = "EnableMediaRouter"; Value = 0; Type = "DWord"
        Tip = "Disables the Google Cast media router and its background device discovery on the local network. Takes effect after a browser restart." },
-    @{ Name = "Disable Media Recommendations"; Key = "MediaRecommendationsEnabled"; Value = 0; Type = "DWord"
-       Tip = "Disables the media history and recommendation surfaces built from what you watch." },
     @{ Name = "Disable Shopping List"; Key = "ShoppingListEnabled"; Value = 0; Type = "DWord"
        Tip = "Disables the price-tracking shopping list feature." },
     @{ Name = "Always Open PDF Externally"; Key = "AlwaysOpenPdfExternally"; Value = 1; Type = "DWord"
@@ -469,7 +467,6 @@ $script:embeddedPresets = [ordered]@{
         "DefaultBraveRemember1PStorageSetting": 2,
         "BackgroundModeEnabled": false,
         "EnableMediaRouter": false,
-        "MediaRecommendationsEnabled": false,
         "ShoppingListEnabled": false,
         "AlwaysOpenPdfExternally": true,
         "TranslateEnabled": false,
@@ -519,7 +516,6 @@ $script:embeddedPresets = [ordered]@{
         "TorDisabled": true,
         "SyncDisabled": true,
         "BackgroundModeEnabled": false,
-        "MediaRecommendationsEnabled": false,
         "ShoppingListEnabled": false,
         "DefaultBrowserSettingEnabled": false,
         "BraveLocalAIEnabled": false,
@@ -555,7 +551,6 @@ $script:embeddedPresets = [ordered]@{
         "HighEfficiencyModeEnabled": true,
         "HardwareAccelerationModeEnabled": true,
         "EnableMediaRouter": false,
-        "MediaRecommendationsEnabled": false,
         "ShoppingListEnabled": false,
         "DefaultBrowserSettingEnabled": false,
         "BraveWaybackMachineEnabled": false,
@@ -580,7 +575,6 @@ $script:embeddedPresets = [ordered]@{
         "BraveNewsDisabled": true,
         "BraveTalkDisabled": true,
         "BackgroundModeEnabled": false,
-        "MediaRecommendationsEnabled": false,
         "ShoppingListEnabled": false,
         "DefaultBrowserSettingEnabled": false,
         "BraveLocalAIEnabled": false,

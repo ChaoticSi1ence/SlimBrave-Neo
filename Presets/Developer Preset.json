@@ -13,7 +13,6 @@
         "BraveNewsDisabled": true,
         "BraveTalkDisabled": true,
         "BackgroundModeEnabled": false,
-        "MediaRecommendationsEnabled": false,
         "ShoppingListEnabled": false,
         "DefaultBrowserSettingEnabled": false,
         "BraveLocalAIEnabled": false,

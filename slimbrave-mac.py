@@ -665,7 +665,6 @@ CATEGORIES = [
 
             {"name": "Disable Media Router (Cast)", "key": "EnableMediaRouter", "value": False, "desc": "Disables the Google Cast media router and its background device discovery on the local network. Takes effect after a browser restart."},
 
-            {"name": "Disable Media Recommendations", "key": "MediaRecommendationsEnabled", "value": False, "desc": "Disables the media history and recommendation surfaces built from what you watch."},
 
             {"name": "Disable Shopping List", "key": "ShoppingListEnabled", "value": False, "desc": "Disables the price-tracking shopping list feature."},
 
