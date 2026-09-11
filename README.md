@@ -24,7 +24,7 @@ SlimBrave Neo uses Chromium enterprise managed policies to disable telemetry, bl
 > A fork of [SlimBrave](https://github.com/ltx0101/SlimBrave) by [@ltx0101](https://github.com/ltx0101), GPL-3.0, extended to Linux and macOS. Policy keys are curated and re-audited against brave-core and Chromium source by Claude Fable; what ships is a human call. Receipts in [`AUDIT.md`](AUDIT.md).
 
 > [!NOTE]
-> **Linux users: consider [Brave Origin](https://brave.com/origin/linux/) first** — an official Brave build with telemetry and bloat already removed, now on the Release channel (`apt install brave-origin`). SlimBrave Neo is the better fit if you want per-policy control, presets, or your own DoH templates.
+> **Linux users: consider [Brave Origin](https://brave.com/origin/linux/) first** — an official Brave build with telemetry and bloat already removed, now on the Release channel (`apt install brave-origin`). SlimBrave Neo is the better fit if you want per-policy control, presets, or your own DoH templates — and it runs on Origin too: the Arch `brave-origin-bin` package and the `brave-origin` deb/rpm are detected, and Origin reads the same `/etc/brave/policies` directory, so everything Origin has not already compiled out applies there as well.
 
 <div align="center">
 
@@ -174,6 +174,8 @@ sudo python3 slimbrave-linux.py --reset
 ```
 
 **Multiple Brave channels (Stable / Beta / Nightly):** Brave hardcodes the managed-policy directory to `/etc/brave/policies` for every channel, so a single policy file applies to all of them — no per-channel selector is needed. If multiple channels are installed, leaked Shields exceptions are scrubbed from each channel's user-data directory and "Brave is running" detection covers all installed channels.
+
+**Brave Origin:** detected as its own channel — the Arch `brave-origin-bin` package (`/opt/brave-origin-bin`), the official `brave-origin` deb and rpm (`/opt/brave.com/brave-origin`), or a `brave-origin` launcher on `PATH`; Origin's beta and nightly builds (`brave-origin-beta`, `brave-origin-nightly`) are picked up by their profile directories and launchers the same way Brave's own beta and nightly are. There is no Flatpak or Snap of Origin to look for. Origin reads the same `/etc/brave/policies/managed` directory as regular Brave — brave-core sets it for every Linux build, and on 1.94.121 a managed policy dropped there was watched installing extensions into the `Brave-Origin` profile — so the one policy file covers it, and its profile under `~/.config/BraveSoftware/Brave-Origin` gets the same leak repair. On a machine whose only Brave is Origin, the 13 rows for features Origin removes at build time — Rewards, Wallet, VPN, Leo, Local AI, News, Talk, Playlist, Web Discovery, Speedreader, Tor, Email Aliases, Wayback Machine — are shown inert: `[-]`, greyed, marked `(built into Origin)`, left out of the section counts, and never written, because the feature is not in the binary and a policy for it would switch nothing. The description pane says so on each, and importing a preset that names them reports how many were left unmanaged. Beside a regular Brave every row stays live, since the one policy file serves both browsers. [`AUDIT.md`](AUDIT.md) has the per-key receipts. `--channels origin` narrows the CLI to it.
 
 After applying, restart Brave and verify at `brave://policy`.
 
@@ -380,7 +382,7 @@ The Windows PowerShell script is GUI-only: it has no user-facing flags. It decla
 | `--reset` | Remove the managed policy file |
 | `--policy-file PATH` | Override policy file path |
 | `--doh-templates URL` | Set custom DNS-over-HTTPS template URL |
-| `--channels LIST` | Comma-separated channels to target (`stable,beta,nightly`; Linux also accepts `dev`). Default `auto` = all detected. macOS writes one plist per channel; Linux always shares a single policy file. |
+| `--channels LIST` | Comma-separated channels to target (`stable,beta,nightly`; Linux also accepts `dev`, `origin`, `origin-beta` and `origin-nightly`). Default `auto` = all detected. macOS writes one plist per channel; Linux always shares a single policy file. |
 | `--persist MODE` | **macOS only** (`slimbrave-mac.py`). `off` (plist only; may reset after reboot on macOS 13+) or `on` (install an Apple Configuration Profile via System Settings; durable, Apple-recommended). Omitted = reuse whatever mode is currently installed; falls back to `off` if nothing is. `slimbrave-linux.py` does not accept this flag at all and exits 2 if it is passed; `slimbrave-mac.py` run on Linux accepts only `off`, because `/etc/brave/policies` is already durable. |
 | `-h`, `--help` | Show help |
 
@@ -480,6 +482,7 @@ Applies the policy half of what [Brave Origin](https://brave.com/origin/) upgrad
 - **What this can't give you:** Origin also compiles features out of the binary, ships with metrics removed, and adjusts a few defaults that have no policy equivalent. Policies can't shrink a binary. For the closest match, also tick "Disable Metrics Reporting" — Origin builds don't report metrics at all.
 - **DNS:** Left unmanaged, matching Origin.
 - **Best for:** Anyone who wants Origin's defaults on the Brave they already run — or on Windows and macOS, where Origin is a paid upgrade.
+- **On Brave Origin itself:** 13 of its 15 keys name features Origin removes at build time, so on a machine whose only Brave is Origin the import reports them as built in and left unmanaged, and ticks the other two — P3A and the stats ping, which Origin already defaults off and a managed value pins.
 
 </details>
 
@@ -494,13 +497,13 @@ SlimBrave Neo writes Chromium [managed enterprise policies](https://chromeenterp
 
 | Platform | Policy Location |
 |----------|----------------|
-| Linux | `/etc/brave/policies/managed/slimbrave.json` (shared across all channels) |
+| Linux | `/etc/brave/policies/managed/slimbrave.json` (shared across all channels, Brave Origin included) |
 | macOS — `--persist off` | `/Library/Managed Preferences/com.brave.Browser{,.beta,.nightly}.plist` (one per selected channel). |
 | macOS — `--persist on` | Apple Configuration Profile installed via System Settings → General → Device Management. No plist files written; the profile system manages the values. |
 | Windows | Registry keys via PowerShell |
 
 **Additional behavior:**
-- Auto-detects Brave installations: Arch (`brave-bin`), deb/rpm, Flatpak, Snap, macOS App (Stable / Beta / Nightly), and PATH fallback
+- Auto-detects Brave installations: Arch (`brave-bin`, `brave-origin-bin`), deb/rpm (`brave-browser`, `brave-origin`), Flatpak, Snap, macOS App (Stable / Beta / Nightly), and PATH fallback; on Linux, Brave Origin is reported as its own channel
 - Reads existing policies on startup and pre-checks matching features; on macOS, the Apply-time channel prompt pre-ticks channels that already have a SlimBrave-managed policy (sticky default)
 - Full overwrite on Apply, so unchecked features are cleanly removed
 - Import/export compatible with the Windows PowerShell version: all three scripts now export UTF-8 without a BOM, and all three still read the UTF-16 files older PowerShell exports produced

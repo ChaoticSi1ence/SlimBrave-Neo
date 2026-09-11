@@ -11,7 +11,8 @@ Multi-channel support:
   - Linux: all Brave channels share /etc/brave/policies/managed (hardcoded
     in brave-core), so a single policy file applies to all of them. The
     per-channel info is used to scrub leaked prefs from each channel's
-    user-data directory and to detect running channels.
+    user-data directory and to detect running channels. Brave Origin reads
+    the same directory and is detected as its own "origin" channel.
 
 Supports interactive curses TUI and non-interactive CLI usage:
   sudo python3 slimbrave.py                              # TUI
@@ -115,9 +116,69 @@ LINUX_CHANNELS = [
      "user_data_dir": "Brave-Browser-Nightly", "process_name": "brave-browser-nightly"},
     {"id": "dev", "label": "Dev",
      "user_data_dir": "Brave-Browser-Dev", "process_name": "brave-browser-dev"},
+    # Brave Origin is a separate build rather than a channel of this one,
+    # but on Linux it walks the same paths: brave-core's chrome_paths_linux.cc
+    # names its profile BraveSoftware/Brave-Origin with the same -Beta and
+    # -Nightly suffixes, and its launcher is brave-origin[-beta|-nightly] on
+    # every packaging (the AUR wrapper, the deb/rpm script). The launcher's
+    # bash process stays alive around the browser, and its comm is the name
+    # it was started by: brave-origin from the AUR wrapper, brave-origin-st
+    # (comm's 15-char cap) from the deb/rpm desktop file's
+    # /usr/bin/brave-origin-stable - the SingletonLock check covers that
+    # case, as it does the long beta and nightly names. Beta and nightly ship
+    # as brave-origin-beta / brave-origin-nightly (apt, rpm and AUR *-bin);
+    # brave-core also names a dev channel, but no such package is published,
+    # so it gets no row.
+    {"id": "origin", "label": "Origin",
+     "user_data_dir": "Brave-Origin", "process_name": "brave-origin"},
+    {"id": "origin-beta", "label": "Origin Beta",
+     "user_data_dir": "Brave-Origin-Beta", "process_name": "brave-origin-beta"},
+    {"id": "origin-nightly", "label": "Origin Nightly",
+     "user_data_dir": "Brave-Origin-Nightly", "process_name": "brave-origin-nightly"},
 ]
 
 CHANNEL_IDS = [c["id"] for c in (MAC_CHANNELS if IS_MAC else LINUX_CHANNELS)]
+
+
+# Policy keys whose handler Brave Origin compiles out. Each one's entry in
+# brave-core's browser/policy/brave_simple_policy_map.h sits under a
+# BUILDFLAG whose .gni definition carries `&& !is_brave_origin_branded`
+# (v1.94.121; the receipts, including a check on the shipped binary, are in
+# AUDIT.md, 2026-09-11). On a machine whose only Brave is Origin these rows
+# are shown inert: the feature is not in the binary, so there is nothing
+# for a policy to switch. P3A and the stats ping are not listed - their
+# entries are unguarded, Origin merely defaults them off, and a managed
+# value pins them.
+ORIGIN_BUILTIN_KEYS = frozenset((
+    "BraveRewardsDisabled", "BraveWalletDisabled", "BraveVPNDisabled",
+    "BraveAIChatEnabled", "BraveLocalAIEnabled", "BraveNewsDisabled",
+    "BraveTalkDisabled", "BravePlaylistEnabled", "BraveWebDiscoveryEnabled",
+    "BraveSpeedreaderEnabled", "BraveWaybackMachineEnabled", "TorDisabled",
+    "EmailAliasesEnabled",
+))
+
+# The suffix an inert row carries in the list.
+INERT_SUFFIX = "(built into Origin)"
+
+# The launch notes: one status line each at 80 columns, which is 76 chars.
+ORIGIN_NOTE_ONLY = "Brave Origin found: policies apply; rows for features it removes are inert."
+ORIGIN_NOTE_BESIDE = "Origin beside Brave: one policy file serves both; every row stays live."
+
+
+def is_origin_only(installations):
+    """True when every detected Brave is a Brave Origin build.
+
+    The one shared policy file is read by every Brave on the machine, so a
+    row goes inert only when no regular Brave could be reading it: an old
+    Brave-Browser profile beside Origin keeps every row live, as does the
+    --policy-file override and any macOS channel. A record detect_brave()
+    made carries the whole machine's answer in "origin_only", so a list
+    narrowed by --channels cannot turn a mixed machine into an Origin-only
+    one; a record built by hand answers for its channel.
+    """
+    return bool(installations) and all(
+        i.get("origin_only", str(i.get("channel", "")).startswith("origin"))
+        for i in installations)
 
 
 def _user_home_for_brave():
@@ -321,6 +382,7 @@ def detect_brave():
                 "warnings": [
                     "Brave browser not found. Policies will be written but may have no effect."
                 ],
+                "notes": [],
                 "installations": [_make_installation(
                     stable,
                     app_path="",
@@ -338,6 +400,7 @@ def detect_brave():
             "method": method,
             "path": installations[0]["app_path"],
             "warnings": [],
+            "notes": [],
             "installations": installations,
         }
 
@@ -356,6 +419,29 @@ def detect_brave():
         method, primary_path, found_any = "deb/rpm", "/opt/brave.com/brave/brave-browser", True
     elif os.path.isfile("/opt/brave.com/brave/brave"):
         method, primary_path, found_any = "deb/rpm", "/opt/brave.com/brave/brave", True
+    # Whether a regular Brave is on the machine at all, started or not. The
+    # inert-row decision hangs on it: it must never fire beside one.
+    regular_found = found_any
+
+    # Brave Origin is a separate package that can sit beside regular Brave,
+    # so it is probed on its own rather than as one more arm of the chain
+    # above. Arch: the brave-origin-bin AUR package (PKGBUILD maintained by
+    # Brave, mirrored in the CachyOS repo) unpacks the upstream zip under
+    # /opt/brave-origin-bin. Deb / RPM: brave-core's installer config sets
+    # INSTALLDIR=/opt/brave.com/brave-origin and keeps PROGNAME=brave, so the
+    # launcher is brave-origin and the binary is brave, mirroring the regular
+    # /opt/brave.com/brave layout. Origin reads /etc/brave/policies like
+    # regular Brave: brave_main_delegate.cc overrides DIR_POLICY_FILES for
+    # every POSIX build with no branding guard (AUDIT.md, 2026-09-11).
+    origin_method, origin_path = "", ""
+    if os.path.isfile("/opt/brave-origin-bin/brave"):
+        origin_method, origin_path = "arch", "/opt/brave-origin-bin/brave"
+    elif os.path.isfile("/opt/brave.com/brave-origin/brave-origin"):
+        origin_method, origin_path = "deb/rpm", "/opt/brave.com/brave-origin/brave-origin"
+    elif os.path.isfile("/opt/brave.com/brave-origin/brave"):
+        origin_method, origin_path = "deb/rpm", "/opt/brave.com/brave-origin/brave"
+    if origin_path and not found_any:
+        method, primary_path, found_any = f"{origin_method} (Brave Origin)", origin_path, True
 
     # Flatpak and Snap are probed unconditionally, not as the `else` of the
     # native chain: a mixed install has both, and the Snap warning applies
@@ -365,11 +451,13 @@ def detect_brave():
     if os.path.isdir("/var/lib/flatpak/app/com.brave.Browser") or (
             home and os.path.isdir(os.path.join(
                 home, ".local", "share", "flatpak", "app", "com.brave.Browser"))):
+        regular_found = True
         if not found_any:
             method, primary_path, found_any = "flatpak", "com.brave.Browser", True
 
     snap_path = "/snap/brave/current/opt/brave.com/brave/brave"
     if os.path.isfile(snap_path) or os.path.isdir("/snap/brave/current"):
+        regular_found = True
         if not found_any:
             method, primary_path, found_any = "snap", snap_path, True
         warnings.append(
@@ -377,11 +465,32 @@ def detect_brave():
             "Native packages are recommended."
         )
 
-    if not found_any:
+    # Probed whenever no regular Brave has turned up yet, not only when
+    # nothing has, so a launcher on PATH still counts beside a native Origin.
+    if not regular_found:
         for name in ("brave-browser-stable", "brave-browser", "brave"):
             found = shutil.which(name)
             if found:
-                method, primary_path, found_any = "unknown", found, True
+                regular_found = True
+                if not found_any:
+                    method, primary_path, found_any = "unknown", found, True
+                break
+
+    # Origin's launcher names, for a hand-unpacked zip: the deb ships the
+    # /usr/bin/brave-origin-stable symlink and its postinst registers the
+    # bare brave-origin alternative, the same way regular Brave gets
+    # brave-browser-stable; the beta and nightly debs ship their launcher
+    # symlink directly. No Flatpak or Snap of Origin exists (Flathub carries
+    # only com.brave.Browser, the Snap store only brave), so there is
+    # nothing else to probe.
+    if not found_any:
+        for name in ("brave-origin-stable", "brave-origin",
+                     "brave-origin-beta", "brave-origin-nightly"):
+            found = shutil.which(name)
+            if found:
+                method, primary_path, found_any = "unknown (Brave Origin)", found, True
+                if name in ("brave-origin-stable", "brave-origin"):
+                    origin_path = found
                 break
 
     if not found_any:
@@ -403,11 +512,23 @@ def detect_brave():
         installed = (
             (ch_dir is not None and os.path.isdir(ch_dir))
             or shutil.which(ch["process_name"]) is not None
+            # A native stable Origin whose launcher is off PATH and that has
+            # never been started still needs its record, or the stable
+            # fallback below would stand in for it. Beta and nightly Origin
+            # are found the way Brave's own beta and nightly are: by profile
+            # directory or launcher on PATH.
+            or (ch["id"] == "origin" and bool(origin_path))
         )
         if installed:
+            if ch["id"] == "stable":
+                app_path = "" if primary_path == origin_path else primary_path
+            elif ch["id"] == "origin":
+                app_path = origin_path
+            else:
+                app_path = ""
             installations.append(_make_installation(
                 ch,
-                app_path=primary_path if ch["id"] == "stable" else "",
+                app_path=app_path,
                 plist_path=POLICY_FILE,
                 prefs_path=_channel_prefs_path(ch["user_data_dir"]),
             ))
@@ -429,6 +550,23 @@ def detect_brave():
         ))
         detected_labels.append("Flatpak")
 
+    # A regular Brave found by package, Flatpak, Snap or launcher but never
+    # started has no profile, so the loop above made it no record. Alone on
+    # a machine, the fallback below stands in for it, as it always has;
+    # beside Origin it would let the machine pass for Origin-only, so it
+    # gets its record here, ahead of Origin's.
+    if (regular_found
+            and not any(i["channel"] == "stable" for i in installations)
+            and any(i["channel"].startswith("origin") for i in installations)):
+        stable = LINUX_CHANNELS[0]
+        installations.insert(0, _make_installation(
+            stable,
+            app_path="" if primary_path == origin_path else primary_path,
+            plist_path=POLICY_FILE,
+            prefs_path=_channel_prefs_path(stable["user_data_dir"]),
+        ))
+        detected_labels.insert(0, stable["label"])
+
     if not installations:
         # Nothing detected per-channel — fall back to a single stable record so
         # apply/reset still has a target plist.
@@ -443,11 +581,28 @@ def detect_brave():
     if found_any and len(detected_labels) > 1:
         method = f"{method}: " + ", ".join(detected_labels)
 
+    # Not a warning: nothing is wrong, and the status line paints warnings
+    # in the error color. Origin honors the shared policy file - verified
+    # end to end on 1.94.121, where a managed ExtensionInstallForcelist put
+    # its extensions into the Brave-Origin profile - so every row works
+    # there except the ones whose feature Origin compiles out.
+    # Stamp the whole machine's answer on every record, so a list narrowed
+    # by --channels still knows whether a regular Brave shares the file.
+    origin_only = is_origin_only(installations)
+    for inst in installations:
+        inst["origin_only"] = origin_only
+    notes = []
+    if origin_only:
+        notes.append(ORIGIN_NOTE_ONLY)
+    elif any(i["channel"].startswith("origin") for i in installations):
+        notes.append(ORIGIN_NOTE_BESIDE)
+
     return {
         "found": found_any,
         "method": method,
         "path": primary_path,
         "warnings": warnings,
+        "notes": notes,
         "installations": installations,
     }
 
@@ -722,10 +877,10 @@ def build_rows(installations=None):
     channel selection is asked at Apply time (see prompt_channel_selection)
     rather than as a permanent row, so the main list stays focused on the
     policies themselves regardless of how many channels are installed.
-    `installations` is accepted for symmetry with callers but isn't used
-    here anymore.
+    `installations` has one effect on the layout, on Linux only: when
+    every detected Brave is Brave Origin, the rows whose feature Origin
+    compiles out are marked inert (ORIGIN_BUILTIN_KEYS).
     """
-    del installations  # kept for API stability; no longer affects layout
     rows = []
     for cat in CATEGORIES:
         # `collapsed` lives only on headers, and import/reset/sync all
@@ -753,6 +908,12 @@ def build_rows(installations=None):
                 "desc": feat.get("desc", ""),
                 "checked": False,
             })
+    # On a machine whose only Brave is Origin, the rows for the features
+    # Origin compiles out are shown but inert (see ORIGIN_BUILTIN_KEYS).
+    if is_origin_only(installations):
+        for row in rows:
+            if row["type"] == ROW_FEATURE and row["key"] in ORIGIN_BUILTIN_KEYS:
+                row["inert"] = True
     # DNS mode selector at the end
     rows.append({"type": ROW_HEADER, "text": "DNS Over HTTPS",
                  "collapsed": False})
@@ -791,7 +952,10 @@ def get_dns_template(rows):
 def toggle_feature_row(rows, target):
     """Flip `target`'s checked state. If it belongs to a group, uncheck the
     other group members first so at most one is active (e.g. Disable vs
-    Force Incognito, which set conflicting values for the same policy)."""
+    Force Incognito, which set conflicting values for the same policy).
+    An inert row (built into Brave Origin) never changes."""
+    if target.get("inert"):
+        return
     new_state = not target["checked"]
     target["checked"] = new_state
     group = target.get("group")
@@ -840,6 +1004,8 @@ def activate_row(rows, row):
     if row["type"] == ROW_HEADER:
         row["collapsed"] = not row.get("collapsed", False)
     elif row["type"] == ROW_FEATURE:
+        if row.get("inert"):
+            return False
         toggle_feature_row(rows, row)
     elif row["type"] == ROW_CHOICE:
         cycle_choice_row(row, 1)
@@ -1454,7 +1620,7 @@ def _build_policy(rows):
     dns_mode = None
     dns_template = ""
     for row in rows:
-        if row["type"] == ROW_FEATURE and row["checked"]:
+        if row["type"] == ROW_FEATURE and row["checked"] and not row.get("inert"):
             policy[row["key"]] = row["value"]
         elif row["type"] == ROW_CHOICE:
             choice_value = _choice_value(row)
@@ -1746,6 +1912,10 @@ def sync_rows_with_policy(rows, policy):
         return
     for row in rows:
         if row["type"] == ROW_FEATURE:
+            # An inert row stays unticked whatever the file says, so the
+            # next Apply drops the dead key rather than carrying it.
+            if row.get("inert"):
+                continue
             if row["key"] in policy and policy[row["key"]] == row["value"]:
                 row["checked"] = True
         elif row["type"] == ROW_CHOICE:
@@ -1800,7 +1970,7 @@ def export_settings(rows, path):
     dns_mode = None
     dns_template = ""
     for row in rows:
-        if row["type"] == ROW_FEATURE and row["checked"]:
+        if row["type"] == ROW_FEATURE and row["checked"] and not row.get("inert"):
             features[row["key"]] = row["value"]
         elif row["type"] == ROW_CHOICE:
             # "Not managed" omits the key entirely, so the exported file has
@@ -1891,10 +2061,18 @@ def import_settings(rows, path):
     # They stay unmanaged and are named in the result message rather than
     # being written out as a value Brave would reject.
     skipped_choices = []
+    # Keys the config names that are built into Brave Origin on this
+    # machine: left unmanaged, and counted in the result message.
+    skipped_inert = []
 
     for row in rows:
         if row["type"] == ROW_FEATURE:
             key = row["key"]
+            if row.get("inert"):
+                row["checked"] = False
+                if key in features_map:
+                    skipped_inert.append(key)
+                continue
             if key not in features_map:
                 row["checked"] = False
                 continue
@@ -1935,6 +2113,10 @@ def import_settings(rows, path):
     if skipped_choices:
         msg += ("; left unmanaged because the value is not one this policy "
                 "accepts: " + ", ".join(skipped_choices))
+    if skipped_inert:
+        n = len(skipped_inert)
+        msg += (f"; {n} key{'s' if n != 1 else ''} built into Brave Origin "
+                "left unmanaged")
     return True, msg
 
 # ---------------------------------------------------------------------------
@@ -2174,15 +2356,21 @@ def describe_row(rows, cursor_idx, focus, btn_idx):
     kind = row["type"]
     if kind == ROW_HEADER:
         on, total = header_counts(rows, cursor_idx)
-        if total:
-            return (f"{row['text']}: {total} settings, {on} on. Left folds "
-                    "the section, Right unfolds it, Space toggles it, "
-                    "c folds or unfolds them all.")
+        inert = header_inert_count(rows, cursor_idx)
+        if total or inert:
+            built_in = f", {inert} built into Origin" if inert else ""
+            return (f"{row['text']}: {total} settings, {on} on{built_in}. "
+                    "Left folds the section, Right unfolds it, Space "
+                    "toggles it, c folds or unfolds them all.")
         return f"{row['text']}: the resolver mode and its template."
     if kind == ROW_DNS:
         return DNS_DESC["mode"]
     if kind == ROW_DNS_TEMPLATE:
         return DNS_DESC["template"]
+    if row.get("inert"):
+        return ("Built into Brave Origin: this feature is not in the binary, "
+                "so there is nothing for a policy to switch; the row is "
+                "shown for reference only. " + row.get("desc", ""))
     return row.get("desc", "")
 
 
@@ -2206,6 +2394,9 @@ def header_counts(rows, header_idx):
     total = 0
     for row in rows[start:end]:
         if row["type"] == ROW_FEATURE:
+            # Inert rows (built into Brave Origin) count as neither.
+            if row.get("inert"):
+                continue
             total += 1
             if row["checked"]:
                 on += 1
@@ -2214,6 +2405,13 @@ def header_counts(rows, header_idx):
             if row["selected"] > 0:
                 on += 1
     return on, total
+
+
+def header_inert_count(rows, header_idx):
+    """How many of a header's rows are built into Brave Origin."""
+    start, end = header_span(rows, header_idx)
+    return sum(1 for row in rows[start:end]
+               if row["type"] == ROW_FEATURE and row.get("inert"))
 
 
 def collapse_state(rows):
@@ -2245,7 +2443,9 @@ def apply_startup_collapse(rows):
         if row["type"] != ROW_HEADER:
             continue
         on, total = header_counts(rows, idx)
-        if total:
+        if total or header_inert_count(rows, idx):
+            # A section whose every row is built into Origin manages
+            # nothing, so it folds like one with nothing ticked.
             row["collapsed"] = on == 0
         else:
             # The DNS header owns no countable rows, so judge it by
@@ -2443,17 +2643,34 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
             marker = shut_glyph if folded else open_glyph
             line = f"{marker} {row['text']}"
             on_count, total = header_counts(rows, ri)
+            inert = header_inert_count(rows, ri)
             if total:
                 counter = f"{on_count}/{total} on"
+            elif inert:
+                counter = f"{inert} built into Origin"
+            else:
+                counter = ""
+            if counter:
                 line = line.ljust(max(len(line) + 2,
                                       inner_w - len(counter) - 1)) + counter
         elif row["type"] == ROW_FEATURE:
-            mark = "x" if row["checked"] else " "
-            line = f"    [{mark}] {row['text']}"
-            if row["checked"]:
-                attr = curses.color_pair(CP_CHECKED)
+            if row.get("inert"):
+                # Built into Origin: nothing to tick, drawn the way the
+                # unavailable DoH template field is. A long name gives way
+                # so the suffix survives an 80-column terminal.
+                text = row["text"]
+                room = inner_w - len(INERT_SUFFIX) - len("    [-]  ")
+                if len(text) > room:
+                    text = text[:max(0, room - 3)].rstrip() + "..."
+                line = f"    [-] {text} {INERT_SUFFIX}"
+                attr = curses.color_pair(CP_DIM) | curses.A_DIM
             else:
-                attr = curses.color_pair(CP_NORMAL)
+                mark = "x" if row["checked"] else " "
+                line = f"    [{mark}] {row['text']}"
+                if row["checked"]:
+                    attr = curses.color_pair(CP_CHECKED)
+                else:
+                    attr = curses.color_pair(CP_NORMAL)
         elif row["type"] == ROW_CHOICE:
             label = row["choices"][row["selected"]][0]
             line = f"    {row['text']}: < {label} >"
@@ -2862,6 +3079,13 @@ def main(stdscr, override_installations=None):
         # Both warnings (Snap confinement, Brave not found) are problems —
         # neither belongs in the success color.
         status_ok = False
+    elif brave_info.get("notes") and override_installations is None:
+        # A note (Brave Origin found) is information, so it keeps the
+        # success color; a warning outranks it for the one status line.
+        # Under --policy-file the rows come from the override record and
+        # stay live, so the note would describe a list that is not shown.
+        status_msg = brave_info["notes"][0]
+        status_ok = True
     else:
         status_msg = ""
         status_ok = True
@@ -3293,6 +3517,15 @@ def cli_export(path, installations):
 
     rows = build_rows(installations)
     sync_rows_with_policy(rows, policy)
+    # Keys on disk that are built into Brave Origin here never reach the
+    # rows, so they never reach the file either; say so rather than let a
+    # backup silently shrink.
+    left_out = [r["key"] for r in rows
+                if r["type"] == ROW_FEATURE and r.get("inert") and r["key"] in policy]
+    if left_out:
+        n = len(left_out)
+        print(f"Note: {n} key{'s' if n != 1 else ''} built into Brave Origin "
+              "left out of the export", file=sys.stderr)
 
     ok, msg = export_settings(rows, path)
     if not ok:
@@ -3466,6 +3699,8 @@ if __name__ == "__main__":
                 sys.exit(2)
             for w in brave_info["warnings"]:
                 print(f"Warning: {w}", file=sys.stderr)
+            for n in brave_info.get("notes", []):
+                print(f"Note: {n}", file=sys.stderr)
 
         # Resolve --persist: when omitted, reuse whichever mode is
         # currently installed (matches TUI's sticky default) so a

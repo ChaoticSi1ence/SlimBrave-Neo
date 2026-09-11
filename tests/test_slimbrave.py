@@ -638,6 +638,448 @@ def test_detect_persist_mode_is_off_without_macos():
 
 
 # ---------------------------------------------------------------------------
+# Linux detection — Brave Origin
+#
+# Origin is a separate build that installs beside regular Brave. The paths
+# come from brave-core v1.94.121 (chrome_paths_linux.cc for the profile,
+# installer/linux/common/brave-origin/chromium-browser.info for the deb/rpm
+# layout) and from the AUR package on the maintainer's machine; the policy
+# directory was proven end to end there. AUDIT.md, 2026-09-11, has the
+# receipts.
+# ---------------------------------------------------------------------------
+
+_PROBED_ROOTS = ("/opt/", "/snap/", "/var/lib/flatpak/", "/home/u/")
+ORIGIN_PROFILE = "/home/u/.config/BraveSoftware/Brave-Origin"
+
+
+def _fake_linux_box(mod, monkeypatch, files=(), dirs=(), on_path=()):
+    """Answer the detector's probes from a fixed picture of one machine.
+
+    Only the roots detect_brave() looks under are faked; every other path
+    still reaches the real filesystem, so pytest's own lookups keep working.
+    """
+    files, dirs, on_path = set(files), set(dirs), set(on_path)
+    real_isfile, real_isdir = os.path.isfile, os.path.isdir
+    monkeypatch.setattr(
+        mod.os.path, "isfile",
+        lambda p: p in files if str(p).startswith(_PROBED_ROOTS) else real_isfile(p))
+    monkeypatch.setattr(
+        mod.os.path, "isdir",
+        lambda p: p in dirs if str(p).startswith(_PROBED_ROOTS) else real_isdir(p))
+    monkeypatch.setattr(mod.shutil, "which",
+                        lambda n: f"/usr/bin/{n}" if n in on_path else None)
+    monkeypatch.setattr(mod, "_user_home_for_brave", lambda: "/home/u")
+    # slimbrave-mac.py takes its macOS branch on a Mac runner; force Linux.
+    monkeypatch.setattr(mod, "IS_MAC", False, raising=False)
+
+
+def test_linux_channels_carry_brave_origin(mod):
+    origin = {c["id"]: c for c in mod.LINUX_CHANNELS if c["id"].startswith("origin")}
+    # chrome_paths_linux.cc names the profile, brave_channel_info_posix.cc
+    # the suffix; the process name is the launcher's comm on every packaging.
+    assert {k: (c["user_data_dir"], c["process_name"]) for k, c in origin.items()} == {
+        "origin": ("Brave-Origin", "brave-origin"),
+        "origin-beta": ("Brave-Origin-Beta", "brave-origin-beta"),
+        "origin-nightly": ("Brave-Origin-Nightly", "brave-origin-nightly"),
+    }
+    assert [c for c in LINUX_MOD.CHANNEL_IDS if c.startswith("origin")] == [
+        "origin", "origin-beta", "origin-nightly"]
+
+
+def test_detect_origin_beta_and_nightly_by_profile_or_launcher(mod, monkeypatch):
+    # No native path is probed for these, exactly as for Brave's own beta
+    # and nightly: the profile directory or the launcher on PATH is the tell.
+    _fake_linux_box(mod, monkeypatch,
+                    dirs={"/home/u/.config/BraveSoftware/Brave-Origin-Beta"},
+                    on_path={"brave-origin-nightly"})
+    info = mod.detect_brave()
+    assert info["found"] is True                        # the nightly launcher counts
+    assert info["method"] == "unknown (Brave Origin): Origin Beta, Origin Nightly"
+    assert [i["channel"] for i in info["installations"]] == ["origin-beta", "origin-nightly"]
+    by_channel = {i["channel"]: i for i in info["installations"]}
+    assert by_channel["origin-beta"]["prefs_path"] == (
+        "/home/u/.config/BraveSoftware/Brave-Origin-Beta/Default/Preferences")
+    assert by_channel["origin-nightly"]["process_name"] == "brave-origin-nightly"
+    assert by_channel["origin-nightly"]["app_path"] == ""
+    assert info["notes"]
+
+
+def test_detect_arch_origin_alone(mod, monkeypatch):
+    _fake_linux_box(mod, monkeypatch,
+                    files={"/opt/brave-origin-bin/brave"}, on_path={"brave-origin"})
+    info = mod.detect_brave()
+    assert info["found"] is True
+    assert info["method"] == "arch (Brave Origin)"
+    assert info["path"] == "/opt/brave-origin-bin/brave"
+    assert [i["channel"] for i in info["installations"]] == ["origin"]
+    inst = info["installations"][0]
+    assert inst["app_path"] == "/opt/brave-origin-bin/brave"
+    assert inst["plist_path"] == mod.POLICY_FILE       # the one shared policy file
+    assert inst["prefs_path"] == f"{ORIGIN_PROFILE}/Default/Preferences"
+    assert inst["process_name"] == "brave-origin"
+    assert info["warnings"] == []
+    assert len(info["notes"]) == 1
+    assert info["notes"][0].startswith("Brave Origin found")
+
+
+def test_detect_deb_rpm_origin_alone(mod, monkeypatch):
+    _fake_linux_box(mod, monkeypatch,
+                    files={"/opt/brave.com/brave-origin/brave-origin",
+                           "/opt/brave.com/brave-origin/brave"},
+                    on_path={"brave-origin", "brave-origin-stable"})
+    info = mod.detect_brave()
+    assert info["method"] == "deb/rpm (Brave Origin)"
+    assert info["path"] == "/opt/brave.com/brave-origin/brave-origin"
+    assert [i["channel"] for i in info["installations"]] == ["origin"]
+    assert info["installations"][0]["app_path"] == "/opt/brave.com/brave-origin/brave-origin"
+
+
+def test_detect_origin_beside_regular_brave(mod, monkeypatch):
+    _fake_linux_box(mod, monkeypatch,
+                    files={"/opt/brave-bin/brave", "/opt/brave-origin-bin/brave"},
+                    dirs={"/home/u/.config/BraveSoftware/Brave-Browser", ORIGIN_PROFILE},
+                    on_path={"brave", "brave-origin"})
+    info = mod.detect_brave()
+    assert info["method"] == "arch: Stable, Origin"
+    assert info["path"] == "/opt/brave-bin/brave"      # regular Brave stays primary
+    by_channel = {i["channel"]: i for i in info["installations"]}
+    assert set(by_channel) == {"stable", "origin"}
+    assert by_channel["stable"]["app_path"] == "/opt/brave-bin/brave"
+    assert by_channel["origin"]["app_path"] == "/opt/brave-origin-bin/brave"
+    assert by_channel["origin"]["prefs_path"] == f"{ORIGIN_PROFILE}/Default/Preferences"
+    assert info["warnings"] == []
+    assert info["notes"]
+
+
+def test_detect_origin_launcher_on_path_only(mod, monkeypatch):
+    _fake_linux_box(mod, monkeypatch, on_path={"brave-origin"})
+    info = mod.detect_brave()
+    assert info["found"] is True
+    assert info["method"] == "unknown (Brave Origin)"
+    assert info["path"] == "/usr/bin/brave-origin"
+    assert [i["channel"] for i in info["installations"]] == ["origin"]
+    assert info["installations"][0]["app_path"] == "/usr/bin/brave-origin"
+
+
+def test_detect_origin_profile_without_a_binary(mod, monkeypatch):
+    # The package is gone but the profile remains: not found, yet the
+    # profile still gets prefs repair, and the note still explains itself.
+    _fake_linux_box(mod, monkeypatch, dirs={ORIGIN_PROFILE})
+    info = mod.detect_brave()
+    assert info["found"] is False
+    assert info["method"] == "not found"
+    assert info["warnings"][0].startswith("Brave browser not found")
+    assert [i["channel"] for i in info["installations"]] == ["origin"]
+    assert info["installations"][0]["app_path"] == ""
+    assert info["notes"]
+
+
+def test_detect_without_origin_is_unchanged(mod, monkeypatch):
+    _fake_linux_box(mod, monkeypatch, files={"/opt/brave-bin/brave"}, on_path={"brave"})
+    info = mod.detect_brave()
+    assert info["method"] == "arch"
+    assert info["path"] == "/opt/brave-bin/brave"
+    assert [i["channel"] for i in info["installations"]] == ["stable"]
+    assert info["installations"][0]["app_path"] == "/opt/brave-bin/brave"
+    assert info["notes"] == []
+
+
+def test_detect_nothing_still_falls_back_to_stable(mod, monkeypatch):
+    _fake_linux_box(mod, monkeypatch)
+    info = mod.detect_brave()
+    assert info["found"] is False and info["method"] == "not found"
+    assert [i["channel"] for i in info["installations"]] == ["stable"]
+    assert info["notes"] == []
+
+
+def test_channels_flag_accepts_origin():
+    installed = _fake_installations(["stable", "origin"])
+    filtered, err = LINUX_MOD._filter_installations_by_channels(installed, "origin")
+    assert err == ""
+    assert [i["channel"] for i in filtered] == ["origin"]
+
+
+def test_running_check_names_the_origin_launcher(mod, monkeypatch):
+    # comm of the bash launcher that stays alive around the browser is
+    # brave-origin (12 chars, inside pgrep's 15-char cap); the browser
+    # itself is brave, which the stable row already covers.
+    asked = []
+
+    def fake_run(cmd, **kw):
+        asked.append(cmd[-1])
+        return type("R", (), {"returncode": 1})()
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    origin = next(c for c in mod.LINUX_CHANNELS if c["id"] == "origin")
+    inst = mod._make_installation(origin, plist_path="/x", prefs_path=None)
+    assert mod._is_brave_running([inst]) is False
+    assert asked == ["brave-origin"]
+
+
+# ---------------------------------------------------------------------------
+# Brave Origin — inert rows
+#
+# On a machine whose only Brave is Origin, the rows for the features Origin
+# compiles out are shown but inert. Off Origin nothing here may change a
+# thing, which the "stable" and mixed cases below pin down.
+# ---------------------------------------------------------------------------
+
+
+def _installs(mod, *ids, plist_path="/x/slimbrave.json"):
+    out = []
+    for cid in ids:
+        ch = next(c for c in mod.LINUX_CHANNELS if c["id"] == cid)
+        out.append(mod._make_installation(ch, plist_path=plist_path, prefs_path=None))
+    return out
+
+
+def _row_by_key(mod, rows, key):
+    return next(r for r in rows if r["type"] == mod.ROW_FEATURE and r["key"] == key)
+
+
+def _inert_keys(mod, rows):
+    return {r["key"] for r in rows if r["type"] == mod.ROW_FEATURE and r.get("inert")}
+
+
+def _header_index(mod, rows, text):
+    return next(i for i, r in enumerate(rows)
+                if r["type"] == mod.ROW_HEADER and r["text"] == text)
+
+
+def test_is_origin_only(mod):
+    assert mod.is_origin_only(_installs(mod, "origin")) is True
+    assert mod.is_origin_only(_installs(mod, "origin", "origin-beta")) is True
+    assert mod.is_origin_only([]) is False
+    assert mod.is_origin_only(None) is False
+    assert mod.is_origin_only(_installs(mod, "stable")) is False
+    assert mod.is_origin_only(_installs(mod, "origin", "stable")) is False
+    assert mod.is_origin_only([{"channel": "override", "label": "Override"}]) is False
+
+
+def test_origin_builtin_keys_name_real_rows(mod):
+    rows = mod.build_rows()
+    keys = {r["key"] for r in rows if r["type"] == mod.ROW_FEATURE}
+    assert mod.ORIGIN_BUILTIN_KEYS <= keys
+    assert len(mod.ORIGIN_BUILTIN_KEYS) == 13
+    # None sits in a mutually exclusive group, so inert never strands a partner.
+    assert not any(r.get("group") for r in rows
+                   if r["type"] == mod.ROW_FEATURE and r["key"] in mod.ORIGIN_BUILTIN_KEYS)
+    # Unguarded in brave_simple_policy_map.h: Origin only defaults these off.
+    assert "BraveP3AEnabled" not in mod.ORIGIN_BUILTIN_KEYS
+    assert "BraveStatsPingEnabled" not in mod.ORIGIN_BUILTIN_KEYS
+
+
+def test_rows_go_inert_only_when_origin_is_the_only_brave(mod):
+    expected = set(mod.ORIGIN_BUILTIN_KEYS)
+    assert _inert_keys(mod, mod.build_rows(_installs(mod, "origin"))) == expected
+    assert _inert_keys(mod, mod.build_rows(_installs(mod, "origin-nightly"))) == expected
+    for installs in (None, [], _installs(mod, "stable"), _installs(mod, "origin", "stable"),
+                     [{"channel": "override", "label": "Override"}]):
+        rows = mod.build_rows(installs)
+        assert _inert_keys(mod, rows) == set(), installs
+        # off Origin the rows do not even carry the flag
+        assert not any("inert" in r for r in rows), installs
+
+
+def test_inert_rows_cannot_be_toggled(mod):
+    rows = mod.build_rows(_installs(mod, "origin"))
+    dead = _row_by_key(mod, rows, "BraveRewardsDisabled")
+    live = _row_by_key(mod, rows, "BraveP3AEnabled")
+    mod.toggle_feature_row(rows, dead)
+    assert dead["checked"] is False
+    assert mod.activate_row(rows, dead) is False
+    assert dead["checked"] is False
+    assert mod.activate_row(rows, live) is True
+    assert live["checked"] is True
+
+
+def test_inert_rows_never_reach_the_policy_or_the_export(mod, tmp_path):
+    rows = mod.build_rows(_installs(mod, "origin"))
+    _row_by_key(mod, rows, "TorDisabled")["checked"] = True   # a state no path produces
+    mod.toggle_feature_row(rows, _row_by_key(mod, rows, "BraveP3AEnabled"))
+    policy, err = mod._build_policy(rows)
+    assert err == "" and policy == {"BraveP3AEnabled": False}
+    out = tmp_path / "export.json"
+    ok, _ = mod.export_settings(rows, str(out))
+    assert ok
+    assert json.loads(out.read_text(encoding="utf-8"))["Features"] == {"BraveP3AEnabled": False}
+
+
+def test_sync_leaves_inert_rows_unticked(mod):
+    on_disk = {"BraveRewardsDisabled": True, "BraveP3AEnabled": False}
+    rows = mod.build_rows(_installs(mod, "origin"))
+    mod.sync_rows_with_policy(rows, on_disk)
+    assert _row_by_key(mod, rows, "BraveRewardsDisabled")["checked"] is False
+    assert _row_by_key(mod, rows, "BraveP3AEnabled")["checked"] is True
+    # the same file on a regular Brave ticks both
+    rows = mod.build_rows(_installs(mod, "stable"))
+    mod.sync_rows_with_policy(rows, on_disk)
+    assert _row_by_key(mod, rows, "BraveRewardsDisabled")["checked"] is True
+    assert _row_by_key(mod, rows, "BraveP3AEnabled")["checked"] is True
+
+
+def test_import_skips_inert_keys_and_says_so(mod):
+    preset = str(ROOT / "Presets" / "Brave Origin Preset.json")
+    rows = mod.build_rows(_installs(mod, "origin"))
+    ok, msg = mod.import_settings(rows, preset)
+    assert ok
+    assert "13 keys built into Brave Origin left unmanaged" in msg
+    checked = {r["key"] for r in rows if r["type"] == mod.ROW_FEATURE and r["checked"]}
+    assert checked == {"BraveP3AEnabled", "BraveStatsPingEnabled"}
+    rows = mod.build_rows(_installs(mod, "stable"))
+    ok, msg = mod.import_settings(rows, preset)
+    assert ok and "built into" not in msg
+    assert sum(1 for r in rows if r["type"] == mod.ROW_FEATURE and r["checked"]) == 15
+
+
+def test_header_counts_leave_inert_rows_out(mod):
+    rows = mod.build_rows(_installs(mod, "origin"))
+    h = _header_index(mod, rows, "Brave Features")
+    assert mod.header_counts(rows, h) == (0, 3)
+    assert mod.header_inert_count(rows, h) == 12
+    assert mod.header_inert_count(rows, _header_index(mod, rows, "Performance & Bloat")) == 1
+    assert "3 settings, 0 on, 12 built into Origin." in mod.describe_row(rows, h, mod.FOCUS_LIST, 0)
+    dead = rows.index(_row_by_key(mod, rows, "BraveRewardsDisabled"))
+    assert mod.describe_row(rows, dead, mod.FOCUS_LIST, 0).startswith("Built into Brave Origin")
+    rows = mod.build_rows(_installs(mod, "stable"))
+    h = _header_index(mod, rows, "Brave Features")
+    assert mod.header_counts(rows, h) == (0, 15)
+    assert mod.header_inert_count(rows, h) == 0
+    assert "built into" not in mod.describe_row(rows, h, mod.FOCUS_LIST, 0)
+
+
+def test_an_all_inert_section_folds_at_startup(mod):
+    rows = mod.build_rows(_installs(mod, "origin"))
+    h = _header_index(mod, rows, "Telemetry & Reporting")
+    start, end = mod.header_span(rows, h)
+    for r in rows[start:end]:
+        r["inert"] = True
+    # A managed DNS mode keeps the DNS header open; a section with no
+    # countable rows must not borrow that rule.
+    dns = next(r for r in rows if r["type"] == mod.ROW_DNS)
+    dns["selected"] = 1
+    assert mod.get_dns_mode(rows) != "unmanaged"
+    mod.apply_startup_collapse(rows)
+    assert mod.header_counts(rows, h) == (0, 0)
+    assert rows[h]["collapsed"] is True
+
+
+def test_tui_draws_inert_rows_on_origin(mod, monkeypatch, tmp_path):
+    installs = _installs(mod, "origin", plist_path=str(tmp_path / "slimbrave.json"))
+    frame = _render(mod, monkeypatch, tmp_path, 120, 100, keys=[ord("c")],
+                    installations=installs)[-1]
+    assert any("[-] Disable Brave Rewards (built into Origin)" in row for row in frame)
+    assert any("[-] Disable Wayback Machine (built into Origin)" in row for row in frame)
+    header = next(row for row in frame if "Brave Features" in row)
+    assert "0/3 on" in header
+    assert not any("[ ] Disable Brave Rewards" in row for row in frame)
+
+
+def test_tui_off_origin_draws_the_rows_as_before(mod, monkeypatch, tmp_path):
+    frame = _render(mod, monkeypatch, tmp_path, 120, 100, keys=[ord("c")])[-1]
+    assert any("[ ] Disable Brave Rewards" in row for row in frame)
+    assert not any("built into Origin" in row for row in frame)
+    header = next(row for row in frame if "Brave Features" in row)
+    assert "0/15 on" in header
+
+
+def test_regular_brave_never_started_beside_origin_keeps_the_machine_mixed(mod, monkeypatch):
+    # deb brave-browser and deb brave-origin, regular Brave never launched:
+    # no Brave-Browser profile and no `brave` on PATH, yet the package is
+    # there and reads the same file, so nothing may go inert.
+    _fake_linux_box(mod, monkeypatch,
+                    files={"/opt/brave.com/brave/brave-browser", "/opt/brave-origin-bin/brave"},
+                    on_path={"brave-browser", "brave-origin"})
+    info = mod.detect_brave()
+    assert [i["channel"] for i in info["installations"]] == ["stable", "origin"]
+    assert info["method"] == "deb/rpm: Stable, Origin"
+    assert info["installations"][0]["app_path"] == "/opt/brave.com/brave/brave-browser"
+    assert mod.is_origin_only(info["installations"]) is False
+    assert info["notes"] == [mod.ORIGIN_NOTE_BESIDE]
+    assert _inert_keys(mod, mod.build_rows(info["installations"])) == set()
+
+
+def test_flatpak_never_started_beside_origin_keeps_the_machine_mixed(mod, monkeypatch):
+    _fake_linux_box(mod, monkeypatch,
+                    files={"/opt/brave-origin-bin/brave"},
+                    dirs={"/var/lib/flatpak/app/com.brave.Browser"},
+                    on_path={"brave-origin"})
+    info = mod.detect_brave()
+    assert [i["channel"] for i in info["installations"]] == ["stable", "origin"]
+    assert info["method"].endswith(": Stable, Origin")
+    assert mod.is_origin_only(info["installations"]) is False
+    assert _inert_keys(mod, mod.build_rows(info["installations"])) == set()
+
+
+def test_regular_brave_alone_is_detected_exactly_as_before(mod, monkeypatch):
+    # The never-started deb used to reach the stable fallback; it now gets
+    # the same record from the loop. Either way: one stable record, its
+    # binary as app_path, the plain method string, no note.
+    _fake_linux_box(mod, monkeypatch,
+                    files={"/opt/brave.com/brave/brave-browser"}, on_path={"brave-browser"})
+    info = mod.detect_brave()
+    assert info["method"] == "deb/rpm"
+    assert [(i["channel"], i["label"], i["app_path"]) for i in info["installations"]] == [
+        ("stable", "Stable", "/opt/brave.com/brave/brave-browser")]
+    assert info["notes"] == []
+    # A launched Flatpak alone still yields its one synthetic record only.
+    _fake_linux_box(mod, monkeypatch,
+                    dirs={"/var/lib/flatpak/app/com.brave.Browser",
+                          "/home/u/.var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser"})
+    info = mod.detect_brave()
+    assert info["method"] == "flatpak"
+    assert [i["label"] for i in info["installations"]] == ["Stable (Flatpak)"]
+    assert info["notes"] == []
+
+
+def test_channels_origin_cannot_narrow_a_mixed_machine_into_origin_only(mod, monkeypatch):
+    _fake_linux_box(mod, monkeypatch,
+                    files={"/opt/brave-bin/brave", "/opt/brave-origin-bin/brave"},
+                    dirs={"/home/u/.config/BraveSoftware/Brave-Browser", ORIGIN_PROFILE},
+                    on_path={"brave", "brave-origin"})
+    info = mod.detect_brave()
+    filtered = [i for i in info["installations"] if i["channel"] == "origin"]
+    assert filtered and all(i["origin_only"] is False for i in info["installations"])
+    assert mod.is_origin_only(filtered) is False
+    assert _inert_keys(mod, mod.build_rows(filtered)) == set()
+    # and on a real Origin-only machine the stamp says so
+    _fake_linux_box(mod, monkeypatch, files={"/opt/brave-origin-bin/brave"}, on_path={"brave-origin"})
+    info = mod.detect_brave()
+    assert all(i["origin_only"] is True for i in info["installations"])
+
+
+def test_origin_beta_launcher_alone_counts_as_found(mod, monkeypatch):
+    _fake_linux_box(mod, monkeypatch, on_path={"brave-origin-beta"})
+    info = mod.detect_brave()
+    assert info["found"] is True
+    assert info["method"] == "unknown (Brave Origin)"
+    assert [i["channel"] for i in info["installations"]] == ["origin-beta"]
+    assert info["warnings"] == []
+    assert info["notes"] == [mod.ORIGIN_NOTE_ONLY]
+
+
+def test_cli_export_says_which_dead_keys_it_left_out(tmp_path, capsys):
+    mod = LINUX_MOD
+    plist = tmp_path / "slimbrave.json"
+    plist.write_text(json.dumps({"BraveRewardsDisabled": True, "BraveP3AEnabled": False}),
+                     encoding="utf-8")
+    installs = _installs(mod, "origin", plist_path=str(plist))
+    out = tmp_path / "backup.json"
+    assert mod.cli_export(str(out), installs) == 0
+    assert "1 key built into Brave Origin left out of the export" in capsys.readouterr().err
+    assert json.loads(out.read_text(encoding="utf-8"))["Features"] == {"BraveP3AEnabled": False}
+
+
+def test_a_long_inert_row_keeps_its_suffix_at_80_columns(mod, monkeypatch, tmp_path):
+    installs = _installs(mod, "origin", plist_path=str(tmp_path / "slimbrave.json"))
+    frame = _render(mod, monkeypatch, tmp_path, 120, 80, keys=[ord("c")],
+                    installations=installs)[-1]
+    row = next(r for r in frame if "Disable Local AI" in r)
+    assert row.rstrip().endswith("... (built into Origin) |")
+    assert row[78] == "|"
+
+
+# ---------------------------------------------------------------------------
 # SlimBrave.ps1 <-> Python feature-table parity
 # ---------------------------------------------------------------------------
 
@@ -3028,10 +3470,13 @@ class _GridScreen:
         pass
 
 
-def _render(mod, monkeypatch, tmp_path, lines, cols, keys=()):
+def _render(mod, monkeypatch, tmp_path, lines, cols, keys=(), brave_info=None,
+            installations=None, override=True):
+    """Drive main() on a grid screen. `override` mirrors --policy-file, the
+    hermetic default; False runs the detected-installations path, with
+    detect_brave() answering `brave_info` (whose installations default to
+    the same tmp_path record) so nothing under /etc is ever read."""
     monkeypatch.setattr(mod, "curses", _FakeCurses())
-    monkeypatch.setattr(mod, "detect_brave",
-                        lambda: {"installations": [], "method": "", "warnings": []})
     # locale-independent frames
     monkeypatch.setattr(mod, "_box_glyphs", mod.BOX_ASCII)
     monkeypatch.setattr(mod, "_disclosure_glyphs", mod.DISCLOSURE_ASCII)
@@ -3039,8 +3484,11 @@ def _render(mod, monkeypatch, tmp_path, lines, cols, keys=()):
             "user_data_dir": "BraveSoftware/Brave-Browser"}
     inst = mod._make_installation(chan, plist_path=str(tmp_path / "slimbrave.json"),
                                   prefs_path=str(tmp_path / "Preferences"))
+    info = dict(brave_info or {"method": "", "warnings": []})
+    info.setdefault("installations", installations or [inst])
+    monkeypatch.setattr(mod, "detect_brave", lambda: info)
     screen = _GridScreen(lines, cols, keys)
-    mod.main(screen, override_installations=[inst])
+    mod.main(screen, override_installations=(installations or [inst]) if override else None)
     return screen.frames
 
 
@@ -3060,6 +3508,35 @@ def test_draw_frames_the_list_the_pane_and_the_buttons_at_80x24(mod, monkeypatch
     assert frame[lay["status_y"]].strip() == ""
     # every frame stays inside the usable width: the last column is untouched
     assert all(row[79] == " " for row in frame)
+
+
+@pytest.mark.parametrize("which", ["ORIGIN_NOTE_ONLY", "ORIGIN_NOTE_BESIDE"])
+def test_tui_status_line_shows_the_shipped_origin_notes(mod, monkeypatch, tmp_path, which):
+    note = getattr(mod, which)
+    frame = _render(mod, monkeypatch, tmp_path, 24, 80, override=False, brave_info={
+        "method": "arch (Brave Origin)", "warnings": [], "notes": [note]})[-1]
+    lay = mod.layout(24, 80, True)
+    assert frame[lay["status_y"]].strip() == note      # fits an 80-column line whole
+    assert "[arch (Brave Origin)]" in frame[0]
+
+
+def test_tui_policy_file_override_hides_the_origin_note(mod, monkeypatch, tmp_path):
+    # The override record keeps every row live, so the note would describe
+    # a list that is not on screen.
+    frame = _render(mod, monkeypatch, tmp_path, 24, 80, brave_info={
+        "installations": [], "method": "", "warnings": [],
+        "notes": [mod.ORIGIN_NOTE_ONLY]})[-1]
+    lay = mod.layout(24, 80, True)
+    assert frame[lay["status_y"]].strip() == ""
+
+
+def test_tui_warning_outranks_the_origin_note(mod, monkeypatch, tmp_path):
+    frame = _render(mod, monkeypatch, tmp_path, 24, 80, brave_info={
+        "installations": [], "method": "",
+        "warnings": ["Snap confinement may prevent policies from taking effect."],
+        "notes": ["Brave Origin found: policies apply."]})[-1]
+    lay = mod.layout(24, 80, True)
+    assert frame[lay["status_y"]].strip().startswith("Snap confinement")
 
 
 def test_draw_keeps_the_old_stack_under_nine_rows(mod, monkeypatch, tmp_path):
