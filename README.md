@@ -565,6 +565,7 @@ Set-ExecutionPolicy -ExecutionPolicy Undefined   -Scope CurrentUser   # undo
 - [x] Collapsible, searchable TUI
 - [x] One-click presets in the Windows GUI
 - [x] Keyboard access in the Windows GUI
+- [x] Brave Origin on Linux: detected as its own channel, its removed features shown inert
 
 ---
 
