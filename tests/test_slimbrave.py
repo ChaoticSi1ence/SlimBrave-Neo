@@ -652,6 +652,12 @@ _PROBED_ROOTS = ("/opt/", "/snap/", "/var/lib/flatpak/", "/home/u/")
 ORIGIN_PROFILE = "/home/u/.config/BraveSoftware/Brave-Origin"
 
 
+def _slash(path):
+    """os.path.join spells these with backslashes on the Windows runner; the
+    probes and assertions here are written with forward slashes."""
+    return str(path).replace("\\", "/")
+
+
 def _fake_linux_box(mod, monkeypatch, files=(), dirs=(), on_path=()):
     """Answer the detector's probes from a fixed picture of one machine.
 
@@ -662,10 +668,10 @@ def _fake_linux_box(mod, monkeypatch, files=(), dirs=(), on_path=()):
     real_isfile, real_isdir = os.path.isfile, os.path.isdir
     monkeypatch.setattr(
         mod.os.path, "isfile",
-        lambda p: p in files if str(p).startswith(_PROBED_ROOTS) else real_isfile(p))
+        lambda p: _slash(p) in files if _slash(p).startswith(_PROBED_ROOTS) else real_isfile(p))
     monkeypatch.setattr(
         mod.os.path, "isdir",
-        lambda p: p in dirs if str(p).startswith(_PROBED_ROOTS) else real_isdir(p))
+        lambda p: _slash(p) in dirs if _slash(p).startswith(_PROBED_ROOTS) else real_isdir(p))
     monkeypatch.setattr(mod.shutil, "which",
                         lambda n: f"/usr/bin/{n}" if n in on_path else None)
     monkeypatch.setattr(mod, "_user_home_for_brave", lambda: "/home/u")
@@ -697,7 +703,7 @@ def test_detect_origin_beta_and_nightly_by_profile_or_launcher(mod, monkeypatch)
     assert info["method"] == "unknown (Brave Origin): Origin Beta, Origin Nightly"
     assert [i["channel"] for i in info["installations"]] == ["origin-beta", "origin-nightly"]
     by_channel = {i["channel"]: i for i in info["installations"]}
-    assert by_channel["origin-beta"]["prefs_path"] == (
+    assert _slash(by_channel["origin-beta"]["prefs_path"]) == (
         "/home/u/.config/BraveSoftware/Brave-Origin-Beta/Default/Preferences")
     assert by_channel["origin-nightly"]["process_name"] == "brave-origin-nightly"
     assert by_channel["origin-nightly"]["app_path"] == ""
@@ -715,7 +721,7 @@ def test_detect_arch_origin_alone(mod, monkeypatch):
     inst = info["installations"][0]
     assert inst["app_path"] == "/opt/brave-origin-bin/brave"
     assert inst["plist_path"] == mod.POLICY_FILE       # the one shared policy file
-    assert inst["prefs_path"] == f"{ORIGIN_PROFILE}/Default/Preferences"
+    assert _slash(inst["prefs_path"]) == f"{ORIGIN_PROFILE}/Default/Preferences"
     assert inst["process_name"] == "brave-origin"
     assert info["warnings"] == []
     assert len(info["notes"]) == 1
@@ -746,7 +752,7 @@ def test_detect_origin_beside_regular_brave(mod, monkeypatch):
     assert set(by_channel) == {"stable", "origin"}
     assert by_channel["stable"]["app_path"] == "/opt/brave-bin/brave"
     assert by_channel["origin"]["app_path"] == "/opt/brave-origin-bin/brave"
-    assert by_channel["origin"]["prefs_path"] == f"{ORIGIN_PROFILE}/Default/Preferences"
+    assert _slash(by_channel["origin"]["prefs_path"]) == f"{ORIGIN_PROFILE}/Default/Preferences"
     assert info["warnings"] == []
     assert info["notes"]
 
