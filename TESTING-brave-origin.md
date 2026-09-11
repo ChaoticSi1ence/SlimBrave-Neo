@@ -130,7 +130,7 @@ It carries the same code and runs on Linux.
 
 ### CI
 
-- [ ] PR #25 checks green: pytest + ruff on the three runners, the TUI smoke test on Ubuntu and macOS, PSScriptAnalyzer.
+- [x] PR #25 checks green: pytest + ruff on the three runners, the TUI smoke test on Ubuntu and macOS, PSScriptAnalyzer. Green at `b50aa53` (run 34628456063); the first run had failed on Windows only because the test fakes compared path separators, fixed in that commit.
 
 ## When everything above is ticked
 
@@ -156,7 +156,7 @@ State on 2026-09-11, for whoever picks this up next, human or agent.
 
 **What is not done**
 - Every unticked box above. None has been run on a deb, rpm, beta/nightly or mixed machine; those are inferences from the artifacts and source, not observations.
-- CI for PR #25 has not been looked at since the push.
+- CI for PR #25 is green as of `b50aa53`; the one earlier failure was the Windows runner and a path-separator slip in the test fakes, not the scripts.
 
 **Gotchas that cost time**
 - `--headless=new --dump-dom chrome://policy` hangs on this Origin build. To read policies headlessly, drive `--remote-debugging-pipe` with a small CDP script and walk the shadow DOM; `document.body.innerText` alone shows nothing.
