@@ -644,7 +644,7 @@ def test_detect_persist_mode_is_off_without_macos():
 # come from brave-core v1.94.121 (chrome_paths_linux.cc for the profile,
 # installer/linux/common/brave-origin/chromium-browser.info for the deb/rpm
 # layout) and from the AUR package on the maintainer's machine; the policy
-# directory was proven end to end there. AUDIT.md, 2026-09-11, has the
+# directory was proven end to end there. AUDIT.md, Brave Origin, has the
 # receipts.
 # ---------------------------------------------------------------------------
 

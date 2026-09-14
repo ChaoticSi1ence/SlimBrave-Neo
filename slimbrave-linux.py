@@ -85,7 +85,7 @@ CHANNEL_IDS = [c["id"] for c in LINUX_CHANNELS]
 # brave-core's browser/policy/brave_simple_policy_map.h sits under a
 # BUILDFLAG whose .gni definition carries `&& !is_brave_origin_branded`
 # (v1.94.121; the receipts, including a check on the shipped binary, are in
-# AUDIT.md, 2026-09-11). On a machine whose only Brave is Origin these rows
+# AUDIT.md, Brave Origin). On a machine whose only Brave is Origin these rows
 # are shown inert: the feature is not in the binary, so there is nothing
 # for a policy to switch. P3A and the stats ping are not listed - their
 # entries are unguarded, Origin merely defaults them off, and a managed
@@ -300,7 +300,7 @@ def detect_brave():
     # launcher is brave-origin and the binary is brave, mirroring the regular
     # /opt/brave.com/brave layout. Origin reads /etc/brave/policies like
     # regular Brave: brave_main_delegate.cc overrides DIR_POLICY_FILES for
-    # every POSIX build with no branding guard (AUDIT.md, 2026-09-11).
+    # every POSIX build with no branding guard (AUDIT.md, Brave Origin).
     origin_method, origin_path = "", ""
     if os.path.isfile("/opt/brave-origin-bin/brave"):
         origin_method, origin_path = "arch", "/opt/brave-origin-bin/brave"
