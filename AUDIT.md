@@ -1,10 +1,23 @@
 # SlimBrave Neo — Policy Audit and Plan
 
-The master record for the project: what the tool does, every policy key it
-writes and why that key is trusted, what is deliberately left out, how each
-platform is reached, what Brave Origin changes, what comes next, and how to
-re-verify all of it. Rows state what is true of the shipping Brave at the pins
-below; git history holds the when.
+The master record for the project, written for the AI that runs the next
+audit pass (humans read the README). Every policy key the tool writes and the
+evidence it is trusted on, what is deliberately left out and why, how each
+platform is reached, what Brave Origin changes, what comes next, and the
+procedure and commands to re-verify all of it. Rows state what is true of the
+shipping Brave at the pins below; git history holds the when.
+
+**How to read a row.** `Status` is the verdict: ✅ dispatched and effective ·
+⚠️ dispatched but inert or platform-limited, caveat in the label · ⛔
+deprecated upstream, not exposed · ❌ does not exist · 💀 dead: YAML present,
+handler gone · 🕓 not yet in a shipping Brave, watch. `Min` is the Chromium
+milestone from `supported_on`, never a Brave version unless it says
+branch-probed. `Dispatch` names what proves the browser reads the key: a
+`brave_simple_policy_map.h` entry with its buildflag guard, or the Chromium
+handler list (`factory` = `configuration_policy_handler_list_factory.cc` plus
+a `pref_mapping/<Key>.json` that is not `Policy was removed`). **restart** =
+`dynamic_refresh: false`; **browser-wide** = `per_profile: false`. When a row
+and the source disagree, the source wins and the row is wrong: fix the row.
 
 ## What the project does
 
@@ -65,97 +78,99 @@ restart to pick the value up; **browser-wide** = `per_profile: false`.
 
 ## Brave-specific keys
 
-| Key | Min milestone | Type | Notes |
-|---|---|---|---|
-| BraveP3AEnabled | cr138 | bool | unset = enabled; restart; browser-wide |
-| BraveStatsPingEnabled | cr138 | bool | unset = enabled; restart; browser-wide |
-| BraveGlobalPrivacyControlEnabled | cr142 | bool | dynamic refresh |
-| BraveDeAmpEnabled | cr140 | bool | dynamic refresh |
-| BraveDebouncingEnabled | cr140 | bool | dynamic refresh |
-| BraveTrackingQueryParametersFilteringEnabled | cr142 | bool | only effective while Shields is enabled |
-| BraveReduceLanguageEnabled | cr140 | bool | dynamic refresh |
-| BraveRewardsDisabled | cr105 | bool | true = disable; restart |
-| BraveWalletDisabled | cr106 | bool | also disables web3 and decentralized DNS; restart |
-| BraveVPNDisabled | cr112 | bool | **Windows, macOS, Android, iOS only.** `enable_brave_vpn = enable_brave_vpn_v1 \|\| enable_brave_vpn_v2`, both `(is_win \|\| is_android \|\| is_mac \|\| is_ios) && !is_brave_origin_branded` — no `is_linux`, so the `brave_simple_policy_map.h` entry is compiled out of Linux builds and the key is a silent no-op there while `brave://policy` still shows it applied. The Linux row is labelled rather than removed (`enable_brave_vpn_v2_apps` already names `is_linux`); `slimbrave-mac.py` labels it plainly, cosmetic. Restart |
-| BraveAIChatEnabled | cr121 | bool | false = disable Leo; does not cover on-device models (see BraveLocalAIEnabled); restart |
-| BraveLocalAIEnabled | cr149 — **Brave 1.94**, branch-probed | bool | false = skip registering the on-device model component (EmbeddingGemma, `ejhejjmaoaohpghnblcdcjilndkangfe`), delete its directory, stop history vector-indexing. Separate buildflag (`ENABLE_LOCAL_AI`) and prefs from AI Chat. Restart; browser-wide. Deliberately in no preset |
-| BraveShieldsDisabledForUrls | cr107 | list | scheme-wide patterns, see Cross-cutting; restart; browser-wide |
-| BraveShieldsEnabledForUrls | cr107 | list | counterpart of the row above; restart; browser-wide |
-| BraveNewsDisabled | cr138 | bool | restart |
-| BraveTalkDisabled | cr138 | bool | restart |
-| BravePlaylistEnabled | cr139 | bool | restart |
-| BraveWebDiscoveryEnabled | cr138 | bool | unset = **disabled** by default; restart |
-| BraveSpeedreaderEnabled | cr138 | bool | desktop only; restart |
-| BraveWaybackMachineEnabled | cr138 | bool | desktop only; restart |
-| TorDisabled | cr78 (Win) / cr93 (mac, Linux) | bool | desktop only; restart; browser-wide |
-| EmailAliasesEnabled | cr147 — **Brave 1.92**, branch-probed | bool | **key live, feature off.** Dispatched (`brave_simple_policy_map.h` under `ENABLE_EMAIL_ALIASES`, desktop only) and the pref is written, but `components/email_aliases/features.cc` has `kEmailAliases` `FEATURE_DISABLED_BY_DEFAULT` on 1.92.x through 1.96.x and master, and `IsEmailAliasesEnabledForProfile()` requires feature **and** pref — no observable effect until Brave flips the feature (default or Griffin seed). `false` stays as a pre-emptive guard; the `ChromeVariations` rows are what would stop the flip. Restart |
-| DefaultBraveAdblockSetting | cr142 | int enum | 1 = allow ads, 2 = block |
-| DefaultBraveFingerprintingV2Setting | cr141 | int enum | 1 = off, 3 = standard (no value 2) |
-| DefaultBraveHttpsUpgradeSetting | cr142 | int enum | 1 = allow HTTP, 2 = strict, 3 = standard |
-| DefaultBraveReferrersSetting | cr142 | int enum | 1 = permissive, 2 = cap to strict origin; both exposed as mutually exclusive rows (issue #9); never put 1 in a preset |
-| DefaultBraveRemember1PStorageSetting | cr142 | int enum | 1 = remember, 2 = forget on close |
+| Key | Status | Min | Type | Dispatch | Notes |
+|---|---|---|---|---|---|
+| BraveP3AEnabled | ✅ | cr138 | bool | map, unguarded | unset = enabled; restart; browser-wide |
+| BraveStatsPingEnabled | ✅ | cr138 | bool | map, unguarded | unset = enabled; restart; browser-wide |
+| BraveGlobalPrivacyControlEnabled | ✅ | cr142 | bool | map, unguarded | dynamic refresh |
+| BraveDeAmpEnabled | ✅ | cr140 | bool | map, unguarded | dynamic refresh |
+| BraveDebouncingEnabled | ✅ | cr140 | bool | map, unguarded | dynamic refresh |
+| BraveTrackingQueryParametersFilteringEnabled | ✅ | cr142 | bool | map, unguarded | only effective while Shields is enabled |
+| BraveReduceLanguageEnabled | ✅ | cr140 | bool | map, unguarded | dynamic refresh |
+| BraveRewardsDisabled | ✅ | cr105 | bool | map, `ENABLE_BRAVE_REWARDS` | true = disable; restart |
+| BraveWalletDisabled | ✅ | cr106 | bool | map, `ENABLE_BRAVE_WALLET` | also disables web3 and decentralized DNS; restart |
+| BraveVPNDisabled | ⚠️ no-op on Linux | cr112 | bool | map, `ENABLE_BRAVE_VPN` | **Windows, macOS, Android, iOS only.** `enable_brave_vpn = enable_brave_vpn_v1 \|\| enable_brave_vpn_v2`, both `(is_win \|\| is_android \|\| is_mac \|\| is_ios) && !is_brave_origin_branded` — no `is_linux`, so the `brave_simple_policy_map.h` entry is compiled out of Linux builds and the key is a silent no-op there while `brave://policy` still shows it applied. The Linux row is labelled rather than removed (`enable_brave_vpn_v2_apps` already names `is_linux`); `slimbrave-mac.py` labels it plainly, cosmetic. Restart |
+| BraveAIChatEnabled | ✅ | cr121 | bool | map, `ENABLE_AI_CHAT` | false = disable Leo; does not cover on-device models (see BraveLocalAIEnabled); restart |
+| BraveLocalAIEnabled | ✅ | cr149 — **Brave 1.94**, branch-probed | bool | map, `ENABLE_LOCAL_AI` | false = skip registering the on-device model component (EmbeddingGemma, `ejhejjmaoaohpghnblcdcjilndkangfe`), delete its directory, stop history vector-indexing. Separate buildflag (`ENABLE_LOCAL_AI`) and prefs from AI Chat. Restart; browser-wide. Deliberately in no preset |
+| BraveShieldsDisabledForUrls | ✅ | cr107 | list | map, unguarded | scheme-wide patterns, see Cross-cutting; restart; browser-wide |
+| BraveShieldsEnabledForUrls | ✅ | cr107 | list | map, unguarded | counterpart of the row above; restart; browser-wide |
+| BraveNewsDisabled | ✅ | cr138 | bool | map, `ENABLE_BRAVE_NEWS` | restart |
+| BraveTalkDisabled | ✅ | cr138 | bool | map, `ENABLE_BRAVE_TALK` | restart |
+| BravePlaylistEnabled | ✅ | cr139 | bool | map, `ENABLE_PLAYLIST` | restart |
+| BraveWebDiscoveryEnabled | ✅ | cr138 | bool | map, `ENABLE_WEB_DISCOVERY` | unset = **disabled** by default; restart |
+| BraveSpeedreaderEnabled | ✅ | cr138 | bool | map, `ENABLE_SPEEDREADER` | desktop only; restart |
+| BraveWaybackMachineEnabled | ✅ | cr138 | bool | map, `ENABLE_BRAVE_WAYBACK_MACHINE` | desktop only; restart |
+| TorDisabled | ✅ | cr78 (Win) / cr93 (mac, Linux) | bool | map, `ENABLE_TOR` | desktop only; restart; browser-wide |
+| EmailAliasesEnabled | ⚠️ feature off | cr147 — **Brave 1.92**, branch-probed | bool | map, `ENABLE_EMAIL_ALIASES` | **key live, feature off.** Dispatched (`brave_simple_policy_map.h` under `ENABLE_EMAIL_ALIASES`, desktop only) and the pref is written, but `components/email_aliases/features.cc` has `kEmailAliases` `FEATURE_DISABLED_BY_DEFAULT` on 1.92.x through 1.96.x and master, and `IsEmailAliasesEnabledForProfile()` requires feature **and** pref — no observable effect until Brave flips the feature (default or Griffin seed). `false` stays as a pre-emptive guard; the `ChromeVariations` rows are what would stop the flip. Restart |
+| DefaultBraveAdblockSetting | ✅ | cr142 | int enum | content-settings policy provider (brave-core patch) | 1 = allow ads, 2 = block |
+| DefaultBraveFingerprintingV2Setting | ✅ | cr141 | int enum | same | 1 = off, 3 = standard (no value 2) |
+| DefaultBraveHttpsUpgradeSetting | ✅ | cr142 | int enum | same | 1 = allow HTTP, 2 = strict, 3 = standard |
+| DefaultBraveReferrersSetting | ✅ | cr142 | int enum | same | 1 = permissive, 2 = cap to strict origin; both exposed as mutually exclusive rows (issue #9); never put 1 in a preset |
+| DefaultBraveRemember1PStorageSetting | ✅ | cr142 | int enum | same | 1 = remember, 2 = forget on close |
 
 Brave keys that exist and are **not exposed**:
 
-| Key | Why not |
-|---|---|
-| BraveSyncUrl | a custom sync-server URL, not a debloat toggle; self-hosters write it by hand |
-| PsstEnabled | On `1.95.x`, `1.96.x` and master (commit `13a8fd8cc`), absent from `v1.94.121`: YAML, a `brave_simple_policy_map.h` entry under `ENABLE_PSST` (`enable_psst = !is_android && !is_ios && !is_brave_origin_branded`) and a Brave Origin default of `false`, `user_settable=false`. Still a no-op: `kEnablePsst` is `FEATURE_DISABLED_BY_DEFAULT` on every ref and both the tab observer and the component installer bail on it; `chrome://flags#enable-psst` turns it on locally. PSST downloads per-site scripts, injects them into logged-in origins to detect sign-in, then drives the account through settings URLs flipping switches. **Trigger:** `components/psst/core/common/features.cc` flipping on a shipping branch — then add as a checkbox writing 0, label Brave 1.95+ (branch-probed), restart note |
-| IPFSEnabled | `deprecated: true`; the feature left Brave in 1.69.153 (Aug 2024), only a `DEPRECATE_IPFS` tombstone remains. Has bounced in and out of this project before — **do not re-add**; the YAML is the tiebreaker |
+| Key | Status | Why not |
+|---|---|---|
+| BraveSyncUrl | ✅ exists, unexposed | a custom sync-server URL, not a debloat toggle; self-hosters write it by hand |
+| PsstEnabled | 🕓 1.95.x+, feature off | On `1.95.x`, `1.96.x` and master (commit `13a8fd8cc`), absent from `v1.94.121`: YAML, a `brave_simple_policy_map.h` entry under `ENABLE_PSST` (`enable_psst = !is_android && !is_ios && !is_brave_origin_branded`) and a Brave Origin default of `false`, `user_settable=false`. Still a no-op: `kEnablePsst` is `FEATURE_DISABLED_BY_DEFAULT` on every ref and both the tab observer and the component installer bail on it; `chrome://flags#enable-psst` turns it on locally. PSST downloads per-site scripts, injects them into logged-in origins to detect sign-in, then drives the account through settings URLs flipping switches. **Trigger:** `components/psst/core/common/features.cc` flipping on a shipping branch — then add as a checkbox writing 0, label Brave 1.95+ (branch-probed), restart note |
+| IPFSEnabled | ⛔ | `deprecated: true`; the feature left Brave in 1.69.153 (Aug 2024), only a `DEPRECATE_IPFS` tombstone remains. Has bounced in and out of this project before — **do not re-add**; the YAML is the tiebreaker |
 
 ## Chromium-inherited keys
 
-| Key | Min | Type | Written | Notes |
-|---|---|---|---|---|
-| MetricsReportingEnabled | — | bool | false | restart. Chromium marks it `sensitive: true`, which makes `FilterSensitivePolicies` drop it from a platform source on a Windows/Mac machine that is not domain-joined or MDM-managed; brave-core patches `sensitive: true` out of the YAML (one of its two policy-definition patches, the other being DnsOverHttpsMode), which is the only reason an HKLM write works on a home PC. Brave defaults the pref to false and registers no UMA/UKM providers, so in practice the key governs crash reporting |
-| SafeBrowsingProtectionLevel | — | int enum | 0 (no protection) | 0/1/2 valid. Brave proxies Safe Browsing through its own hosts — `safebrowsing_api_endpoint = "safebrowsing.brave.com"` in `components/safebrowsing/BUILD.gn`, and `static_redirect_helper.cc` rewrites `safebrowsing.googleapis.com` → `safebrowsing.brave.com`, `sb-ssl.google.com` → `sb-ssl.brave.com`, the `safebrowsing.google.com` crx list → `safebrowsing2.brave.com` — so Google never sees a lookup even with Safe Browsing on. Value 2 behaves as 1: the `safe_browsing_prefs.cc` patch makes `IsEnhancedProtectionEnabled()` false before it reads the pref. Turning it off buys almost no privacy and costs the phishing/malware interstitials; in no preset |
-| SafeBrowsingExtendedReportingEnabled | — | bool | false | |
-| UrlKeyedAnonymizedDataCollectionEnabled | — | bool | false | |
-| AutofillAddressEnabled | — | bool | false | |
-| AutofillCreditCardEnabled | — | bool | false | |
-| PasswordManagerEnabled | — | bool | false | |
-| BrowserSignin | — | int enum | 0 (disable) | restart |
-| WebRtcIPHandling | — | string enum | disable_non_proxied_udp | |
-| QuicAllowed | — | bool | false | restart |
-| BlockThirdPartyCookies | — | bool | true | |
-| ForceGoogleSafeSearch | — | bool | true | |
-| IncognitoModeAvailability | — | int enum | 1 or 2 | 0 = enabled, 1 = disabled, 2 = forced, as two mutually exclusive rows; restart. In Brave `tor::IsIncognitoDisabledOrForced` treats 1 and 2 alike, so either row also removes Tor windows |
-| SyncDisabled | — | bool | true | |
-| BackgroundModeEnabled | cr19 | bool | false | **Windows and Linux only** (`chrome.win:19-`, `chrome.linux:19-`); no macOS support in Chromium. `slimbrave-mac.py` also runs on Linux, so it gates the row on `sys.platform.startswith("linux")` at index 0 of Performance & Bloat; on macOS the key is dropped and the import message names it as not applicable |
-| ShoppingListEnabled | — | bool | false | |
-| AlwaysOpenPdfExternally | — | bool | true | |
-| TranslateEnabled | — | bool | false | |
-| SpellcheckEnabled | — | bool | false | desktop only; mutually exclusive with SpellCheckServiceEnabled |
-| SearchSuggestEnabled | — | bool | false | |
-| PrintingEnabled | — | bool | false | |
-| DefaultBrowserSettingEnabled | — | bool | false | desktop only |
-| DeveloperToolsAvailability | — | int enum | 2 (disallowed) | does **not** cover the CDP port — see RemoteDebuggingAllowed |
-| DnsOverHttpsMode | — | string enum | off / automatic / secure | Stock Chromium forces DoH **off** whenever this key is unmanaged on a machine that is domain-joined or carries *any* machine-level policy (`StubResolverConfigReader::ShouldDisableDohForManaged`) — which every SlimBrave machine satisfies the moment it writes its first key. brave-core `chromium_src/chrome/browser/net/stub_resolver_config_reader.cc` overrides that to false, so **Not managed** keeps Brave's own automatic DoH; the companion YAML patch dropping `default_for_enterprise_users: 'off'` is metadata that only reaches ChromeOS code. On Windows with Brave VPN connected, Brave skips its forced-secure-DoH override when this key is managed and shows a policy-warning dialog |
-| DnsOverHttpsTemplates | — | string | URL template | **required** for `secure` and `custom`, optional for `automatic`, ignored for `off`. `secure` with an empty template destroys name resolution — the templates pref is blanked, `CanUseSecureDnsTransactions()` is false, and the system-resolver fallback is gated on `secure_dns_mode != kSecure` (crbug.com/1326526). All three scripts refuse that combination |
-| PasswordLeakDetectionEnabled | cr79 | bool | false | stops the online breach-list credential check |
-| NetworkPredictionOptions | cr38 | int enum | 2 (never predict) | 0 = always, 2 = never (1 deprecated in-source) |
-| PaymentMethodQueryEnabled | cr80 | bool | false | sites' `canMakePayment` always answers "none saved" |
-| AlternateErrorPagesEnabled | cr8 | bool | false | belt and braces — Brave ships the web-service error page off |
-| DefaultNotificationsSetting | cr10 | int enum | 1, 2 or 3, user-selected; key omitted when Not managed | full legal enum **1 = allow, 2 = block, 3 = ask**, all exposed as a choice row |
-| DefaultGeolocationSetting | cr10 | int enum | 1, 2 or 3; omitted when Not managed | full legal enum 1 = allow, 2 = block, 3 = ask; choice row |
-| DefaultSensorsSetting | cr88 | int enum | 1, 2 or 3; omitted when Not managed | motion/orientation sensors, a fingerprinting vector; full legal enum 1 = allow, 2 = block, 3 = ask. "3 = ask" holds in Brave only because brave-core force-enables `features::kSensorsAllowAskBlockPermissionModel` (`chromium_src/services/device/public/cpp/device_features.cc` at the tag; `rewrite/` + `patches/` on 1.96.x, same effect) — the dedicated `DefaultSensorsSettingPolicyHandler` rewrites 3 to **Allow** when that flag is off, and stock Chromium ships it off. Brave also re-registers SENSORS with default **Block** (brave/brave-browser#4789), so Not managed in Brave is block-by-default-but-user-changeable. A policy file taken to stock Chromium with 3 means Allow |
-| ExtensionInstallBlocklist | cr86 | list | `["*"]` | blocks all installs and disables already-installed extensions |
-| SafeSitesFilterBehavior | cr69 | int enum | 1 (filter) | not a local filter — sends every navigation URL, iframes included, to Google's Safe Search API (`tags: [filtering, google-sharing]`); disclosed in the tooltip and README because the same tool ships `SafeBrowsingProtectionLevel = 0` |
-| BrowserGuestModeEnabled | cr38 | bool | false | guest windows bypass profile restrictions |
-| HighEfficiencyModeEnabled | cr108 | bool | true | forces Memory Saver tab discarding on |
-| HardwareAccelerationModeEnabled | cr46 | bool | true / false | both states as a mutually exclusive pair (`Group = "hwaccel"`) because unset is not off: Chromium's default is on, absent means user-controlled, `false` means forced off. The off state is a troubleshooting lever for a faulty GPU driver, a VM or RDP session, or screen-sharing corruption, not a privacy posture — in no preset. Restart |
-| EnableMediaRouter | cr52 | bool | false | disables Cast and its LAN device discovery; restart. Brave's `media_router_feature.cc` gives the policy precedence over the `brave://settings/extensions` Media Router toggle; Tor windows are always off |
-| ChromeVariations | cr83 | int enum | 1 or 2 | 0 = all variations, 1 = critical fixes only, 2 = none. Closes the last remote-configuration channel: Brave fetches a Griffin seed from `variations.brave.com` that flips features in an installed browser. Maps to `variations::prefs::kVariationsRestrictionsByPolicy`; brave-core does not override the restriction path. Two mutually exclusive rows; value 2 also blocks the emergency killswitches, so it is in no preset |
-| SpellCheckServiceEnabled | cr22 | bool | false | removes the Google spelling web service while offline dictionaries keep working; upstream says it has no effect once `SpellcheckEnabled` is false, hence the mutual exclusion |
-| RemoteDebuggingAllowed | cr93 | bool | false | blocks `--remote-debugging-port` / `--remote-debugging-pipe`, the CDP cookie-theft vector `DeveloperToolsAvailability` leaves open; inherited unchanged by Brave. Breaks Puppeteer, Playwright and `brave://inspect`. Restart: `dynamic_refresh` flipped to true only in 154.0.8029.0 (`80ad0b9`), so the note holds through the cr153 line |
-| DNSInterceptionChecksEnabled | cr80 | bool | false | stops the three random 7–15 character hostname lookups at startup and on every network change, a per-launch beacon to the ISP or DoH resolver |
-| BasicAuthOverHttpEnabled | cr88 | bool | false | refuses HTTP Basic auth over cleartext; breaks legacy plain-HTTP appliance logins |
-| DefaultWebUsbGuardSetting | cr67 | int enum | 2 or 3; omitted when Not managed | **2 = block, 3 = ask — no value 1** in the schema, so the row offers Not managed / Ask / Block. Ships enabled in Brave. Breaks Ledger/Trezor web wallets and in-browser firmware flashers |
-| DefaultSerialGuardSetting | cr86 | int enum | 2 or 3; omitted when Not managed | 2 = block, 3 = ask, no 1; breaks in-browser microcontroller tooling |
-| DefaultWebHidGuardSetting | cr100 | int enum | 2 or 3; omitted when Not managed | 2 = block, 3 = ask, no 1; may break security keys and gamepad configurators that use WebHID rather than WebAuthn. The device-API set is USB+Serial+HID because WebBluetooth and File System Access are already feature-disabled in Brave |
-| DefaultLocalFontsSetting | cr103 | int enum | 2 or 3; omitted when Not managed | 2 = block, 3 = ask, no 1; `queryLocalFonts()` returns the installed font list, a top-tier fingerprint that Shields' farbling does not cover |
-| DefaultWindowManagementSetting | cr111 | int enum | 2 or 3; omitted when Not managed | 2 = block, 3 = ask, no 1; stops sites reading the multi-monitor topology; complementary to `kBraveBlockScreenFingerprinting`, which is about screen size |
-| BlockExternalExtensions | cr80 | bool | true | closes the silent install channel (registry `…\Extensions` keys, `external_extensions.json` drop-ins) that bundleware uses while user-chosen extensions keep working, unlike `ExtensionInstallBlocklist: ["*"]`; restart |
+Dispatch for every row is `factory` unless the Notes say otherwise.
+
+| Key | Status | Min | Type | Written | Notes |
+|---|---|---|---|---|---|
+| MetricsReportingEnabled | ✅ | — | bool | false | restart. Chromium marks it `sensitive: true`, which makes `FilterSensitivePolicies` drop it from a platform source on a Windows/Mac machine that is not domain-joined or MDM-managed; brave-core patches `sensitive: true` out of the YAML (one of its two policy-definition patches, the other being DnsOverHttpsMode), which is the only reason an HKLM write works on a home PC. Brave defaults the pref to false and registers no UMA/UKM providers, so in practice the key governs crash reporting |
+| SafeBrowsingProtectionLevel | ✅ | — | int enum | 0 (no protection) | 0/1/2 valid. Brave proxies Safe Browsing through its own hosts — `safebrowsing_api_endpoint = "safebrowsing.brave.com"` in `components/safebrowsing/BUILD.gn`, and `static_redirect_helper.cc` rewrites `safebrowsing.googleapis.com` → `safebrowsing.brave.com`, `sb-ssl.google.com` → `sb-ssl.brave.com`, the `safebrowsing.google.com` crx list → `safebrowsing2.brave.com` — so Google never sees a lookup even with Safe Browsing on. Value 2 behaves as 1: the `safe_browsing_prefs.cc` patch makes `IsEnhancedProtectionEnabled()` false before it reads the pref. Turning it off buys almost no privacy and costs the phishing/malware interstitials; in no preset |
+| SafeBrowsingExtendedReportingEnabled | ✅ | — | bool | false | |
+| UrlKeyedAnonymizedDataCollectionEnabled | ✅ | — | bool | false | |
+| AutofillAddressEnabled | ✅ | — | bool | false | |
+| AutofillCreditCardEnabled | ✅ | — | bool | false | |
+| PasswordManagerEnabled | ✅ | — | bool | false | |
+| BrowserSignin | ✅ | — | int enum | 0 (disable) | restart |
+| WebRtcIPHandling | ✅ | — | string enum | disable_non_proxied_udp | |
+| QuicAllowed | ✅ | — | bool | false | restart |
+| BlockThirdPartyCookies | ✅ | — | bool | true | |
+| ForceGoogleSafeSearch | ✅ | — | bool | true | |
+| IncognitoModeAvailability | ✅ | — | int enum | 1 or 2 | 0 = enabled, 1 = disabled, 2 = forced, as two mutually exclusive rows; restart. In Brave `tor::IsIncognitoDisabledOrForced` treats 1 and 2 alike, so either row also removes Tor windows |
+| SyncDisabled | ✅ | — | bool | true | |
+| BackgroundModeEnabled | ⚠️ Win/Linux only | cr19 | bool | false | **Windows and Linux only** (`chrome.win:19-`, `chrome.linux:19-`); no macOS support in Chromium. `slimbrave-mac.py` also runs on Linux, so it gates the row on `sys.platform.startswith("linux")` at index 0 of Performance & Bloat; on macOS the key is dropped and the import message names it as not applicable |
+| ShoppingListEnabled | ✅ | — | bool | false | |
+| AlwaysOpenPdfExternally | ✅ | — | bool | true | |
+| TranslateEnabled | ✅ | — | bool | false | |
+| SpellcheckEnabled | ✅ | — | bool | false | desktop only; mutually exclusive with SpellCheckServiceEnabled |
+| SearchSuggestEnabled | ✅ | — | bool | false | |
+| PrintingEnabled | ✅ | — | bool | false | |
+| DefaultBrowserSettingEnabled | ✅ | — | bool | false | desktop only |
+| DeveloperToolsAvailability | ✅ | — | int enum | 2 (disallowed) | does **not** cover the CDP port — see RemoteDebuggingAllowed |
+| DnsOverHttpsMode | ✅ | — | string enum | off / automatic / secure | Stock Chromium forces DoH **off** whenever this key is unmanaged on a machine that is domain-joined or carries *any* machine-level policy (`StubResolverConfigReader::ShouldDisableDohForManaged`) — which every SlimBrave machine satisfies the moment it writes its first key. brave-core `chromium_src/chrome/browser/net/stub_resolver_config_reader.cc` overrides that to false, so **Not managed** keeps Brave's own automatic DoH; the companion YAML patch dropping `default_for_enterprise_users: 'off'` is metadata that only reaches ChromeOS code. On Windows with Brave VPN connected, Brave skips its forced-secure-DoH override when this key is managed and shows a policy-warning dialog |
+| DnsOverHttpsTemplates | ✅ | — | string | URL template | **required** for `secure` and `custom`, optional for `automatic`, ignored for `off`. `secure` with an empty template destroys name resolution — the templates pref is blanked, `CanUseSecureDnsTransactions()` is false, and the system-resolver fallback is gated on `secure_dns_mode != kSecure` (crbug.com/1326526). All three scripts refuse that combination |
+| PasswordLeakDetectionEnabled | ✅ | cr79 | bool | false | stops the online breach-list credential check |
+| NetworkPredictionOptions | ✅ | cr38 | int enum | 2 (never predict) | 0 = always, 2 = never (1 deprecated in-source) |
+| PaymentMethodQueryEnabled | ✅ | cr80 | bool | false | sites' `canMakePayment` always answers "none saved" |
+| AlternateErrorPagesEnabled | ✅ | cr8 | bool | false | belt and braces — Brave ships the web-service error page off |
+| DefaultNotificationsSetting | ✅ | cr10 | int enum | 1, 2 or 3, user-selected; key omitted when Not managed | full legal enum **1 = allow, 2 = block, 3 = ask**, all exposed as a choice row |
+| DefaultGeolocationSetting | ✅ | cr10 | int enum | 1, 2 or 3; omitted when Not managed | full legal enum 1 = allow, 2 = block, 3 = ask; choice row |
+| DefaultSensorsSetting | ✅ | cr88 | int enum | 1, 2 or 3; omitted when Not managed | motion/orientation sensors, a fingerprinting vector; full legal enum 1 = allow, 2 = block, 3 = ask. "3 = ask" holds in Brave only because brave-core force-enables `features::kSensorsAllowAskBlockPermissionModel` (`chromium_src/services/device/public/cpp/device_features.cc` at the tag; `rewrite/` + `patches/` on 1.96.x, same effect) — the dedicated `DefaultSensorsSettingPolicyHandler` rewrites 3 to **Allow** when that flag is off, and stock Chromium ships it off. Brave also re-registers SENSORS with default **Block** (brave/brave-browser#4789), so Not managed in Brave is block-by-default-but-user-changeable. A policy file taken to stock Chromium with 3 means Allow |
+| ExtensionInstallBlocklist | ✅ | cr86 | list | `["*"]` | blocks all installs and disables already-installed extensions |
+| SafeSitesFilterBehavior | ✅ | cr69 | int enum | 1 (filter) | not a local filter — sends every navigation URL, iframes included, to Google's Safe Search API (`tags: [filtering, google-sharing]`); disclosed in the tooltip and README because the same tool ships `SafeBrowsingProtectionLevel = 0` |
+| BrowserGuestModeEnabled | ✅ | cr38 | bool | false | guest windows bypass profile restrictions |
+| HighEfficiencyModeEnabled | ✅ | cr108 | bool | true | forces Memory Saver tab discarding on |
+| HardwareAccelerationModeEnabled | ✅ | cr46 | bool | true / false | both states as a mutually exclusive pair (`Group = "hwaccel"`) because unset is not off: Chromium's default is on, absent means user-controlled, `false` means forced off. The off state is a troubleshooting lever for a faulty GPU driver, a VM or RDP session, or screen-sharing corruption, not a privacy posture — in no preset. Restart |
+| EnableMediaRouter | ✅ | cr52 | bool | false | disables Cast and its LAN device discovery; restart. Brave's `media_router_feature.cc` gives the policy precedence over the `brave://settings/extensions` Media Router toggle; Tor windows are always off |
+| ChromeVariations | ✅ | cr83 | int enum | 1 or 2 | 0 = all variations, 1 = critical fixes only, 2 = none. Closes the last remote-configuration channel: Brave fetches a Griffin seed from `variations.brave.com` that flips features in an installed browser. Maps to `variations::prefs::kVariationsRestrictionsByPolicy`; brave-core does not override the restriction path. Two mutually exclusive rows; value 2 also blocks the emergency killswitches, so it is in no preset |
+| SpellCheckServiceEnabled | ✅ | cr22 | bool | false | removes the Google spelling web service while offline dictionaries keep working; upstream says it has no effect once `SpellcheckEnabled` is false, hence the mutual exclusion |
+| RemoteDebuggingAllowed | ✅ | cr93 | bool | false | blocks `--remote-debugging-port` / `--remote-debugging-pipe`, the CDP cookie-theft vector `DeveloperToolsAvailability` leaves open; inherited unchanged by Brave. Breaks Puppeteer, Playwright and `brave://inspect`. Restart: `dynamic_refresh` flipped to true only in 154.0.8029.0 (`80ad0b9`), so the note holds through the cr153 line |
+| DNSInterceptionChecksEnabled | ✅ | cr80 | bool | false | stops the three random 7–15 character hostname lookups at startup and on every network change, a per-launch beacon to the ISP or DoH resolver |
+| BasicAuthOverHttpEnabled | ✅ | cr88 | bool | false | refuses HTTP Basic auth over cleartext; breaks legacy plain-HTTP appliance logins |
+| DefaultWebUsbGuardSetting | ✅ | cr67 | int enum | 2 or 3; omitted when Not managed | **2 = block, 3 = ask — no value 1** in the schema, so the row offers Not managed / Ask / Block. Ships enabled in Brave. Breaks Ledger/Trezor web wallets and in-browser firmware flashers |
+| DefaultSerialGuardSetting | ✅ | cr86 | int enum | 2 or 3; omitted when Not managed | 2 = block, 3 = ask, no 1; breaks in-browser microcontroller tooling |
+| DefaultWebHidGuardSetting | ✅ | cr100 | int enum | 2 or 3; omitted when Not managed | 2 = block, 3 = ask, no 1; may break security keys and gamepad configurators that use WebHID rather than WebAuthn. The device-API set is USB+Serial+HID because WebBluetooth and File System Access are already feature-disabled in Brave |
+| DefaultLocalFontsSetting | ✅ | cr103 | int enum | 2 or 3; omitted when Not managed | 2 = block, 3 = ask, no 1; `queryLocalFonts()` returns the installed font list, a top-tier fingerprint that Shields' farbling does not cover |
+| DefaultWindowManagementSetting | ✅ | cr111 | int enum | 2 or 3; omitted when Not managed | 2 = block, 3 = ask, no 1; stops sites reading the multi-monitor topology; complementary to `kBraveBlockScreenFingerprinting`, which is about screen size |
+| BlockExternalExtensions | ✅ | cr80 | bool | true | closes the silent install channel (registry `…\Extensions` keys, `external_extensions.json` drop-ins) that bundleware uses while user-chosen extensions keep working, unlike `ExtensionInstallBlocklist: ["*"]`; restart |
 
 Every key above fetches 200 at the Chromium tag and at main; none is
 `deprecated:`, upper-bounded, or `future_on:`-only. 73 of the YAML files are
@@ -355,26 +370,26 @@ artifacts and on a real install; the Windows script is untouched.
 
 The YAML or the brave-core source is the tiebreaker in every case.
 
-| Key(s) | Why not |
-|---|---|
-| `EnableDoNotTrack` | does not exist in Chromium's policy index; DNT has no enterprise policy. Was written and silently ignored until removed. GPC (`BraveGlobalPrivacyControlEnabled`) is the working equivalent |
-| `MediaRecommendationsEnabled` | **dead key.** The YAML is open (`chrome.*:87-`, no cap, not deprecated) but Chromium removed the handler and the pref with Kaleidoscope in `3e5b1be4a` (2021-01-06); `pref_mapping/MediaRecommendationsEnabled.json` says `Policy was removed` at the tag and at main; zero references in brave-core. Validated, rendered in `brave://policy`, did nothing since Chromium 89. Removed from all three scripts and four presets; an old export naming it is reported as ignored on import. The pref-mapping file is the tiebreaker |
-| `PromotionalTabsEnabled` | `deprecated: true`. Its live successor `PromotionsEnabled` (`chrome.*:128-`) writes the same `prefs::kPromotionsEnabled`; not exposed either, because the surfaces it gates are Chrome-branded ones Brave replaces |
-| `IPFSEnabled` | see the Brave table: deprecated, feature gone since 1.69.153 |
-| all `PrivacySandbox*` | `PrivacySandboxFingerprintingProtectionEnabled` capped at cr145, `PrivacySandboxIpProtectionEnabled` at cr143; `AdMeasurement`, `AdTopics`, `SiteEnabledAds`, `Prompt` are `deprecated: true`, uncapped, three still dispatched at the tag. What neutralises them in Brave is `BravePrivacySandboxSettings` (every `Is*Allowed` false, `IsPrivacySandboxRestricted` true), the feature overrides in `feature_defaults_unittest.cc` and the renderer client disabling Fledge/Topics |
-| `ComponentUpdatesEnabled` | **actively harmful.** Chromium honours it per installer (`supports_group_policy_enable_component_updates`): Brave's `AdBlockComponentInstallerPolicy` returns true, so the Shields resources, filter-list catalog and filter lists would freeze; Widevine and the SSL error assistant too. The Tor client, debounce rules and HTTPS-upgrade exceptions ride `BraveComponentInstallerPolicy`, which returns false, and CRLSets keep updating |
-| `FeedbackSurveysEnabled`, `SafeBrowsingSurveysEnabled` | brave-core patches `RunCommonLaunchChecks` to always error; no survey ever launches |
-| `BrowserNetworkTimeQueriesEnabled` | `kNetworkTimeServiceQuerying` is force-disabled in Brave (`chromium_src/components/network_time/network_time_tracker.cc` at the tag; `rewrite/…network_time_tracker.cc.yaml` + `patches/` on master) |
-| `DomainReliabilityAllowed` | `brave_main_delegate.cc` appends `--disable-domain-reliability` unconditionally |
-| `BuiltInAIAPIsEnabled` | `GetOptimizationTargetForFeature` returns UNKNOWN in Brave; the APIs never initialise |
-| `DefaultWebBluetoothGuardSetting`, `DefaultFileSystemReadGuardSetting`, `DefaultFileSystemWriteGuardSetting` | already feature-disabled in Brave, which is why the device-API set is USB+Serial+HID. File System Access is `kFileSystemAccessAPI` `FEATURE_DISABLED_BY_DEFAULT` in `chromium_src/third_party/blink/common/features.cc`; Web Bluetooth is not in the feature-defaults list at all — `BraveBluetoothDelegate::AllowWebBluetooth` returns `kBlockGloballyDisabled` unless `kBraveWebBluetoothAPI` (off, `chrome://flags#brave-web-bluetooth-api`) is on |
-| `DefaultThirdPartyStoragePartitioningSetting` | removed after cr145 |
-| `FirstPartySetsEnabled`, `RelatedWebsiteSetsEnabled` | `deprecated: true`, capped `113-152` / `120-152` on main (bites when Brave rebases to cr153); at the tag still dispatched through `SimpleDeprecatingPolicyHandler` into `kPrivacySandboxRelatedWebsiteSetsEnabled`. Moot: `BravePrivacySandboxSettings` forces that pref back to false whenever it becomes true |
-| `InsecurePrivateNetworkRequestsAllowed`, `LocalNetworkAccessRestrictionsEnabled` | removed after cr137 and cr144; `deprecated: true`, capped, undispatched at the tag. The successors (`LocalNetworkAccess{Blocked,Allowed}ForUrls`, `LocalNetworkAccessRestrictionsTemporaryOptOut`, `LocalNetworkAccessPermissionsPolicyDefaultEnabled`, the `LocalNetwork*` / `LoopbackNetwork*ForUrls` lists) are URL-pattern lists, not a posture; `["*"]` would cut every site off from routers, NAS and local dev servers. Brave force-enables `kLocalNetworkAccessChecksWebSockets` itself |
-| `UrlKeyedMetricsAllowed` | `future_on:` only, never shipped; its handler would write the pref `UrlKeyedAnonymizedDataCollectionEnabled = false` already writes |
-| `Miscellaneous/AutofillSettings` | `supported_on: chrome.*:154-` on main, still `future_on:` at every Chromium tag a Brave branch pins. A per-URL-pattern blocklist, not a toggle; `[{"*", ["all"]}]` would duplicate the two Autofill keys with a heavier schema |
-| `DefaultMediaStreamSetting` | `deprecated: true`; a microphone/camera switch would use `AudioCaptureAllowed` / `VideoCaptureAllowed` |
-| `BraveSearchResultAdsEnabled` | a one-release key: merged 2026-07-20, reverted (`cf025361c`) on master and `1.95.x` but never uplifted to `1.94.x`, so the shipping 1.94.121 dispatches it (`BooleanDisablingPolicyHandler` into `kOptedInToSearchResultAds`; `false` disables, `true` ignored) and it is 404 from 1.95.x on. The replacement universal pref `brave.brave_ads.sponsored.enabled` (`a723c7b00`, `1.96.x`) has no policy key; brave-browser#57204 is open and demilestoned. A toggle that dies on the next update is worse than none |
+| Key(s) | Status | Why not |
+|---|---|---|
+| `EnableDoNotTrack` | ❌ | does not exist in Chromium's policy index; DNT has no enterprise policy. Was written and silently ignored until removed. GPC (`BraveGlobalPrivacyControlEnabled`) is the working equivalent |
+| `MediaRecommendationsEnabled` | 💀 | **dead key.** The YAML is open (`chrome.*:87-`, no cap, not deprecated) but Chromium removed the handler and the pref with Kaleidoscope in `3e5b1be4a` (2021-01-06); `pref_mapping/MediaRecommendationsEnabled.json` says `Policy was removed` at the tag and at main; zero references in brave-core. Validated, rendered in `brave://policy`, did nothing since Chromium 89. Removed from all three scripts and four presets; an old export naming it is reported as ignored on import. The pref-mapping file is the tiebreaker |
+| `PromotionalTabsEnabled` | ⛔ | `deprecated: true`. Its live successor `PromotionsEnabled` (`chrome.*:128-`) writes the same `prefs::kPromotionsEnabled`; not exposed either, because the surfaces it gates are Chrome-branded ones Brave replaces |
+| `IPFSEnabled` | ⛔ | see the Brave table: deprecated, feature gone since 1.69.153 |
+| all `PrivacySandbox*` | ⛔ / neutralised | `PrivacySandboxFingerprintingProtectionEnabled` capped at cr145, `PrivacySandboxIpProtectionEnabled` at cr143; `AdMeasurement`, `AdTopics`, `SiteEnabledAds`, `Prompt` are `deprecated: true`, uncapped, three still dispatched at the tag. What neutralises them in Brave is `BravePrivacySandboxSettings` (every `Is*Allowed` false, `IsPrivacySandboxRestricted` true), the feature overrides in `feature_defaults_unittest.cc` and the renderer client disabling Fledge/Topics |
+| `ComponentUpdatesEnabled` | ✅ live, harmful | **actively harmful.** Chromium honours it per installer (`supports_group_policy_enable_component_updates`): Brave's `AdBlockComponentInstallerPolicy` returns true, so the Shields resources, filter-list catalog and filter lists would freeze; Widevine and the SSL error assistant too. The Tor client, debounce rules and HTTPS-upgrade exceptions ride `BraveComponentInstallerPolicy`, which returns false, and CRLSets keep updating |
+| `FeedbackSurveysEnabled`, `SafeBrowsingSurveysEnabled` | ⚠️ no-op in Brave | brave-core patches `RunCommonLaunchChecks` to always error; no survey ever launches |
+| `BrowserNetworkTimeQueriesEnabled` | ⚠️ no-op in Brave | `kNetworkTimeServiceQuerying` is force-disabled in Brave (`chromium_src/components/network_time/network_time_tracker.cc` at the tag; `rewrite/…network_time_tracker.cc.yaml` + `patches/` on master) |
+| `DomainReliabilityAllowed` | ⚠️ no-op in Brave | `brave_main_delegate.cc` appends `--disable-domain-reliability` unconditionally |
+| `BuiltInAIAPIsEnabled` | ⚠️ no-op in Brave | `GetOptimizationTargetForFeature` returns UNKNOWN in Brave; the APIs never initialise |
+| `DefaultWebBluetoothGuardSetting`, `DefaultFileSystemReadGuardSetting`, `DefaultFileSystemWriteGuardSetting` | ⚠️ redundant | already feature-disabled in Brave, which is why the device-API set is USB+Serial+HID. File System Access is `kFileSystemAccessAPI` `FEATURE_DISABLED_BY_DEFAULT` in `chromium_src/third_party/blink/common/features.cc`; Web Bluetooth is not in the feature-defaults list at all — `BraveBluetoothDelegate::AllowWebBluetooth` returns `kBlockGloballyDisabled` unless `kBraveWebBluetoothAPI` (off, `chrome://flags#brave-web-bluetooth-api`) is on |
+| `DefaultThirdPartyStoragePartitioningSetting` | ❌ removed | removed after cr145 |
+| `FirstPartySetsEnabled`, `RelatedWebsiteSetsEnabled` | ⛔ / neutralised | `deprecated: true`, capped `113-152` / `120-152` on main (bites when Brave rebases to cr153); at the tag still dispatched through `SimpleDeprecatingPolicyHandler` into `kPrivacySandboxRelatedWebsiteSetsEnabled`. Moot: `BravePrivacySandboxSettings` forces that pref back to false whenever it becomes true |
+| `InsecurePrivateNetworkRequestsAllowed`, `LocalNetworkAccessRestrictionsEnabled` | ❌ removed | removed after cr137 and cr144; `deprecated: true`, capped, undispatched at the tag. The successors (`LocalNetworkAccess{Blocked,Allowed}ForUrls`, `LocalNetworkAccessRestrictionsTemporaryOptOut`, `LocalNetworkAccessPermissionsPolicyDefaultEnabled`, the `LocalNetwork*` / `LoopbackNetwork*ForUrls` lists) are URL-pattern lists, not a posture; `["*"]` would cut every site off from routers, NAS and local dev servers. Brave force-enables `kLocalNetworkAccessChecksWebSockets` itself |
+| `UrlKeyedMetricsAllowed` | 🕓 future_on only | `future_on:` only, never shipped; its handler would write the pref `UrlKeyedAnonymizedDataCollectionEnabled = false` already writes |
+| `Miscellaneous/AutofillSettings` | 🕓 cr154 | `supported_on: chrome.*:154-` on main, still `future_on:` at every Chromium tag a Brave branch pins. A per-URL-pattern blocklist, not a toggle; `[{"*", ["all"]}]` would duplicate the two Autofill keys with a heavier schema |
+| `DefaultMediaStreamSetting` | ⛔ | `deprecated: true`; a microphone/camera switch would use `AudioCaptureAllowed` / `VideoCaptureAllowed` |
+| `BraveSearchResultAdsEnabled` | 💀 from 1.95 | a one-release key: merged 2026-07-20, reverted (`cf025361c`) on master and `1.95.x` but never uplifted to `1.94.x`, so the shipping 1.94.121 dispatches it (`BooleanDisablingPolicyHandler` into `kOptedInToSearchResultAds`; `false` disables, `true` ignored) and it is 404 from 1.95.x on. The replacement universal pref `brave.brave_ads.sponsored.enabled` (`a723c7b00`, `1.96.x`) has no policy key; brave-browser#57204 is open and demilestoned. A toggle that dies on the next update is worse than none |
 
 ## What's next
 
@@ -429,6 +444,39 @@ Watch list, each with the trigger that turns it into work:
   four ways on a real install, detection for every packaging, the thirteen
   dead keys inventoried and shown inert on Origin-only machines, nothing changed
   for anyone else.
+
+## Commands for a pass
+
+Verified to work; the paths are the ones that bit before.
+
+- **Enumerate every Chromium policy name** (the group directories are not
+  guessable; a 404 on a guessed path proves nothing):
+  `gh api repos/chromium/chromium/contents/components/policy/resources/templates/policy_definitions --jq '.[]|select(.type=="dir")|.name'`,
+  then the same call per group with `select(.type=="file")|.name`. Pin to a
+  tag with `?ref=<tag>`.
+- **One Chromium YAML at the pinned tag:**
+  `https://raw.githubusercontent.com/chromium/chromium/<tag>/components/policy/resources/templates/policy_definitions/<Group>/<Key>.yaml`
+  — read `deprecated`, `supported_on`, `future_on`, `features`, `schema`.
+- **Dispatch of a Chromium key:** `chrome/browser/policy/configuration_policy_handler_list_factory.cc`
+  at the tag, and `components/policy/test/data/pref_mapping/<Key>.json`
+  (`Policy was removed` = dead).
+- **Brave YAML at a release branch:**
+  `https://raw.githubusercontent.com/brave/brave-core/<1.9N.x>/components/policy/resources/templates/policy_definitions/BraveSoftware/<Key>.yaml`;
+  walk branches to find where a key first ships.
+- **Brave dispatch and guards:** clone brave-core at the tag
+  (`git clone --depth 1 --branch v<ver>`), then `browser/policy/brave_simple_policy_map.h`
+  for the `#if BUILDFLAG(...)` around each entry and
+  `grep -rn "is_brave_origin_branded" --include='*.gni' components/` for what
+  Origin compiles out. Search `chromium_src/`, `patches/` and `rewrite/` before
+  saying an override lapsed.
+- **Origin's own set:** `browser/brave_origin/brave_origin_service_factory.cc`.
+- **Runtime proof of the Linux policy dir:** with Brave running, the inotify
+  watches in `/proc/<pid>/fdinfo/<fd>` of the browser process map (by inode)
+  to `/etc/brave/policies/managed`. To read `chrome://policy` headlessly, drive
+  `--remote-debugging-pipe` and walk the shadow DOM; `--dump-dom` hangs and
+  `innerText` is empty. Always pass a scratch `--user-data-dir`, or the run
+  creates `~/.config/BraveSoftware/Brave-Origin-<Channel>` profiles that make
+  the detector report channels that are not installed.
 
 ## Re-verification procedure
 
