@@ -1,7 +1,8 @@
 # SlimBrave Neo — Policy Audit and Plan
 
-The master record for the project, written for the AI that runs the next
-audit pass (humans read the README). Every policy key the tool writes and the
+**Read this first, before any change to this repository.** It is the master
+record for the project, written for the AI doing the work (humans read the
+README) and enforced by `tests/test_audit.py`. Every policy key the tool writes and the
 evidence it is trusted on, what is deliberately left out and why, how each
 platform is reached, what Brave Origin changes, what comes next, and the
 procedure and commands to re-verify all of it. Rows state what is true of the
