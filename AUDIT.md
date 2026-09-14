@@ -20,6 +20,18 @@ a `pref_mapping/<Key>.json` that is not `Policy was removed`). **restart** =
 `dynamic_refresh: false`; **browser-wide** = `per_profile: false`. When a row
 and the source disagree, the source wins and the row is wrong: fix the row.
 
+**How to update this file.** The H2 section names are the anchors — keep
+them. Tables keep their column order; `Status` uses only the six glyphs
+above. A pass runs the procedure at the end, fixes rows to match the source,
+replaces its rows in the ledger below, and adds one line to the done log with
+a tag, PR or commit. Nothing is appended as narrative and no row is marked
+stale: a row states the present. Adding a key means, in one change: the four
+conditions under "What the project does" met and cited in the row, the row
+itself, the three scripts, the presets that want it, the tests, and a done-log
+line. Removing a key moves its row to Considered and rejected with the
+tiebreaker source. `tests/test_audit.py` parses this file and fails CI when it
+and the scripts disagree — see that section.
+
 **Verification ledger.** Updated in place by each pass — replace the row, do
 not append.
 
@@ -57,6 +69,14 @@ not append.
   off-by-default feature, or compiled out on one platform) stays only with the
   caveat in its label. Nothing dead ships — a switch that does nothing is worse
   than no switch.
+- **This document is enforced.** `tests/test_audit.py` parses the tables here
+  and asserts: every key the scripts write appears in a key table with ✅ or
+  ⚠️; nothing in Considered and rejected, and nothing marked ⛔ ❌ 💀 🕓, is
+  written by any script; `ORIGIN_BUILTIN_KEYS` in the scripts equals the set of
+  written Brave keys whose Dispatch is a guarded map entry; the inventory
+  counts in this section match `build_rows()`; every Status cell uses the
+  vocabulary; the ledger names the key sections. When it fails, the document or
+  the code is wrong — fix whichever disagrees with the source.
 - Where the policies land:
 
 | Platform | Location | Scope |
