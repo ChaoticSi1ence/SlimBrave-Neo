@@ -15,7 +15,9 @@ param (
 # https://github.com/ChaoticSi1ence/SlimBrave-Neo
 #
 # One self-contained script. Writes Chromium enterprise managed policy to
-# HKLM\SOFTWARE\Policies\BraveSoftware\Brave; Brave reads it at startup.
+# HKLM\SOFTWARE\Policies\BraveSoftware\Brave; Brave reads it at startup, and
+# so does Brave Origin's separate Windows build (BRAVE INSTALLS AND BRAVE
+# ORIGIN, below).
 #
 # Relaunches itself elevated so Apply and
 # Reset can write machine policy. Capture the path BEFORE anything else: under
@@ -699,6 +701,7 @@ foreach ($cat in $categories) {
             full    = $tip
             short   = $short
             group   = $group
+            inert   = $false
             choices = $choices
         }
         if ($null -eq $choices) { $row.PSObject.Properties.Remove('choices') }
@@ -770,6 +773,10 @@ function Test-IsChoiceRow($row) {
 function Get-RowPolicyValue($row) {
     # $null means "this row manages nothing" - unticked, or a choice row left
     # on "Not managed". Those fall into Apply's removal branch.
+    # An inert row (built into Brave Origin) manages nothing whatever its
+    # state says: Apply's removal branch then drops a stale key of ours and
+    # Export never carries it.
+    if ($row.inert) { return $null }
     $st = $script:state[$row.Id]
     if (Test-IsChoiceRow $row) {
         if ($st.Sel -le 0) { return $null }
@@ -882,6 +889,204 @@ function Test-DohTemplate([string]$Raw) {
 }
 
 # ---------------------------------------------------------------------------
+# BRAVE INSTALLS AND BRAVE ORIGIN
+#
+# Brave Origin is Brave with Rewards, Wallet, VPN, Leo and friends removed at
+# build time (brave-core's is_brave_origin_branded). On Windows it is sold as
+# a separate install that sits beside regular Brave: brave-core's
+# chromium_src/chrome/install_static/chromium_install_modes.h gives it its
+# own product path, Brave-Origin in place of Brave-Browser, with the same
+# -Beta, -Dev and -Nightly suffixes, so its binary is
+# <Program Files or LOCALAPPDATA>\BraveSoftware\Brave-Origin<suffix>\Application\brave.exe,
+# its profile %LOCALAPPDATA%\BraveSoftware\Brave-Origin<suffix>\User Data and
+# its Programs and Features entry "BraveSoftware Brave-Origin<suffix>".
+#
+# It reads the SAME policy key as regular Brave. Chromium's
+# ChromeBrowserPolicyConnector hands PolicyLoaderWin kRegistryChromePolicyKey,
+# and brave-core's generate_policy_source.py override fixes that constant to
+# SOFTWARE\Policies\BraveSoftware\Brave with no branding condition, so every
+# key this tool writes reaches Origin too (AUDIT.md, Brave Origin on Windows).
+# What cannot reach it is a policy for a feature Origin compiled out: on a PC
+# whose only Brave is Origin those rows are shown inert.
+# ---------------------------------------------------------------------------
+
+# Every Brave product path on Windows, regular then Origin. Dir is the folder
+# under BraveSoftware that both the install and the profile use.
+$script:braveChannels = @(
+    @{ Id = "stable";         Label = "Stable";         Dir = "Brave-Browser";         Origin = $false },
+    @{ Id = "beta";           Label = "Beta";           Dir = "Brave-Browser-Beta";    Origin = $false },
+    @{ Id = "dev";            Label = "Dev";            Dir = "Brave-Browser-Dev";     Origin = $false },
+    @{ Id = "nightly";        Label = "Nightly";        Dir = "Brave-Browser-Nightly"; Origin = $false },
+    @{ Id = "origin";         Label = "Origin";         Dir = "Brave-Origin";          Origin = $true },
+    @{ Id = "origin-beta";    Label = "Origin Beta";    Dir = "Brave-Origin-Beta";     Origin = $true },
+    @{ Id = "origin-dev";     Label = "Origin Dev";     Dir = "Brave-Origin-Dev";      Origin = $true },
+    @{ Id = "origin-nightly"; Label = "Origin Nightly"; Dir = "Brave-Origin-Nightly";  Origin = $true }
+)
+
+# Policy keys whose handler Brave Origin compiles out. Each one's entry in
+# brave-core's browser/policy/brave_simple_policy_map.h sits under a BUILDFLAG
+# whose .gni definition carries `&& !is_brave_origin_branded`, on every
+# platform (AUDIT.md, Brave Origin). On a PC whose only Brave is Origin these
+# rows are shown inert: the feature is not in the binary, so there is nothing
+# for a policy to switch. P3A and the stats ping are not listed - their
+# entries are unguarded, Origin merely defaults them off, and a managed value
+# pins them. The same thirteen as ORIGIN_BUILTIN_KEYS in the Python ports.
+$script:originBuiltinKeys = @(
+    "BraveRewardsDisabled", "BraveWalletDisabled", "BraveVPNDisabled",
+    "BraveAIChatEnabled", "BraveLocalAIEnabled", "BraveNewsDisabled",
+    "BraveTalkDisabled", "BravePlaylistEnabled", "BraveWebDiscoveryEnabled",
+    "BraveSpeedreaderEnabled", "BraveWaybackMachineEnabled", "TorDisabled",
+    "EmailAliasesEnabled"
+)
+
+# The suffix an inert row carries in its title.
+$script:INERT_SUFFIX = "(built into Origin)"
+
+function Get-BraveInstalledVersion([string]$dir) {
+    # The installer's Programs and Features entry, "BraveSoftware <Dir>"
+    # (install_static's uninstall registry path). A system-wide install
+    # registers it under HKLM, in the 32-bit view as Chromium's installer
+    # does; a per-user install in the invoking user's hive - addressed by
+    # SID, as the policy path is, because HKCU here is the elevating admin's.
+    $paths = @(
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\BraveSoftware $dir",
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\BraveSoftware $dir"
+    )
+    if ([string]::IsNullOrWhiteSpace($script:OriginalSid)) {
+        $paths += "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\BraveSoftware $dir"
+    } else {
+        $paths += "Registry::HKEY_USERS\$($script:OriginalSid)\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\BraveSoftware $dir"
+    }
+    foreach ($p in $paths) {
+        $v = (Get-ItemProperty -Path $p -ErrorAction SilentlyContinue).DisplayVersion
+        if (-not [string]::IsNullOrWhiteSpace($v)) { return [string]$v }
+    }
+    return ""
+}
+
+function Get-BraveInstallations {
+    <#
+      Every Brave on this PC, regular and Origin, one record per product
+      path: its brave.exe (system-wide under Program Files, or per-user
+      under a LOCALAPPDATA root), its profile folders, and the installer's
+      version. Machine-wide on purpose, like the policy: an Origin under
+      another account's LOCALAPPDATA reads the HKLM key this tool writes.
+      A Brave found by its binary but never started still gets its record,
+      because it will read the key the moment it starts.
+    #>
+    $installRoots = @()
+    foreach ($pf in @($env:ProgramW6432, $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if ([string]::IsNullOrWhiteSpace($pf)) { continue }
+        $dup = $false
+        foreach ($r in $installRoots) { if ($r.Path -ieq $pf) { $dup = $true; break } }
+        if (-not $dup) { $installRoots += @{ Path = $pf; Scope = "system-wide" } }
+    }
+    $userRoots = @(Get-UserAppDataRoots)
+    foreach ($r in $userRoots) { $installRoots += @{ Path = $r.Path; Scope = "for $($r.Label)" } }
+
+    $found = @()
+    foreach ($ch in $script:braveChannels) {
+        $exe = ""; $scope = ""
+        foreach ($root in $installRoots) {
+            $candidate = Join-Path $root.Path "BraveSoftware\$($ch.Dir)\Application\brave.exe"
+            if (Test-Path $candidate -PathType Leaf -ErrorAction SilentlyContinue) {
+                $exe = $candidate; $scope = $root.Scope; break
+            }
+        }
+        $profiles = @()
+        foreach ($r in $userRoots) {
+            $userData = Join-Path $r.Path "BraveSoftware\$($ch.Dir)\User Data"
+            if (Test-Path $userData -PathType Container -ErrorAction SilentlyContinue) { $profiles += $userData }
+        }
+        $version = Get-BraveInstalledVersion $ch.Dir
+        if ($exe -or $profiles.Count -gt 0 -or $version) {
+            $found += [pscustomobject]@{
+                Id = $ch.Id; Label = $ch.Label; Dir = $ch.Dir; Origin = [bool]$ch.Origin
+                Exe = $exe; Scope = $scope; Profiles = $profiles; Version = $version
+            }
+        }
+    }
+    return ,$found
+}
+
+function Test-OriginOnly($installs) {
+    # True when every Brave found is a Brave Origin build. The one policy key
+    # is read by every Brave on the PC, so a row may go inert only when no
+    # regular Brave could be reading it: a regular Brave found by its binary
+    # or its profile, launched or not, keeps every row live.
+    $list = @($installs)
+    if ($list.Count -eq 0) { return $false }
+    foreach ($i in $list) { if (-not $i.Origin) { return $false } }
+    return $true
+}
+
+function Set-OriginInertRows($installs) {
+    # When every detected Brave is Origin, the rows whose feature it compiles
+    # out go inert: drawn dimmed with the suffix, untoggleable, out of the
+    # counts, never written or exported, and left unticked on sync so the
+    # next Apply drops a stale key. Off Origin the flag stays false and
+    # nothing here changes a thing.
+    if (-not (Test-OriginOnly $installs)) { return }
+    foreach ($row in Get-AllRows) {
+        if ($script:originBuiltinKeys -notcontains $row.key) { continue }
+        $row.inert = $true
+        $row.short = "Built into Brave Origin - nothing for a policy to switch"
+        $row.full  = "Built into Brave Origin: this feature is not in the binary, so there is nothing for a policy to switch; the row is shown for reference only. " + $row.full
+    }
+}
+
+function Get-OriginModeProfiles($installs) {
+    # Regular Brave with the paid Origin upgrade switched on is still regular
+    # Brave: same binary, every feature compiled in, Origin's own debloat
+    # applied as a policy layer below any managed one. Brave records that
+    # in Local State (brave.origin.policies_were_enforced, set once a
+    # purchase is confirmed), so the launch line can say so. Every row
+    # stays live; this is information, not a switch.
+    $labels = @()
+    foreach ($i in @($installs)) {
+        if ($i.Origin) { continue }
+        foreach ($userData in $i.Profiles) {
+            $localState = Join-Path $userData "Local State"
+            if (-not (Test-Path $localState -ErrorAction SilentlyContinue)) { continue }
+            try { $j = Get-Content $localState -Raw -Encoding UTF8 | ConvertFrom-Json } catch { continue }
+            if ($j.brave -and $j.brave.origin -and $j.brave.origin.policies_were_enforced -eq $true) {
+                if ($labels -notcontains $i.Label) { $labels += $i.Label }
+                break
+            }
+        }
+    }
+    return ,$labels
+}
+
+function Get-OriginNote($installs) {
+    # The launch line's Origin sentence, or "" when there is nothing to say.
+    # Not a warning: nothing is wrong, and the status bar is the one place
+    # the GUI can say what the TUI's title line says.
+    $list = @($installs)
+    $origins = @($list | Where-Object { $_.Origin })
+    if ($origins.Count -eq 0) {
+        # Assigned, not wrapped: the function returns its list behind a
+        # unary comma, and @(...) around a call would box an empty one.
+        $mode = Get-OriginModeProfiles $list
+        if (@($mode).Count -eq 0) { return "" }
+        return "Brave Origin upgrade is on in Brave $(@($mode) -join ', '): same binary, every feature present, so every row stays live and managed policy outranks Origin's own layer."
+    }
+    $names = @()
+    foreach ($o in $origins) {
+        $n = "Brave $($o.Label)"
+        if ($o.Version) { $n += " $($o.Version)" }
+        if ($o.Scope) { $n += " ($($o.Scope))" }
+        $names += $n
+    }
+    $what = $names -join " and "
+    if (Test-OriginOnly $list) {
+        return "$what found: policies apply; $($script:originBuiltinKeys.Count) rows for features Origin removes are inert."
+    }
+    $regular = @($list | Where-Object { -not $_.Origin } | ForEach-Object { $_.Label })
+    return "$what found beside Brave $($regular -join ', '): one policy key serves both; every row stays live."
+}
+
+# ---------------------------------------------------------------------------
 # LEAKED SHIELDS EXCEPTIONS
 # Brave writes managed *ForUrls content-setting policies through to each
 # profile's Preferences file. Removing the policy from the registry does NOT
@@ -973,8 +1178,10 @@ function Repair-OneUserRoot([string]$localAppData) {
     # One unreadable or locked profile must not abort the sweep - the other
     # users on the machine still deserve their repair.
     $removed = 0
-    foreach ($channelDir in @('Brave-Browser', 'Brave-Browser-Beta', 'Brave-Browser-Nightly', 'Brave-Browser-Dev')) {
-        $userData = Join-Path $localAppData "BraveSoftware\$channelDir\User Data"
+    # Every product path, Brave Origin's included: the registry policy
+    # reaches Origin's profiles too, so the leak did as well.
+    foreach ($ch in $script:braveChannels) {
+        $userData = Join-Path $localAppData "BraveSoftware\$($ch.Dir)\User Data"
         if (-not (Test-Path $userData)) { continue }
         $profileDirs = Get-ChildItem -Path $userData -Directory -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' }
@@ -986,7 +1193,8 @@ function Repair-OneUserRoot([string]$localAppData) {
 }
 
 function Repair-BravePrefs {
-    # Every Brave channel runs as brave.exe on Windows.
+    # Every Brave channel runs as brave.exe on Windows, Brave Origin included
+    # (brave-core keeps brave_exe = brave.exe whatever the branding).
     $running = ($null -ne (Get-Process brave -ErrorAction SilentlyContinue))
     # Chromium serves prefs from an in-memory PrefService and rewrites the file
     # on shutdown, so a scrub done now is discarded the moment the user closes
@@ -1220,6 +1428,9 @@ function Sync-FromRegistry {
     $live = Read-LivePolicy
     foreach ($id in @($script:state.Keys)) { $script:state[$id].On = $false; $script:state[$id].Sel = 0 }
     foreach ($row in Get-AllRows) {
+        # An inert row stays unticked whatever the registry says, so the
+        # next Apply drops the dead key rather than carrying it.
+        if ($row.inert) { continue }
         if (-not $live.ContainsKey($row.key)) { continue }
         $lv = $live[$row.key]
         if (Test-IsChoiceRow $row) {
@@ -1267,6 +1478,9 @@ function Enforce-ExclusionGroups {
 
 function Import-PresetIntoState($preset) {
     $script:importNotes = @()
+    # Keys the file names for rows built into Brave Origin on this PC: left
+    # unmanaged, and counted for the status, as the TUI's import does.
+    $script:importInert = @()
     foreach ($id in @($script:state.Keys)) { $script:state[$id].On = $false; $script:state[$id].Sel = 0 }
     $feat = $preset.features
     if ($feat -is [array]) {
@@ -1286,6 +1500,10 @@ function Import-PresetIntoState($preset) {
         $handled = @{}
         foreach ($row in Get-AllRows) {
             if ($names -notcontains $row.key) { continue }
+            if ($row.inert) {
+                if ($script:importInert -notcontains $row.key) { $script:importInert += $row.key }
+                continue
+            }
             if ($handled.ContainsKey($row.key)) { continue }
             $handled[$row.key] = $true
             if (Test-IsChoiceRow $row) {
@@ -1305,6 +1523,10 @@ function Import-PresetIntoState($preset) {
     foreach ($row in Get-AllRows) {
         if ($null -eq $feat) { continue }
         if ($null -eq $feat.PSObject.Properties[$row.key]) { continue }
+        if ($row.inert) {
+            if ($script:importInert -notcontains $row.key) { $script:importInert += $row.key }
+            continue
+        }
         $want = $feat.$($row.key)
         if (Test-IsChoiceRow $row) {
             # Type-strict, as main and both Python ports are: a quoted "1" is
@@ -1946,6 +2168,10 @@ function New-BarButton([string]$label,[bool]$accent){
                         if($script:importNotes.Count -gt 0){
                             $msg+=" Left unmanaged, because the imported value is not one this policy accepts: "+(($script:importNotes | Sort-Object) -join ", ")+"."
                         }
+                        if($script:importInert.Count -gt 0){
+                            $n=$script:importInert.Count
+                            $msg+=" $n key$(if($n -ne 1){'s'}) built into Brave Origin left unmanaged."
+                        }
                         Set-Status $msg
                     } else { Set-Status "Import failed - not a SlimBrave config" }
                 }
@@ -2018,6 +2244,10 @@ function Zone-Of($panel,[int]$x,[int]$y){
     }
     $hasExp = $st.HasExp
     if($hasExp -and $x -ge $ecol -and $x -le ($ecol+(S 26)) -and $y -ge (S 14) -and $y -le (S 50)){ return "exp" }
+    # an inert row (built into Brave Origin) has no control to hit: the
+    # chevron still opens its description, nothing else answers - and the
+    # keyboard, which takes the mouse's own path, gets the same answer
+    if($st.Inert){ return "" }
     if($st.IsChoice){
         # bounded exactly like the toggle: clicking a label or empty space
         # must do nothing on BOTH row types. Only the control is live.
@@ -2037,8 +2267,8 @@ function New-FluentRow($row,[int]$y){
     $p.Size=New-Object System.Drawing.Size (S 840),$script:COLLAPSED
     $p.BackColor=$F.Bg
     $isChoice=($null -ne $row.PSObject.Properties['choices'])
-    $p.Tag=@{Row=$row;Hot=$false;IsChoice=$isChoice;Open=$false;Zone=''}
-    $p.AccessibleName=$row.name; $p.AccessibleDescription=$row.full
+    $p.Tag=@{Row=$row;Hot=$false;IsChoice=$isChoice;Inert=[bool]$row.inert;Open=$false;Zone=''}
+    $p.AccessibleName=$(if($row.inert){"$($row.name) $($script:INERT_SUFFIX)"}else{$row.name}); $p.AccessibleDescription=$row.full
     $p.AccessibleRole=$(if($isChoice){[System.Windows.Forms.AccessibleRole]::ComboBox}else{[System.Windows.Forms.AccessibleRole]::CheckButton})
     Enable-DoubleBuffer $p
     $p.Add_Paint({
@@ -2051,8 +2281,12 @@ function New-FluentRow($row,[int]$y){
         Fill-Round $g $r (S 6) $c; Stroke-Round $g $r (S 6) $script:F.RowEdge
         $hi=New-Object System.Drawing.Pen $script:F.RowTopHi
         $g.DrawLine($hi,(S 7),1,($s.Width-(S 8)),1); $hi.Dispose()
-        $tb=New-Object System.Drawing.SolidBrush $script:F.Text
-        $g.DrawString($st.Row.name,$script:rowFont,$tb,(S 18),(S 11),$script:SF); $tb.Dispose()
+        # an inert row (built into Brave Origin) is dimmed and says so in its
+        # title; the description under it explains
+        $title=$st.Row.name; $ink=$script:F.Text
+        if($st.Inert){ $title="$title $($script:INERT_SUFFIX)"; $ink=$script:F.TextSub }
+        $tb=New-Object System.Drawing.SolidBrush $ink
+        $g.DrawString($title,$script:rowFont,$tb,(S 18),(S 11),$script:SF); $tb.Dispose()
         $cb=New-Object System.Drawing.SolidBrush $script:F.TextSub
         if($st.Open){
             $wcol=$script:EXP_X; if($st.IsChoice){ $wcol=$script:EXP_X_CHOICE }
@@ -2108,6 +2342,21 @@ function New-FluentRow($row,[int]$y){
                 [System.Drawing.PointF]::new(($cx2+(S 5)),($cy2+(S 5))),
                 [System.Drawing.PointF]::new(($cx2+(S 10)),$cy2)))
             $ch.Dispose()
+        } elseif($st.Inert){
+            # built into Origin: the pill is drawn hollow with a dash and no
+            # thumb, the word beside it says why, and Zone-Of gives it no hit
+            # zone, so neither a click nor Space can flip a policy that would
+            # switch nothing
+            $word="Built in"
+            $wb=New-Object System.Drawing.SolidBrush $script:F.TextSub
+            $sz=$g.MeasureString($word,$script:rowFont,1000,$script:SF)
+            $wx=$script:TG_X-(S 8)-$sz.Width
+            $g.DrawString($word,$script:rowFont,$wb,$wx,(S 21),$script:SF); $wb.Dispose()
+            $tx=$script:TG_X;$ty=$script:TG_Y
+            $track=New-Object System.Drawing.RectangleF $tx,$ty,$script:TG_W,$script:TG_H
+            Stroke-Round $g $track (S 10) $script:F.RowEdge
+            $dp=New-Object System.Drawing.Pen $script:F.TextSub,([float](1.6*$script:DPI))
+            $g.DrawLine($dp,($tx+(S 14)),($ty+(S 10)),($tx+(S 30)),($ty+(S 10))); $dp.Dispose()
         } else {
             $word="Off"; if($script:state[$st.Row.Id].On){$word="On"}
             $wb=New-Object System.Drawing.SolidBrush $script:F.TextSub
@@ -2290,11 +2539,11 @@ function Reflow-Page {
     $page.Update()
 }
 
-function New-SectionHeader([string]$text,[int]$y,[int]$count){
+function New-SectionHeader([string]$text,[int]$y,[int]$count,[int]$inert=0){
     $h=New-Object System.Windows.Forms.Panel
     $h.Location=New-Object System.Drawing.Point (S 2),$y
     $h.Size=New-Object System.Drawing.Size (S 840),(S 38)
-    $h.BackColor=$F.Bg; $h.Tag=@{T=$text;N=$count}
+    $h.BackColor=$F.Bg; $h.Tag=@{T=$text;N=$count;I=$inert}
     Enable-DoubleBuffer $h
     $h.Add_Paint({
         param($s,$e); $g=$e.Graphics
@@ -2305,10 +2554,19 @@ function New-SectionHeader([string]$text,[int]$y,[int]$count){
         $g.DrawString($s.Tag.T,$script:pTitle,$tb,(S 4),(S 12),$script:SF); $tb.Dispose()
         $w=[int]($g.MeasureString($s.Tag.T,$script:pTitle,1000,$script:SF).Width)
         $cb=New-Object System.Drawing.SolidBrush $script:F.TextSub
-        if($s.Tag.N -gt 0){ $g.DrawString("$($s.Tag.N)",$script:capFont,$cb,($w+(S 12)),(S 16),$script:SF) }
+        # the live count and, beside it, how many rows are built into Brave
+        # Origin on this PC - out of the count, as the TUI keeps them
+        $label=""; $lineX=$w+(S 34)
+        if($s.Tag.N -gt 0){ $label="$($s.Tag.N)" }
+        if($s.Tag.I -gt 0){
+            if($label){ $label+="  |  " }
+            $label+="$($s.Tag.I) built into Origin"
+            $lineX=$w+(S 12)+[int]($g.MeasureString($label,$script:capFont,1000,$script:SF).Width)+(S 12)
+        }
+        if($label){ $g.DrawString($label,$script:capFont,$cb,($w+(S 12)),(S 16),$script:SF) }
         $cb.Dispose()
         $p=New-Object System.Drawing.Pen $script:F.RowEdge
-        $g.DrawLine($p,($w+(S 34)),(S 24),(S 835),(S 24)); $p.Dispose()
+        $g.DrawLine($p,$lineX,(S 24),(S 835),(S 24)); $p.Dispose()
     })
     return $h
 }
@@ -2368,7 +2626,12 @@ function New-PresetCard($preset,[int]$y){
         if(-not (Test-InPresetButton $ev.X $ev.Y)){ return }
         Import-PresetIntoState $s.Tag.P
         Refresh-View
-        Set-Status "$($s.Tag.P.name) loaded - $($s.Tag.P.count) policies staged. Nothing is written until Apply."
+        $n=$script:importInert.Count
+        if($n -gt 0){
+            Set-Status "$($s.Tag.P.name) loaded - $($s.Tag.P.count-$n) policies staged, $n built into Brave Origin left unmanaged. Nothing is written until Apply."
+        } else {
+            Set-Status "$($s.Tag.P.name) loaded - $($s.Tag.P.count) policies staged. Nothing is written until Apply."
+        }
     })
     return $p
 }
@@ -2721,18 +2984,22 @@ function Select-Page([int]$idx){
         }
     } elseif($idx -eq 1){
         # every row, every category, one scroll - no menuing
-        $y=S 4; $total=0
+        $y=S 4; $total=0; $dead=0
         foreach($cat in $script:cats){
-            $hd=New-SectionHeader $cat.name $y $cat.rows.Count
+            # rows built into Brave Origin on this PC are out of the counts
+            $catDead=@($cat.rows | Where-Object { $_.inert }).Count
+            $hd=New-SectionHeader $cat.name $y ($cat.rows.Count-$catDead) $catDead
             $page.Controls.Add($hd); $script:rowPanels+=$hd; $y+=$hd.Height+(S 4)
             foreach($row in $cat.rows){
                 $rp=New-FluentRow $row $y; $page.Controls.Add($rp)
-                $script:rowPanels+=$rp; $y+=$rp.Height+(S 4); $total++
+                $script:rowPanels+=$rp; $y+=$rp.Height+(S 4)
+                if($row.inert){ $dead++ } else { $total++ }
             }
             $y+=S 10
         }
         $pageTitle.Text="All Options"
         $crumb.Text="SlimBrave Neo  >  All Options  -  $total policies in one list"
+        if($dead -gt 0){ $crumb.Text+=", $dead built into Origin" }
     } elseif($idx -eq ($script:pages.Count-1)){
         Build-DnsPage
     } else {
@@ -2804,7 +3071,21 @@ $form.Add_FormClosing({
     if($ans -ne "Yes"){ $e.Cancel=$true }
 })
 
+# Which Braves are on this PC, before the registry read: on a PC whose only
+# Brave is Origin the rows for features it removes go inert, and an inert row
+# stays unticked on sync so the next Apply drops its stale key. A detector
+# that dies must not take the window with it: then no record, every row live,
+# exactly as before this existed.
+try {
+    $script:installs=Get-BraveInstallations
+    Set-OriginInertRows $script:installs
+    $script:originNote=Get-OriginNote $script:installs
+} catch {
+    $script:installs=@(); $script:originNote=""
+    [Console]::Error.WriteLine("SlimBrave Neo: Brave detection skipped - " + $_.Exception.Message)
+}
 if(Test-Path $script:machineReg){ Sync-FromRegistry } else { Set-Status "No Brave policy set on this machine" }
+if($script:originNote){ Set-Status "$($script:originNote) $($script:statusText)" }
 $script:applied=Get-StateSnapshot
 Select-Page 0
 [void] $form.ShowDialog()

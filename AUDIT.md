@@ -44,6 +44,7 @@ not append.
 | `HardwareAccelerationModeEnabled` off state | 2026-09-03 | `chromium/main` | YAML `items:` |
 | Platform policy locations | 2026-09-07 (source); Linux at runtime 2026-09-11 | brave-core `v1.94.121`, Chromium 152.0.7977.83; Brave Origin 1.94.121 live | source chains; inotify watches and a policy seen taking effect |
 | Brave Origin on Linux | 2026-09-11 | brave-core `v1.94.121`; the v1.94.121 zip, deb and rpm artifacts; Flathub and Snap store APIs; a CachyOS install | artifacts unpacked; 7 readers, 2 refuters each; binary injection test |
+| Brave Origin on Windows | 2026-09-23 | brave-core master `223b981` (1.98.24) and the tags `v1.94.121`, `v1.95.104`, `v1.96.58`, `v1.97.46`; Chromium 152.0.7977.83 and 154.0.8037.58 | source chains only — `install_static`, the policy-key generator, the Windows loader and the thirteen `.gni` guards read at every ref; not yet run on a Windows machine |
 | Considered and rejected | 2026-09-07 | as the two key tables | as the two key tables |
 | Ad Block Only Mode provider | 2026-09-07 | brave-core `v1.94.121`, `1.95.x`, `1.96.x` | `ad_block_only_mode_policy_manager.cc`, `policy_types.h`, `policy_map.cc` |
 
@@ -73,8 +74,9 @@ not append.
 - **This document is enforced.** `tests/test_audit.py` parses the tables here
   and asserts: every key the scripts write appears in a key table with ✅ or
   ⚠️; nothing in Considered and rejected, and nothing marked ⛔ ❌ 💀 🕓, is
-  written by any script; `ORIGIN_BUILTIN_KEYS` in the scripts equals the set of
-  written Brave keys whose Dispatch is a guarded map entry; the inventory
+  written by any script; `ORIGIN_BUILTIN_KEYS` in the Python scripts and
+  `$script:originBuiltinKeys` in `SlimBrave.ps1` equal the set of written
+  Brave keys whose Dispatch is a guarded map entry; the inventory
   counts in this section match `build_rows()`; every Status cell uses the
   vocabulary; the ledger names the key sections. When it fails, the document or
   the code is wrong — fix whichever disagrees with the source.
@@ -82,7 +84,7 @@ not append.
 
 | Platform | Location | Scope |
 |---|---|---|
-| Windows | `HKLM\SOFTWARE\Policies\BraveSoftware\Brave` | one key for stable, beta, nightly and Origin — no channel suffix |
+| Windows | `HKLM\SOFTWARE\Policies\BraveSoftware\Brave` | one key for stable, beta, dev and nightly, and for Brave Origin's separate build — no channel or product suffix |
 | Linux | `/etc/brave/policies/managed/slimbrave.json` | one file for every channel and for Brave Origin |
 | macOS | `/Library/Managed Preferences/com.brave.Browser{,.beta,.nightly}.plist`, or a Configuration Profile | one plist per selected channel |
 
@@ -221,13 +223,14 @@ older, and every Brave key cr142 or older except the two branch-probed rows
 ## Brave Origin on Linux
 
 Origin is Brave with Rewards, Wallet, VPN, Leo, News and friends removed at
-build time (`is_brave_origin_branded`); free on Linux, a paid upgrade on
-Windows and macOS. Everything here is verified on the shipped 1.94.121
+build time (`is_brave_origin_branded`); free on Linux, paid on Windows and
+macOS. Everything here is verified on the shipped 1.94.121
 artifacts — `brave-origin_1.94.121_amd64.deb` (130,821,188 B, sha256
 `0f76ec5f…1495`, the bytes the apt `Packages` index lists) and
 `brave-origin-1.94.121-1.x86_64.rpm` (132,609,317 B, sha256 `9844f1b9…6b3e`,
 as the rpm `primary.xml` lists), both unpacked with bsdtar, and the AUR
-install of the zip — and on a real install; the Windows script is untouched.
+install of the zip — and on a real install. Windows has its own section
+below.
 
 - **Origin reads `/etc/brave/policies/managed`, like regular Brave.** Source:
   `app/brave_main_delegate.cc:166-170` overrides `chrome::DIR_POLICY_FILES` to
@@ -337,6 +340,89 @@ install of the zip — and on a real install; the Windows script is untouched.
   Shields lists are not in Origin's tables: it leaves those at their
   enabled-by-default user setting, the direction the project forces.
 
+## Brave Origin on Windows
+
+Origin on Windows is the same branded build (`is_brave_origin_branded`), sold
+as a separate install that sits beside regular Brave and asks for its purchase
+itself at first start (`browser/ui/webui/brave_origin_startup`, the
+`kOriginPurchaseValidated` local-state pref). Everything here is read from
+source — brave-core master `223b981` (1.98.24) and every release tag from
+`v1.94.121` to `v1.97.46`, identical on each point below — and from Chromium
+at the 1.94 pin (152.0.7977.83) and the 1.96/1.97 pin (154.0.8037.58).
+Nothing has yet been run on a Windows machine; What's next has the checklist.
+
+- **Where Origin lives.** `chromium_src/chrome/install_static/chromium_install_modes.h`
+  sets `kProductPathName` to `Brave-Origin` under `IS_BRAVE_ORIGIN_BRANDED`
+  (`Brave-Browser` otherwise, lines 30-37) and gives the branded build its own
+  four install modes with the same suffixes as regular Brave (lines 69-260), so
+  every path is the regular one with the product name swapped:
+
+| | Regular Brave | Brave Origin |
+|---|---|---|
+| Program folder | `<Program Files or %LOCALAPPDATA%>\BraveSoftware\Brave-Browser<suffix>\Application\` | `…\BraveSoftware\Brave-Origin<suffix>\Application\` (`brave_product_install_details_unittest.cc`) |
+| Binary | `brave.exe` — `build/config.gni` keeps `brave_exe = brave_product_name + ".exe"` whatever the branding | `brave.exe` |
+| Profile | `%LOCALAPPDATA%\BraveSoftware\Brave-Browser<suffix>\User Data` | `%LOCALAPPDATA%\BraveSoftware\Brave-Origin<suffix>\User Data` (`brave_user_data_dir_win_unittest.cc`) |
+| Suffixes | none (stable), `-Beta`, `-Dev`, `-Nightly` | the same |
+| Programs and Features entry | `BraveSoftware Brave-Browser<suffix>` | `BraveSoftware Brave-Origin<suffix>` (`brave_install_util_unittest.cc`) |
+| App GUID under `BraveSoftware\Update\Clients` | `{AFE6A462-C574-4B8A-AF43-4CC60DF4563B}`; beta `{103BD053-…}`, dev `{CB2150F2-…}`, nightly `{C6CB981E-…}` | `{F1EF32DE-F987-4289-81D2-6C4780027F9B}`; beta `{56DA94FD-…}`, dev `{716D6A4A-…}`, nightly `{50474E96-…}` (`build/config.gni:86-118`) |
+| App name, ProgID, URL scheme | `Brave`, `BraveHTML`, `brave-browser` | `Brave Origin`, `BraveOHTML`, `brave-origin` |
+
+- **Origin reads `HKLM\SOFTWARE\Policies\BraveSoftware\Brave`, like regular
+  Brave.** Chromium's `ChromeBrowserPolicyConnector::CreatePlatformProvider`
+  (152.0.7977.83 lines 316-324, 154.0.8037.58 lines 317-321) builds
+  `PolicyLoaderWin` with `kRegistryChromePolicyKey`, which
+  `components/policy/tools/generate_policy_source.py` emits from
+  `CHROMIUM_POLICY_KEY` for every non-Google branding; brave-core's
+  `chromium_src/components/policy/tools/generate_policy_source.py` overrides
+  that one constant to `SOFTWARE\Policies\BraveSoftware\Brave` and nothing else
+  — no `is_brave_origin_branded` reaches the generator, and brave-core's
+  `chromium_src/chrome/browser/policy/chrome_browser_policy_connector.cc` only
+  appends the `POLICY_SOURCE_BRAVE` provider. `PolicyLoaderWin` reads that key
+  under HKLM and HKCU plus its `Recommended` and `3rdparty` subkeys. The
+  `Brave-Origin` policy path that brave-core's own unit test names
+  (`brave_install_util_unittest.cc`, `SetMetricsReportingPolicy`) belongs to
+  `install_static::ReportingIsEnforcedByPolicy` (152 line 516, 154 line 524),
+  which builds `SOFTWARE\Policies\<company>\<product>` from the product path —
+  `…\BraveSoftware\Brave-Browser` on regular Brave — for the crash-reporter
+  consent probe that runs before policy loads. It is not a policy location;
+  nothing this tool writes goes there, on either build.
+- **The same thirteen rows are dead on Origin.** Every guard in the Linux
+  section is platform-free (`enable_x = … && !is_brave_origin_branded`, re-read
+  on master for all thirteen); `BraveVPNDisabled`'s `(is_win || is_android ||
+  is_mac || is_ios) && !is_brave_origin_branded` is live on regular Windows
+  Brave and compiled out of Origin. `brave_simple_policy_map.h` on master
+  carries the same entries under the same `#if BUILDFLAG` guards, plus
+  `PsstEnabled` under `ENABLE_PSST`.
+- **What the tool does with it.** `$script:braveChannels` carries the eight
+  product paths. `Get-BraveInstallations` probes `BraveSoftware\<Dir>\Application\brave.exe`
+  under `%ProgramW6432%`, `%ProgramFiles%`, `%ProgramFiles(x86)%` and every
+  user's `%LOCALAPPDATA%` (the `ProfileList` walk the prefs repair already
+  does), `BraveSoftware\<Dir>\User Data` under every user, and the
+  `Uninstall\BraveSoftware <Dir>` entry under HKLM (both registry views) and
+  the invoking user's hive by SID, for the version: one record per product
+  path found by any of the three. `Test-OriginOnly` is judged on the whole PC
+  — a regular Brave found by binary, profile or installer entry, launched or
+  not, keeps every row live — and `Set-OriginInertRows` then marks the
+  thirteen inert before the registry read: dimmed, `(built into Origin)` in
+  the title, a hollow pill with no hit zone (`Zone-Of` answers `""`, so the
+  keyboard path is inert too), the description prefixed `Built into Brave
+  Origin: …`, out of the section and All Options counts, `Get-RowPolicyValue`
+  `$null` (never written, never exported, a stale key dropped by the next
+  Apply), unticked on Re-sync, and counted by Import and a preset Load as
+  `N keys built into Brave Origin left unmanaged`. The launch line names what
+  was found — `Brave Origin 1.97.46 (system-wide) found: policies apply; 13
+  rows for features Origin removes are inert`, or `… found beside Brave
+  Stable: one policy key serves both; every row stays live`. Origin's four
+  profile folders join the prefs repair; the running check is unchanged,
+  Origin being `brave.exe` too.
+- **Regular Brave with the paid upgrade on is still regular Brave.** The
+  upgrade path (`brave_origin_service.cc`, the `!IS_BRAVE_ORIGIN_BRANDED`
+  branch) sets `brave.origin.policies_were_enforced` in `Local State` once a
+  purchase is confirmed. Same binary, same `Brave-Browser` profile, every
+  feature compiled in, Origin's layer at `kBravePriority` below any managed
+  entry. The tool reads that pref only to say so on the launch line; every
+  row stays live.
+
 ## Platform policy locations, from source
 
 - **Windows** — `HKLM\SOFTWARE\Policies\BraveSoftware\Brave`. Chromium's
@@ -345,10 +431,12 @@ install of the zip — and on a real install; the Windows script is untouched.
   brave-core's `chromium_src/…/generate_policy_source.py` overrides the constant
   to `SOFTWARE\Policies\BraveSoftware\Brave`; `chrome_browser_policy_connector.cc`
   hands it to `PolicyLoaderWin`, which brave-core does not touch. No channel or
-  Origin suffix (`install_static` varies only install-dir names), so one key
-  serves stable, beta, nightly and Origin. `BraveSoftware\Brave-Browser` is the
-  install dir name, not the policy path. Matches Brave's own Group Policy
-  documentation.
+  Origin suffix, so one key serves stable, beta, dev, nightly and Origin.
+  `BraveSoftware\Brave-Browser` (`Brave-Origin` on the branded build) is the
+  install and profile folder name, not the policy path; the one place
+  `install_static` turns it into a `SOFTWARE\Policies\…` path is the
+  crash-reporter consent probe, not policy loading (Brave Origin on Windows).
+  Matches Brave's own Group Policy documentation.
 - **Linux** — `/etc/brave/policies/managed`. Chromium's default is
   `/etc/chromium/policies` (`policy_paths.cc`), unpatched; `app/brave_main_delegate.cc:166-170`
   overrides `chrome::DIR_POLICY_FILES` at startup under `IS_POSIX && !IS_MAC`,
@@ -454,10 +542,19 @@ Watch list, each with the trigger that turns it into work:
   Brave pins ≥ 154.0.8029.0.
 - Ad Block Only Mode — a README sentence about the `brave://policy` conflict
   warnings when 1.96 ships.
-- Brave Origin — real-machine runs of the deb on Debian/Ubuntu, the rpm on
-  Fedora/openSUSE, Origin beta and nightly, and mixed machines with regular
-  Brave beside Origin. The checklist with exact commands and expected output is
-  `TESTING-brave-origin.md` on the `brave-origin-detection` branch.
+- Brave Origin on Linux — real-machine runs of the deb on Debian/Ubuntu, the
+  rpm on Fedora/openSUSE, Origin beta and nightly, and mixed machines with
+  regular Brave beside Origin. The checklist with exact commands and expected
+  output is `TESTING-brave-origin.md` on the `brave-origin-detection` branch.
+- Brave Origin on Windows — a real-machine run, which the source chains above
+  cannot replace: on a PC with Origin installed, `brave://version` should show
+  the executable under `BraveSoftware\Brave-Origin\Application` and the profile
+  under `BraveSoftware\Brave-Origin\User Data`; the launch line should name it
+  with the version from Programs and Features; after Apply, `brave://policy` in
+  Origin should list every applied key as Platform / Machine / Mandatory / OK;
+  and a mixed PC (regular Brave beside Origin) should keep every row live. If
+  the folder names differ from the table above, the source is wrong for that
+  build and the table follows the machine.
 - Cosmetic: `slimbrave-mac.py` should label the `BraveVPNDisabled` row as the
   Linux script does; a macOS Dev channel (`com.brave.Browser.dev`) could join
   `MAC_CHANNELS`.
@@ -473,6 +570,7 @@ with the reference that carries the detail. Newest first.
 
 | When | What | Reference |
 |---|---|---|
+| 2026-09-23 | Brave Origin on Windows: the shared policy key and the `Brave-Origin` product paths proven from source, `SlimBrave.ps1` detects Origin by program folder, profile folder and Programs and Features entry, shows the same 13 rows inert on an Origin-only PC, repairs Origin's profiles, and names a regular Brave running the paid upgrade; nothing changed for other users | `brave-origin-windows` branch |
 | 2026-09-11 | Brave Origin on Linux: policy directory proven, detection for every packaging, 13 dead keys shown inert on Origin-only machines; nothing changed for other users | v2.3.1, PR #25 (`a5df793`), issue #13 |
 | 2026-09-07 | Every key re-read at the shipping tag through dispatch, not only YAML; `MediaRecommendationsEnabled` found dead and removed from all three scripts and four presets: 79 → 78 rows, 75 → 74 keys. Platform location chains, the Ad Block Only Mode provider, Origin preset parity and the `rewrite/` override mechanism recorded | PR #24 (`f0b32d1`), commit `192689f` |
 | 2026-09-06 | Keyboard access in the Windows GUI; frames and a description pane in the TUI; TUI smoke test in CI | v2.3.0 |

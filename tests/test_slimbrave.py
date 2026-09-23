@@ -3552,3 +3552,142 @@ def test_draw_keeps_the_old_stack_under_nine_rows(mod, monkeypatch, tmp_path):
     assert " Import " in frame[5] and " Quit " in frame[5]   # buttons, second-last row
     assert frame[6].strip() == ""                        # status, last row
 
+
+
+# ---------------------------------------------------------------------------
+# Brave Origin on Windows: SlimBrave.ps1
+# ---------------------------------------------------------------------------
+#
+# The Windows build of Origin is a separate install beside regular Brave -
+# product path Brave-Origin<suffix> in brave-core's chromium_install_modes.h,
+# for the program folder and the profile alike - that reads the same registry
+# policy key. The PS1 detects it, repairs its profiles, and on a PC whose only
+# Brave is Origin shows the thirteen compiled-out rows inert, the contract the
+# TUI's `inert` flag already keeps. These pin the PS1 to the Python ports'
+# tables and to the paths the source names; AUDIT.md, Brave Origin on
+# Windows, has the receipts.
+
+
+def _ps1_table(name):
+    """The body of a `$script:<name> = @( ... )` table in the PS1."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    m = re.search(r"^\$script:" + re.escape(name) + r"\s*=\s*@\((.*?)^\)", text,
+                  re.MULTILINE | re.DOTALL)
+    assert m, f"$script:{name} is missing from SlimBrave.ps1"
+    return m.group(1)
+
+
+def ps1_origin_builtin_keys():
+    """The PS1's twin of ORIGIN_BUILTIN_KEYS; test_audit.py holds it to AUDIT.md too."""
+    return set(re.findall(r'"([A-Za-z]+)"', _ps1_table("originBuiltinKeys")))
+
+
+def _ps1_function(fn, text=None):
+    """A function's body, comments stripped, up to its column-0 closing brace."""
+    if text is None:
+        text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    live = re.sub(r"(?m)^\s*#.*$", "", text)
+    start = live.index(f"function {fn}")
+    return live[start:live.index("\n}\n", start)]
+
+
+def test_ps1_origin_builtin_keys_match_python(mod):
+    assert ps1_origin_builtin_keys() == set(mod.ORIGIN_BUILTIN_KEYS)
+    assert len(ps1_origin_builtin_keys()) == 13
+
+
+def test_ps1_brave_channels_name_every_windows_product_path():
+    """install_static's kProductPathName is Brave-Browser, or Brave-Origin on
+    the branded build, with the -Beta, -Dev and -Nightly install suffixes;
+    both the program folder and the profile use it. The prefs repair and the
+    detector must walk that one table rather than carry lists of their own."""
+    table = _ps1_table("braveChannels")
+    assert re.findall(r'Dir\s*=\s*"([^"]+)"', table) == [
+        "Brave-Browser", "Brave-Browser-Beta", "Brave-Browser-Dev", "Brave-Browser-Nightly",
+        "Brave-Origin", "Brave-Origin-Beta", "Brave-Origin-Dev", "Brave-Origin-Nightly"]
+    assert re.findall(r"Origin\s*=\s*(\$true|\$false)", table) == ["$false"] * 4 + ["$true"] * 4
+
+    repair = _ps1_function("Repair-OneUserRoot")
+    assert "$script:braveChannels" in repair, "the prefs repair does not walk the channel table"
+    assert "'Brave-Browser'" not in repair, "the prefs repair still carries a channel list of its own"
+
+    detect = _ps1_function("Get-BraveInstallations")
+    assert r'"BraveSoftware\$($ch.Dir)\Application\brave.exe"' in detect
+    assert r'"BraveSoftware\$($ch.Dir)\User Data"' in detect
+    assert "Get-UserAppDataRoots" in detect, "detection does not look under every user's LOCALAPPDATA"
+    for var in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"):
+        assert var in detect, f"system-wide installs under %{var}% are not probed"
+    assert "Get-BraveInstalledVersion $ch.Dir" in detect
+
+    uninstall = _ps1_function("Get-BraveInstalledVersion")
+    assert r"CurrentVersion\Uninstall\BraveSoftware $dir" in uninstall
+    assert "WOW6432Node" in uninstall, "Chromium's installer writes the entry in the 32-bit view"
+    assert r"HKEY_USERS\$($script:OriginalSid)" in uninstall, (
+        "a per-user install's entry is not read from the invoking user's hive"
+    )
+
+
+def test_ps1_inert_rows_never_reach_the_registry_or_a_file():
+    """An inert row manages nothing: it yields no policy value, stays unticked
+    on Re-sync so the next Apply drops a stale key, is counted rather than
+    staged on Import and on a preset Load, and gets no hit zone in the GUI,
+    so neither a click nor Space can flip a policy that would switch nothing.
+    Off Origin the flag is never raised and nothing here changes a thing."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    live = re.sub(r"(?m)^\s*#.*$", "", text)
+
+    assert re.search(r"if \(\$row\.inert\) \{ return \$null \}", _ps1_function("Get-RowPolicyValue", text))
+    assert re.search(r"if \(\$row\.inert\) \{ continue \}", _ps1_function("Sync-FromRegistry", text))
+
+    imp = _ps1_function("Import-PresetIntoState", text)
+    assert "$script:importInert = @()" in imp
+    assert imp.count("if ($row.inert) {") == 2, "both import branches must skip an inert row"
+    assert "$script:importInert -notcontains $row.key" in imp
+    assert live.count("built into Brave Origin left unmanaged") == 2, (
+        "Import and a preset Load must both report the keys they left unmanaged"
+    )
+
+    zone = _ps1_function("Zone-Of", text)
+    assert re.search(r'if\(\$st\.Inert\)\{ return "" \}', zone)
+    assert zone.index('return "exp"') < zone.index("$st.Inert") < zone.index('return "ctl"'), (
+        "the chevron must still open an inert row's description, and nothing after it may answer"
+    )
+
+    row = _ps1_function("New-FluentRow", text)
+    assert "elseif($st.Inert)" in row and "$script:INERT_SUFFIX" in row
+    assert "Inert=[bool]$row.inert" in row, "the row panel does not carry the flag Zone-Of reads"
+    assert re.search(r'^\$script:INERT_SUFFIX\s*=\s*"\(built into Origin\)"', live, re.M)
+
+    # the adapter gives every row the flag and only Set-OriginInertRows raises it
+    assert re.search(r"^\s*inert\s*=\s*\$false", live, re.M)
+    assert live.count("$row.inert = $true") == 1
+    setter = _ps1_function("Set-OriginInertRows", text)
+    assert "Test-OriginOnly" in setter and "$script:originBuiltinKeys -notcontains $row.key" in setter
+    assert "Built into Brave Origin" in setter, "an inert row's description does not say why"
+
+    header = _ps1_function("New-SectionHeader", text)
+    assert "[int]$inert=0" in header and "built into Origin" in header
+
+    # detection runs before the registry read, so the sync sees the flags
+    tail = live[live.index("$script:installs=Get-BraveInstallations"):]
+    assert tail.index("Set-OriginInertRows $script:installs") < tail.index("Sync-FromRegistry")
+    assert "Get-OriginNote $script:installs" in tail
+
+
+def test_ps1_origin_only_is_judged_on_the_whole_pc():
+    """A row goes inert only when no regular Brave could be reading the one
+    key: a regular Brave found by binary, profile or installer entry keeps
+    every row live, and an empty PC is not Origin-only. The launch line then
+    says which case it is, in the TUI's words."""
+    only = _ps1_function("Test-OriginOnly")
+    assert "if ($list.Count -eq 0) { return $false }" in only
+    assert re.search(r"if \(-not \$i\.Origin\) \{ return \$false \}", only)
+
+    note = _ps1_function("Get-OriginNote")
+    assert "policies apply" in note and "are inert" in note
+    assert "one policy key serves both; every row stays live" in note
+    assert "Get-OriginModeProfiles" in note and "every row stays live and managed policy outranks" in note
+
+    mode = _ps1_function("Get-OriginModeProfiles")
+    assert '"Local State"' in mode and "policies_were_enforced" in mode
+    assert "if ($i.Origin) { continue }" in mode, "Origin mode is a regular-Brave notion only"

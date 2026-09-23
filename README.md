@@ -114,6 +114,8 @@ The button row is Export, Import, **Re-sync**, Reset and Apply Settings. Re-sync
 
 Every row of Site Permissions is a dropdown rather than a checkbox: **Not managed / Ask / Block**, plus **Allow** on the keys where Chromium accepts it. Not managed is the default and writes nothing at all. The Site Permissions section below covers what each state does and which keys offer Allow.
 
+**Brave Origin on Windows:** [Brave Origin](https://brave.com/origin/)'s Windows build installs beside regular Brave under folders of its own — `BraveSoftware\Brave-Origin`, plus `-Beta`, `-Dev` and `-Nightly`, for the program and the profile alike — and reads the same `HKLM\SOFTWARE\Policies\BraveSoftware\Brave` key, so everything applied here reaches it unchanged. The window looks for every Brave on the PC at launch — under Program Files, under each user's `AppData\Local`, and in Programs and Features — and when Origin is among them the status line says so, with the version Programs and Features reports. On a PC whose only Brave is Origin, the 13 rows for features Origin removes at build time — Rewards, Wallet, VPN, Leo, Local AI, News, Talk, Playlist, Web Discovery, Speedreader, Tor, Email Aliases, Wayback Machine — are shown inert: dimmed, marked `(built into Origin)`, out of the section counts, with no toggle to flip, and never written, because a policy for a feature that is not in the binary would switch nothing. Loading a preset or importing a file that names them reports how many were left unmanaged. Beside a regular Brave every row stays live, since the one key serves both; Origin's profiles get the same leaked-prefs repair either way. If what you run is regular Brave with the paid Origin upgrade switched on, the status line says that instead, and every row stays live: same binary, every feature present, and managed policy outranks Origin's own layer. [`AUDIT.md`](AUDIT.md) has the receipts.
+
 ---
 
 ### Linux
@@ -500,10 +502,10 @@ SlimBrave Neo writes Chromium [managed enterprise policies](https://chromeenterp
 | Linux | `/etc/brave/policies/managed/slimbrave.json` (shared across all channels, Brave Origin included) |
 | macOS — `--persist off` | `/Library/Managed Preferences/com.brave.Browser{,.beta,.nightly}.plist` (one per selected channel). |
 | macOS — `--persist on` | Apple Configuration Profile installed via System Settings → General → Device Management. No plist files written; the profile system manages the values. |
-| Windows | Registry keys via PowerShell |
+| Windows | `HKLM\SOFTWARE\Policies\BraveSoftware\Brave` via PowerShell (one key for every channel, Brave Origin's separate build included) |
 
 **Additional behavior:**
-- Auto-detects Brave installations: Arch (`brave-bin`, `brave-origin-bin`), deb/rpm (`brave-browser`, `brave-origin`), Flatpak, Snap, macOS App (Stable / Beta / Nightly), and PATH fallback; on Linux, Brave Origin is reported as its own channel
+- Auto-detects Brave installations: Arch (`brave-bin`, `brave-origin-bin`), deb/rpm (`brave-browser`, `brave-origin`), Flatpak, Snap, macOS App (Stable / Beta / Nightly), and PATH fallback; on Windows, every `BraveSoftware\Brave-Browser*` and `Brave-Origin*` program and profile folder plus the Programs and Features entries. On Linux and Windows, Brave Origin is reported as its own channel
 - Reads existing policies on startup and pre-checks matching features; on macOS, the Apply-time channel prompt pre-ticks channels that already have a SlimBrave-managed policy (sticky default)
 - Full overwrite on Apply, so unchecked features are cleanly removed
 - Import/export compatible with the Windows PowerShell version: all three scripts now export UTF-8 without a BOM, and all three still read the UTF-16 files older PowerShell exports produced
@@ -566,6 +568,7 @@ Set-ExecutionPolicy -ExecutionPolicy Undefined   -Scope CurrentUser   # undo
 - [x] One-click presets in the Windows GUI
 - [x] Keyboard access in the Windows GUI
 - [x] Brave Origin on Linux: detected as its own channel, its removed features shown inert
+- [x] Brave Origin on Windows: detected beside regular Brave or alone, its removed features shown inert
 
 ---
 

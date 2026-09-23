@@ -8,7 +8,7 @@ which one is wrong.
 
 import re
 
-from test_slimbrave import LINUX_MOD, MAC_MOD, ROOT
+from test_slimbrave import LINUX_MOD, MAC_MOD, ROOT, ps1_origin_builtin_keys
 
 AUDIT = (ROOT / "AUDIT.md").read_text(encoding="utf-8")
 GLYPHS = ("✅", "⚠️", "⛔", "❌", "💀", "🕓")
@@ -122,6 +122,8 @@ def test_origin_builtin_keys_are_exactly_the_guarded_brave_rows():
             sorted(set(mod.ORIGIN_BUILTIN_KEYS) ^ guarded))
         for key in mod.ORIGIN_BUILTIN_KEYS:
             assert f"`{key}`" in ORIGIN_TEXT, f"{key} not named in the Origin section"
+    # SlimBrave.ps1 keeps its own copy of the set for the Windows build of Origin
+    assert ps1_origin_builtin_keys() == guarded, sorted(ps1_origin_builtin_keys() ^ guarded)
     unguarded_brave = {k for k, row in KEY_ROWS.items()
                        if k in WRITTEN and row.get("Dispatch", "").startswith("map, unguarded")}
     assert not unguarded_brave & set(LINUX_MOD.ORIGIN_BUILTIN_KEYS)
@@ -140,7 +142,8 @@ def test_ledger_names_the_key_sections():
     assert ledger is not None, "verification ledger missing"
     sections = {row["Section"] for row in ledger}
     for needed in ("Brave-specific keys", "Chromium-inherited keys",
-                   "Brave Origin on Linux", "Considered and rejected"):
+                   "Brave Origin on Linux", "Brave Origin on Windows",
+                   "Considered and rejected"):
         assert needed in sections, needed
     for row in ledger:
         assert re.fullmatch(r"\d{4}-\d{2}-\d{2}.*", row["Last verified"]), row
