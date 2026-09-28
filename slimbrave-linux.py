@@ -38,8 +38,9 @@ POLICY_FILE = os.path.join(POLICY_DIR, "slimbrave.json")
 # Directories a `--policy-file` argument is permitted to target. The flag
 # runs with root, so an unvalidated path combined with `--reset` would let a
 # permissive sudoers rule delete arbitrary files (e.g. `--policy-file
-# /etc/shadow --reset`). Chromium only reads policies from these locations,
-# so legitimate use does not need to point anywhere else.
+# /etc/shadow --reset`). Legitimate use needs no other path. Brave reads
+# Linux policies only from /etc/brave/policies; it never reads Chromium's
+# /etc/chromium/policies, which this list still accepts.
 ALLOWED_POLICY_DIRS = (
     "/etc/brave/policies/managed",
     "/etc/chromium/policies/managed",
@@ -348,9 +349,10 @@ def detect_brave():
     # /usr/bin/brave-origin-stable symlink and its postinst registers the
     # bare brave-origin alternative, the same way regular Brave gets
     # brave-browser-stable; the beta and nightly debs ship their launcher
-    # symlink directly. No Flatpak or Snap of Origin exists (Flathub carries
-    # only com.brave.Browser, the Snap store only brave), so there is
-    # nothing else to probe.
+    # symlink directly. There is no official Flatpak or Snap of Origin
+    # (Flathub carries only com.brave.Browser, the Snap store only brave;
+    # unofficial Origin Flatpaks are not probed, though one of them,
+    # io.github.shyvortex.BraveOrigin, reads host policy).
     if not found_any:
         for name in ("brave-origin-stable", "brave-origin",
                      "brave-origin-beta", "brave-origin-nightly"):
@@ -506,19 +508,19 @@ CATEGORIES = [
         "features": [
             {"name": "Disable Metrics Reporting", "key": "MetricsReportingEnabled", "value": False, "desc": "Stops Brave from sending anonymous usage statistics and crash reports to Brave's servers."},
 
-            {"name": "Disable Safe Browsing Reporting", "key": "SafeBrowsingExtendedReportingEnabled", "value": False, "desc": "Stops extended Safe Browsing reports (details about suspicious pages and downloads) from being sent to Google. Safe Browsing protection itself stays on."},
+            {"name": "Disable Safe Browsing Reporting (no effect in current Brave)", "key": "SafeBrowsingExtendedReportingEnabled", "value": False, "desc": "Locks extended Safe Browsing reports (details about suspicious pages and downloads sent to Google) off. No effect in current Brave: Chromium no longer reads this setting and Brave already keeps extended reporting off, so it is kept only as a lock. Safe Browsing protection itself stays on."},
 
             {"name": "Disable URL Data Collection", "key": "UrlKeyedAnonymizedDataCollectionEnabled", "value": False, "desc": "Stops URL-keyed anonymized data collection, which reports the URLs you visit to improve suggestion and safety features."},
 
             {"name": "Disable P3A Analytics", "key": "BraveP3AEnabled", "value": False, "desc": "Disables P3A (Privacy-Preserving Product Analytics), Brave's anonymized product usage telemetry."},
 
-            {"name": "Disable Stats Ping", "key": "BraveStatsPingEnabled", "value": False, "desc": "Stops the daily usage ping that counts this install in Brave's active-user statistics."},
+            {"name": "Disable Stats Ping", "key": "BraveStatsPingEnabled", "value": False, "desc": "Stops the daily usage ping that counts this install in Brave's active-user statistics, plus the search-engine usage counts it carries and the referral-code check."},
 
-            {"name": "Limit Variations to Critical Fixes", "key": "ChromeVariations", "value": 1, "group": "variations", "desc": "Restricts Brave's remote experiment seed (Griffin) to critical security and stability fixes, instead of the full set of A/B experiments. The safe choice of the two. Mutually exclusive with Disable Variations."},
+            {"name": "Limit Variations to Critical Fixes", "key": "ChromeVariations", "value": 1, "group": "variations", "desc": "Restricts Brave's remote experiment seed (Griffin) to studies Brave marks critical, instead of the full set of A/B experiments. None applies to current Brave, so this currently acts like Disable Variations but would let through any it marks later. Mutually exclusive with Disable Variations."},
 
-            {"name": "Disable Variations / Griffin Experiments", "key": "ChromeVariations", "value": 2, "group": "variations", "desc": "Blocks the remote experiment seed entirely, so Brave can no longer flip features in your installed browser from its servers. This also blocks the emergency killswitches Brave uses to turn off a broken or unsafe feature - pick Limit Variations to Critical Fixes unless you accept that. Mutually exclusive with Limit Variations to Critical Fixes."},
+            {"name": "Disable Variations / Griffin Experiments", "key": "ChromeVariations", "value": 2, "group": "variations", "desc": "Blocks the remote experiment seed entirely, so Brave can no longer flip features in your installed browser from its servers. Unlike Limit Variations to Critical Fixes, it would also refuse an emergency fix Brave marks critical; none applies to current Brave, so the two currently behave alike. Mutually exclusive with Limit Variations to Critical Fixes."},
 
-            {"name": "Disable Enhanced Spell Check", "key": "SpellCheckServiceEnabled", "value": False, "group": "spellcheck", "desc": "Stops enhanced spell check, which sends the text you type in web forms to Google's servers to be checked. Offline spell checking keeps working. Mutually exclusive with Disable Spellcheck, which turns spell checking off altogether and makes this row do nothing."},
+            {"name": "Disable Enhanced Spell Check", "key": "SpellCheckServiceEnabled", "value": False, "group": "spellcheck", "desc": "Locks off enhanced spell check, which sends what you type in web forms to Google. Brave already ships it off with no setting to turn it on; offline spell checking keeps working. Mutually exclusive with Disable Spellcheck, which turns spell checking off altogether and makes this row do nothing."},
 
         ],
     },
@@ -531,9 +533,9 @@ CATEGORIES = [
 
             {"name": "Disable Autofill (Credit Cards)", "key": "AutofillCreditCardEnabled", "value": False, "desc": "Stops Brave from saving and auto-filling credit card numbers in web forms."},
 
-            {"name": "Disable Password Manager", "key": "PasswordManagerEnabled", "value": False, "desc": "Disables the built-in password manager (no save prompts, no autofill). Recommended if you use a dedicated password manager."},
+            {"name": "Disable Password Manager", "key": "PasswordManagerEnabled", "value": False, "desc": "Stops the built-in password manager from offering to save or generate passwords. Passwords already saved still autofill. Recommended if you use a dedicated password manager."},
 
-            {"name": "Disable Password Leak Detection", "key": "PasswordLeakDetectionEnabled", "value": False, "desc": "Stops the online check that compares your saved credentials against known breach lists. Defense in depth if you audit passwords with your own manager instead."},
+            {"name": "Disable Password Leak Detection", "key": "PasswordLeakDetectionEnabled", "value": False, "desc": "Locks off the online check of your credentials against known breach lists, which runs after you sign in to a site and when you edit a saved login. Brave already ships it off; this keeps it off."},
 
             {"name": "Disable Browser Sign-in", "key": "BrowserSignin", "value": 0, "desc": "Prevents signing in to the browser itself with an account."},
 
@@ -551,15 +553,15 @@ CATEGORIES = [
 
             {"name": "Disable QUIC Protocol", "key": "QuicAllowed", "value": False, "desc": "Disables the QUIC (HTTP/3) transport so all traffic uses TCP. Useful when a firewall or filter can't inspect QUIC; may slightly slow some Google sites."},
 
-            {"name": "Disable Network Prediction (Prefetch)", "key": "NetworkPredictionOptions", "value": 2, "desc": "Stops Brave from pre-resolving DNS and pre-connecting to links it guesses you might click, so no network requests are made for pages you never visit."},
+            {"name": "Disable Network Prediction (Prefetch)", "key": "NetworkPredictionOptions", "value": 2, "desc": "Stops Brave from pre-resolving DNS and pre-connecting to links it guesses you might click, so no network requests are made for pages you never visit. Brave already defaults to this; the policy locks it."},
 
             {"name": "Block Third Party Cookies", "key": "BlockThirdPartyCookies", "value": True, "desc": "Blocks cookies set by domains other than the site you are visiting. Can break some embedded logins."},
 
-            {"name": "Block Payment Method Probing", "key": "PaymentMethodQueryEnabled", "value": False, "desc": "Stops sites from querying whether you have payment methods saved (canMakePayment) - they are always told none are available."},
+            {"name": "Block Payment Method Probing", "key": "PaymentMethodQueryEnabled", "value": False, "desc": "Stops sites from learning whether you have payment methods saved: canMakePayment() always answers yes and hasEnrolledInstrument() always answers no, so neither reveals anything."},
 
-            {"name": "Disable Alternate Error Pages", "key": "AlternateErrorPagesEnabled", "value": False, "desc": "Uses plain local error pages for navigation errors instead of a web-service-assisted suggestion page. Belt-and-braces: Brave already ships this off."},
+            {"name": "Disable Alternate Error Pages (no effect in Brave)", "key": "AlternateErrorPagesEnabled", "value": False, "desc": "No effect in Brave: Brave never runs the web-service helper for navigation errors that this setting controls, and keeps captive-portal (Wi-Fi sign-in page) detection on either way. Kept as a lock; Brave already ships it off."},
 
-            {"name": "Block Remote Debugging", "key": "RemoteDebuggingAllowed", "value": False, "desc": "Blocks the remote debugging port and pipe, the interface automation tools use to drive the browser and read your cookies and logged-in sessions. Disable Developer Tools does not cover this. Breaks Puppeteer, Playwright and brave://inspect."},
+            {"name": "Block Remote Debugging", "key": "RemoteDebuggingAllowed", "value": False, "desc": "Blocks the remote debugging port and pipe, the interface automation tools use to drive the browser and read your cookies and logged-in sessions. Disable Developer Tools does not cover this. Breaks Puppeteer, Playwright and the brave://inspect remote-debugging toggle. No restart needed."},
 
             {"name": "Disable DNS Interception Probes", "key": "DNSInterceptionChecksEnabled", "value": False, "desc": "Stops Brave from resolving three random hostnames at startup and again on every network change to detect a hijacking DNS provider. Those lookups are visible to your ISP or DoH resolver and mark each launch."},
 
@@ -583,7 +585,7 @@ CATEGORIES = [
 
             {"name": "Web Serial Access", "key": "DefaultSerialGuardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK, "desc": "Sets the default for sites opening serial ports. Block removes the prompt and breaks in-browser microcontroller and device programming tools; Ask keeps the prompt. Chromium has no Allow state for this key."},
 
-            {"name": "WebHID Access", "key": "DefaultWebHidGuardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK, "desc": "Sets the default for sites talking to human interface devices. Block removes the prompt and may break security keys and gamepad configurators that use WebHID rather than WebAuthn. Chromium has no Allow state for this key."},
+            {"name": "WebHID Access", "key": "DefaultWebHidGuardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK, "desc": "Sets the default for sites talking to human interface devices. Block removes the prompt, cuts Brave Wallet's own Ledger hardware-wallet connection, and may break security keys and gamepad configurators that use WebHID rather than WebAuthn. Chromium has no Allow state for this key."},
 
             {"name": "Local Font Enumeration", "key": "DefaultLocalFontsSetting", "value": 2, "choices": CHOICES_ASK_BLOCK, "desc": "Sets the default for sites asking which fonts are installed on your machine - a strong fingerprinting signal that Shields' font protections don't cover. Blocking rarely breaks anything outside web design tools. Chromium has no Allow state for this key."},
 
@@ -598,9 +600,9 @@ CATEGORIES = [
         "features": [
             {"name": "Force Google SafeSearch", "key": "ForceGoogleSafeSearch", "value": True, "desc": "Forces SafeSearch on for all Google searches. Mainly useful for parental controls."},
 
-            {"name": "Filter Adult Content (SafeSites)", "key": "SafeSitesFilterBehavior", "value": 1, "desc": "Sends every URL you navigate to - including URLs loaded inside frames - to Google's Safe Search API to be classified, and blocks anything rated adult. This is a remote lookup, not a local filter. Mainly useful for parental controls."},
+            {"name": "Filter Adult Content (SafeSites)", "key": "SafeSitesFilterBehavior", "value": 1, "desc": "Sends the address of every page and frame you load (without query string or fragment) to Google's Safe Search API to be rated, so adult pages can be blocked. This is a remote lookup, not a local filter, and whether it blocks anything in Brave is unverified. Mainly useful for parental controls."},
 
-            {"name": "Disable Guest Mode", "key": "BrowserGuestModeEnabled", "value": False, "desc": "Removes guest browsing sessions. Closes the loophole where a guest window bypasses profile-level restrictions and history."},
+            {"name": "Disable Guest Mode", "key": "BrowserGuestModeEnabled", "value": False, "desc": "Removes guest browsing sessions: off-the-record windows that keep no history and run without your profile's extensions. Disable Incognito Mode does not remove them. These policies still apply inside guest windows."},
 
             {"name": "Block All Extensions", "key": "ExtensionInstallBlocklist", "value": ["*"], "desc": "Blocks installation of every extension and disables ones already installed. For lockdown/parental setups - a proxy or VPN extension would bypass DNS filtering."},
 
@@ -615,7 +617,7 @@ CATEGORIES = [
     {
         "name": "Brave Features",
         "features": [
-            {"name": "Disable Brave Rewards", "key": "BraveRewardsDisabled", "value": True, "desc": "Removes Brave Rewards and BAT ads from the browser UI."},
+            {"name": "Disable Brave Rewards", "key": "BraveRewardsDisabled", "value": True, "desc": "Removes Brave Rewards and keeps Brave's ads service off, so no sponsored New Tab Page images or notification ads. Brave Search's own result ads are not affected."},
 
             {"name": "Disable Brave Wallet", "key": "BraveWalletDisabled", "value": True, "desc": "Disables the built-in cryptocurrency wallet and hides its UI."},
 
@@ -623,9 +625,9 @@ CATEGORIES = [
 
             {"name": "Disable Brave AI Chat", "key": "BraveAIChatEnabled", "value": False, "desc": "Disables Leo, Brave's built-in AI assistant, and removes it from the sidebar and address bar."},
 
-            {"name": "Disable Local AI (On-Device Models, Brave 1.94+)", "key": "BraveLocalAIEnabled", "value": False, "desc": "Stops Brave from downloading and running on-device AI models and from building an AI index of your browsing history. Separate from Brave AI Chat - disabling Leo does not cover this. Needs Brave 1.94 or newer - that is current stable, so most installs already have it; older versions ignore the key. Takes effect after a browser restart."},
+            {"name": "Disable Local AI (On-Device Models, Brave 1.94+, off by default on Release)", "key": "BraveLocalAIEnabled", "value": False, "desc": "Stops Brave from downloading and running on-device AI models and from building an AI index of your browsing history. Separate from Brave AI Chat - disabling Leo does not cover this. Off by default on Release and Beta (Nightly downloads the model); this keeps it off if Brave or you turn it on. Needs Brave 1.94 or newer; older versions ignore the key. Takes effect after a browser restart."},
 
-            {"name": "Disable Brave Shields", "key": "BraveShieldsDisabledForUrls", "value": ["https://*", "http://*"], "group": "shields", "desc": "Turns Shields OFF for every site: no ad blocking, no tracker blocking. Also makes Enforce Ad Blocking, Enforce Fingerprinting Protection, Force HTTPS Upgrades and Cap Referrers do nothing, because Brave skips all four wherever Shields are off. Almost nobody wants this - it exists for kiosk/testing setups. Mutually exclusive with Force Shields On."},
+            {"name": "Disable Brave Shields", "key": "BraveShieldsDisabledForUrls", "value": ["https://*", "http://*"], "group": "shields", "desc": "Turns Shields OFF for every site: no ad blocking, no tracker blocking. Every Shields & Content Protection row, Strip Tracking URL Parameters and Reduce Language Fingerprinting then do nothing; De-AMP, Debouncing and Global Privacy Control keep working. Almost nobody wants this - it exists for kiosk/testing setups. Mutually exclusive with Force Shields On."},
 
             {"name": "Force Shields On (All Sites)", "key": "BraveShieldsEnabledForUrls", "value": ["https://*", "http://*"], "group": "shields", "desc": "Locks Shields ON for every site; the per-site Shields toggle stops working. Mutually exclusive with Disable Brave Shields."},
 
@@ -633,7 +635,7 @@ CATEGORIES = [
 
             {"name": "Disable Brave Talk", "key": "BraveTalkDisabled", "value": True, "desc": "Disables Brave Talk video calls."},
 
-            {"name": "Disable Brave Playlist", "key": "BravePlaylistEnabled", "value": False, "desc": "Disables the Playlist feature for saving and playing media in the sidebar."},
+            {"name": "Disable Brave Playlist (off by default on Release)", "key": "BravePlaylistEnabled", "value": False, "desc": "Disables the Playlist feature for saving and playing media in the sidebar. Playlist is off by default on Release and Beta (on in Nightly); this keeps it off if Brave or you turn it on."},
 
             {"name": "Disable Web Discovery", "key": "BraveWebDiscoveryEnabled", "value": False, "desc": "Stops Brave from anonymously contributing pages you visit to the Brave Search index (Web Discovery Project)."},
 
@@ -643,20 +645,20 @@ CATEGORIES = [
 
             {"name": "Disable Sync", "key": "SyncDisabled", "value": True, "desc": "Disables Brave Sync, which shares bookmarks, history, and settings across devices via a sync chain."},
 
-            {"name": "Disable Email Aliases", "key": "EmailAliasesEnabled", "value": False, "desc": "Disables the Email Aliases feature for generating throwaway email addresses."},
+            {"name": "Disable Email Aliases", "key": "EmailAliasesEnabled", "value": False, "desc": "Disables the Email Aliases feature for generating throwaway email addresses, which current Brave releases turn on."},
 
         ],
     },
     {
-        # Brave 1.84+ content-protection enforcers (fingerprinting
-        # protection also works on 1.83). These pin Brave's own privacy
+        # Brave 1.86+ content-protection enforcers (fingerprinting
+        # protection also works on 1.85). These pin Brave's own privacy
         # defaults as managed policy so neither the user nor a malicious
         # page/extension can quietly weaken them.
         "name": "Shields & Content Protection",
         "features": [
-            {"name": "Enforce Ad Blocking", "key": "DefaultBraveAdblockSetting", "value": 2, "desc": "Pins Brave's ad and tracker blocking on as managed policy, so it can't be lowered in settings or per-site."},
+            {"name": "Enforce Ad Blocking", "key": "DefaultBraveAdblockSetting", "value": 2, "desc": "Pins Brave's network ad and tracker blocking on as managed policy, so it can't be lowered in settings or per site. Cosmetic filtering (element hiding, scriptlets) is not locked, and sites with Shields off are not covered."},
 
-            {"name": "Enforce Fingerprinting Protection", "key": "DefaultBraveFingerprintingV2Setting", "value": 3, "desc": "Pins Shields fingerprinting protection on as managed policy, so sites can't be exempted from it."},
+            {"name": "Enforce Fingerprinting Protection", "key": "DefaultBraveFingerprintingV2Setting", "value": 3, "desc": "Pins Shields fingerprinting protection on as managed policy, so it can't be turned off per site. Per-API exceptions (Brave's compatibility list or your own Shields toggles) still apply, and sites with Shields off are not covered."},
 
             {"name": "Force HTTPS Upgrades (Strict)", "key": "DefaultBraveHttpsUpgradeSetting", "value": 2, "desc": "Always upgrades connections to HTTPS. Sites that can't serve HTTPS show a warning page instead of silently falling back to HTTP."},
 
@@ -679,10 +681,10 @@ CATEGORIES = [
 
             {"name": "Disable Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": False, "group": "hwaccel", "desc": "Forces GPU acceleration off. This is a departure from Brave's default and costs rendering performance and battery, so use it only when the GPU path is itself the problem: flickering or artifacts from a faulty driver, a VM or RDP session with no usable GPU, or corruption while screen sharing. Takes effect after a browser restart."},
 
-            {"name": "Disable Media Router (Cast)", "key": "EnableMediaRouter", "value": False, "desc": "Disables the Google Cast media router and its background device discovery on the local network. Takes effect after a browser restart."},
+            {"name": "Disable Media Router (Cast)", "key": "EnableMediaRouter", "value": False, "desc": "Disables the Google Cast media router and its background device discovery on the local network. Takes effect after a browser restart. On a profile first opened under this policy, Cast stays off after it is removed until the Media Router toggle in brave://settings/extensions is turned back on and Brave restarted."},
 
 
-            {"name": "Disable Shopping List", "key": "ShoppingListEnabled", "value": False, "desc": "Disables the price-tracking shopping list feature."},
+            {"name": "Disable Shopping List (no effect in Brave)", "key": "ShoppingListEnabled", "value": False, "desc": "Locks the price-tracking shopping list off. No effect in Brave: the feature is switched off and needs a Google sign-in Brave does not have. Kept as a lock in case that changes."},
 
             {"name": "Always Open PDF Externally", "key": "AlwaysOpenPdfExternally", "value": True, "desc": "Downloads PDF files and opens them in your system PDF viewer instead of the built-in viewer."},
 
@@ -696,7 +698,7 @@ CATEGORIES = [
 
             {"name": "Disable Default Browser Prompt", "key": "DefaultBrowserSettingEnabled", "value": False, "desc": "Stops Brave from asking to become your default browser."},
 
-            {"name": "Disable Developer Tools", "key": "DeveloperToolsAvailability", "value": 2, "desc": "Blocks DevTools (F12) and extension debugging everywhere. Don't enable this if you do web development."},
+            {"name": "Disable Developer Tools", "key": "DeveloperToolsAvailability", "value": 2, "desc": "Blocks DevTools (F12) and extension debugging everywhere, and turns extension Developer mode off (no Load unpacked). Don't enable this if you do web development."},
 
             {"name": "Disable Wayback Machine", "key": "BraveWaybackMachineEnabled", "value": False, "desc": "Stops Brave from offering an archive.org snapshot when a page returns 404."},
 
@@ -920,13 +922,13 @@ def read_json_file(path):
 # ---------------------------------------------------------------------------
 # Profile-prefs repair
 #
-# Brave/Chromium writes managed `*ForUrls` content-setting policies through
-# to the user's profile Preferences file. Removing the policy from the
-# managed location does NOT roll those entries back — the profile keeps
-# the per-URL exceptions forever, so unchecking "Disable Brave Shields"
-# leaves shields stuck off. This function scrubs the specific patterns
-# SlimBrave writes (`http://*,*` and `https://*,*`) from the profile
-# prefs, repairing the leak.
+# Some profiles carry braveShields exceptions for exactly the patterns the
+# "Disable Brave Shields" row writes (`http://*,*` and `https://*,*`), left
+# behind after that policy was applied and removed; while there they keep
+# Shields off after the row is unchecked. Brave does not write the managed
+# policy into Preferences (policy content settings stay in memory), and no
+# writer of these entries has been identified, so this scrub is a guard for
+# profiles that carry them, not a fix for a known cause.
 # ---------------------------------------------------------------------------
 
 
@@ -1121,7 +1123,7 @@ def _scrub_one_prefs(pref_path):
 
 
 def repair_brave_prefs(installations=None):
-    """Remove SlimBrave-leaked Shields exceptions across all given channels.
+    """Remove the leaked Shields exceptions across all given channels.
 
     Returns (removed_count, brave_was_running).
     """

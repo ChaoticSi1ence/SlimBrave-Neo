@@ -168,20 +168,20 @@ function Test-ListPolicyIsExactly {
 $telemetryFeatures = @(
     @{ Name = "Disable Metrics Reporting"; Key = "MetricsReportingEnabled"; Value = 0; Type = "DWord"
        Tip = "Stops Brave from sending anonymous usage statistics and crash reports to Brave's servers." },
-    @{ Name = "Disable Safe Browsing Reporting"; Key = "SafeBrowsingExtendedReportingEnabled"; Value = 0; Type = "DWord"
-       Tip = "Stops extended Safe Browsing reports (details about suspicious pages and downloads) from being sent to Google. Safe Browsing protection itself stays on." },
+    @{ Name = "Disable Safe Browsing Reporting (no effect in current Brave)"; Key = "SafeBrowsingExtendedReportingEnabled"; Value = 0; Type = "DWord"
+       Tip = "Locks extended Safe Browsing reports (details about suspicious pages and downloads sent to Google) off. No effect in current Brave: Chromium no longer reads this setting and Brave already keeps extended reporting off, so it is kept only as a lock. Safe Browsing protection itself stays on." },
     @{ Name = "Disable URL Data Collection"; Key = "UrlKeyedAnonymizedDataCollectionEnabled"; Value = 0; Type = "DWord"
        Tip = "Stops URL-keyed anonymized data collection, which reports the URLs you visit to improve suggestion and safety features." },
     @{ Name = "Disable P3A Analytics"; Key = "BraveP3AEnabled"; Value = 0; Type = "DWord"
        Tip = "Disables P3A (Privacy-Preserving Product Analytics), Brave's anonymized product usage telemetry." },
     @{ Name = "Disable Stats Ping"; Key = "BraveStatsPingEnabled"; Value = 0; Type = "DWord"
-       Tip = "Stops the daily usage ping that counts this install in Brave's active-user statistics." },
+       Tip = "Stops the daily usage ping that counts this install in Brave's active-user statistics, plus the search-engine usage counts it carries and the referral-code check." },
     @{ Name = "Limit Variations to Critical Fixes"; Key = "ChromeVariations"; Value = 1; Type = "DWord"; Group = "variations"
-       Tip = "Restricts Brave's remote experiment seed (Griffin) to critical security and stability fixes, instead of the full set of A/B experiments. The safe choice of the two. Mutually exclusive with Disable Variations." },
+       Tip = "Restricts Brave's remote experiment seed (Griffin) to studies Brave marks critical, instead of the full set of A/B experiments. None applies to current Brave, so this currently acts like Disable Variations but would let through any it marks later. Mutually exclusive with Disable Variations." },
     @{ Name = "Disable Variations / Griffin Experiments"; Key = "ChromeVariations"; Value = 2; Type = "DWord"; Group = "variations"
-       Tip = "Blocks the remote experiment seed entirely, so Brave can no longer flip features in your installed browser from its servers. This also blocks the emergency killswitches Brave uses to turn off a broken or unsafe feature - pick Limit Variations to Critical Fixes unless you accept that. Mutually exclusive with Limit Variations to Critical Fixes." },
+       Tip = "Blocks the remote experiment seed entirely, so Brave can no longer flip features in your installed browser from its servers. Unlike Limit Variations to Critical Fixes, it would also refuse an emergency fix Brave marks critical; none applies to current Brave, so the two currently behave alike. Mutually exclusive with Limit Variations to Critical Fixes." },
     @{ Name = "Disable Enhanced Spell Check"; Key = "SpellCheckServiceEnabled"; Value = 0; Type = "DWord"; Group = "spellcheck"
-       Tip = "Stops enhanced spell check, which sends the text you type in web forms to Google's servers to be checked. Offline spell checking keeps working. Mutually exclusive with Disable Spellcheck, which turns spell checking off altogether and makes this row do nothing." }
+       Tip = "Locks off enhanced spell check, which sends what you type in web forms to Google. Brave already ships it off with no setting to turn it on; offline spell checking keeps working. Mutually exclusive with Disable Spellcheck, which turns spell checking off altogether and makes this row do nothing." }
 )
 
 $privacyFeatures = @(
@@ -192,9 +192,9 @@ $privacyFeatures = @(
     @{ Name = "Disable Autofill (Credit Cards)"; Key = "AutofillCreditCardEnabled"; Value = 0; Type = "DWord"
        Tip = "Stops Brave from saving and auto-filling credit card numbers in web forms." },
     @{ Name = "Disable Password Manager"; Key = "PasswordManagerEnabled"; Value = 0; Type = "DWord"
-       Tip = "Disables the built-in password manager (no save prompts, no autofill). Recommended if you use a dedicated password manager." },
+       Tip = "Stops the built-in password manager from offering to save or generate passwords. Passwords already saved still autofill. Recommended if you use a dedicated password manager." },
     @{ Name = "Disable Password Leak Detection"; Key = "PasswordLeakDetectionEnabled"; Value = 0; Type = "DWord"
-       Tip = "Stops the online check that compares your saved credentials against known breach lists. Defense in depth if you audit passwords with your own manager instead." },
+       Tip = "Locks off the online check of your credentials against known breach lists, which runs after you sign in to a site and when you edit a saved login. Brave already ships it off; this keeps it off." },
     @{ Name = "Disable Browser Sign-in"; Key = "BrowserSignin"; Value = 0; Type = "DWord"
        Tip = "Prevents signing in to the browser itself with an account." },
     @{ Name = "Enable Global Privacy Control"; Key = "BraveGlobalPrivacyControlEnabled"; Value = 1; Type = "DWord"
@@ -212,15 +212,15 @@ $privacyFeatures = @(
     @{ Name = "Disable QUIC Protocol"; Key = "QuicAllowed"; Value = 0; Type = "DWord"
        Tip = "Disables the QUIC (HTTP/3) transport so all traffic uses TCP. Useful when a firewall or filter can't inspect QUIC; may slightly slow some Google sites." },
     @{ Name = "Disable Network Prediction (Prefetch)"; Key = "NetworkPredictionOptions"; Value = 2; Type = "DWord"
-       Tip = "Stops Brave from pre-resolving DNS and pre-connecting to links it guesses you might click, so no network requests are made for pages you never visit." },
+       Tip = "Stops Brave from pre-resolving DNS and pre-connecting to links it guesses you might click, so no network requests are made for pages you never visit. Brave already defaults to this; the policy locks it." },
     @{ Name = "Block Third Party Cookies"; Key = "BlockThirdPartyCookies"; Value = 1; Type = "DWord"
        Tip = "Blocks cookies set by domains other than the site you are visiting. Can break some embedded logins." },
     @{ Name = "Block Payment Method Probing"; Key = "PaymentMethodQueryEnabled"; Value = 0; Type = "DWord"
-       Tip = "Stops sites from querying whether you have payment methods saved (canMakePayment) - they are always told none are available." },
-    @{ Name = "Disable Alternate Error Pages"; Key = "AlternateErrorPagesEnabled"; Value = 0; Type = "DWord"
-       Tip = "Uses plain local error pages for navigation errors instead of a web-service-assisted suggestion page. Belt-and-braces: Brave already ships this off." },
+       Tip = "Stops sites from learning whether you have payment methods saved: canMakePayment() always answers yes and hasEnrolledInstrument() always answers no, so neither reveals anything." },
+    @{ Name = "Disable Alternate Error Pages (no effect in Brave)"; Key = "AlternateErrorPagesEnabled"; Value = 0; Type = "DWord"
+       Tip = "No effect in Brave: Brave never runs the web-service helper for navigation errors that this setting controls, and keeps captive-portal (Wi-Fi sign-in page) detection on either way. Kept as a lock; Brave already ships it off." },
     @{ Name = "Block Remote Debugging"; Key = "RemoteDebuggingAllowed"; Value = 0; Type = "DWord"
-       Tip = "Blocks the remote debugging port and pipe, the interface automation tools use to drive the browser and read your cookies and logged-in sessions. Disable Developer Tools does not cover this. Breaks Puppeteer, Playwright and brave://inspect." },
+       Tip = "Blocks the remote debugging port and pipe, the interface automation tools use to drive the browser and read your cookies and logged-in sessions. Disable Developer Tools does not cover this. Breaks Puppeteer, Playwright and the brave://inspect remote-debugging toggle. No restart needed." },
     @{ Name = "Disable DNS Interception Probes"; Key = "DNSInterceptionChecksEnabled"; Value = 0; Type = "DWord"
        Tip = "Stops Brave from resolving three random hostnames at startup and again on every network change to detect a hijacking DNS provider. Those lookups are visible to your ISP or DoH resolver and mark each launch." },
     @{ Name = "Require HTTPS for Basic Auth"; Key = "BasicAuthOverHttpEnabled"; Value = 0; Type = "DWord"
@@ -286,7 +286,7 @@ $sitePermissionFeatures = @(
            @{ Label = "Not managed"; Value = $null },
            @{ Label = "Ask";   Value = 3 },
            @{ Label = "Block"; Value = 2 })
-       Tip = "Sets the default for sites talking to human interface devices. Block removes the prompt and may break security keys and gamepad configurators that use WebHID rather than WebAuthn. Chromium has no Allow state for this key." },
+       Tip = "Sets the default for sites talking to human interface devices. Block removes the prompt, cuts Brave Wallet's own Ledger hardware-wallet connection, and may break security keys and gamepad configurators that use WebHID rather than WebAuthn. Chromium has no Allow state for this key." },
     @{ Name = "Local Font Enumeration"; Key = "DefaultLocalFontsSetting"; Value = 2; Type = "DWord"
        Choices = @(
            @{ Label = "Not managed"; Value = $null },
@@ -307,9 +307,9 @@ $accessControlFeatures = @(
     @{ Name = "Force Google SafeSearch"; Key = "ForceGoogleSafeSearch"; Value = 1; Type = "DWord"
        Tip = "Forces SafeSearch on for all Google searches. Mainly useful for parental controls." },
     @{ Name = "Filter Adult Content (SafeSites)"; Key = "SafeSitesFilterBehavior"; Value = 1; Type = "DWord"
-       Tip = "Sends every URL you navigate to - including URLs loaded inside frames - to Google's Safe Search API to be classified, and blocks anything rated adult. This is a remote lookup, not a local filter. Mainly useful for parental controls." },
+       Tip = "Sends the address of every page and frame you load (without query string or fragment) to Google's Safe Search API to be rated, so adult pages can be blocked. This is a remote lookup, not a local filter, and whether it blocks anything in Brave is unverified. Mainly useful for parental controls." },
     @{ Name = "Disable Guest Mode"; Key = "BrowserGuestModeEnabled"; Value = 0; Type = "DWord"
-       Tip = "Removes guest browsing sessions. Closes the loophole where a guest window bypasses profile-level restrictions and history." },
+       Tip = "Removes guest browsing sessions: off-the-record windows that keep no history and run without your profile's extensions. Disable Incognito Mode does not remove them. These policies still apply inside guest windows." },
     @{ Name = "Block All Extensions"; Key = "ExtensionInstallBlocklist"; Value = @("*"); Type = "List"
        Tip = "Blocks installation of every extension and disables ones already installed. For lockdown/parental setups - a proxy or VPN extension would bypass DNS filtering." },
     @{ Name = "Block Sideloaded (External) Extensions"; Key = "BlockExternalExtensions"; Value = 1; Type = "DWord"
@@ -320,14 +320,14 @@ $accessControlFeatures = @(
        Tip = "Every window opens in incognito: no history, and logins and most extensions stop persisting. Mutually exclusive with Disable Incognito Mode." }
 )
 
-# Brave 1.84+ content-protection enforcers (fingerprinting protection also
-# works on 1.83). These pin Brave's own privacy defaults as managed policy so
+# Brave 1.86+ content-protection enforcers (fingerprinting protection also
+# works on 1.85). These pin Brave's own privacy defaults as managed policy so
 # neither the user nor a malicious page/extension can quietly weaken them.
 $shieldsContentFeatures = @(
     @{ Name = "Enforce Ad Blocking"; Key = "DefaultBraveAdblockSetting"; Value = 2; Type = "DWord"
-       Tip = "Pins Brave's ad and tracker blocking on as managed policy, so it can't be lowered in settings or per-site." },
+       Tip = "Pins Brave's network ad and tracker blocking on as managed policy, so it can't be lowered in settings or per site. Cosmetic filtering (element hiding, scriptlets) is not locked, and sites with Shields off are not covered." },
     @{ Name = "Enforce Fingerprinting Protection"; Key = "DefaultBraveFingerprintingV2Setting"; Value = 3; Type = "DWord"
-       Tip = "Pins Shields fingerprinting protection on as managed policy, so sites can't be exempted from it." },
+       Tip = "Pins Shields fingerprinting protection on as managed policy, so it can't be turned off per site. Per-API exceptions (Brave's compatibility list or your own Shields toggles) still apply, and sites with Shields off are not covered." },
     @{ Name = "Force HTTPS Upgrades (Strict)"; Key = "DefaultBraveHttpsUpgradeSetting"; Value = 2; Type = "DWord"
        Tip = "Always upgrades connections to HTTPS. Sites that can't serve HTTPS show a warning page instead of silently falling back to HTTP." },
     @{ Name = "Cap Referrers (Strict Origin)"; Key = "DefaultBraveReferrersSetting"; Value = 2; Type = "DWord"; Group = "referrers"
@@ -340,25 +340,25 @@ $shieldsContentFeatures = @(
 
 $braveFeatures = @(
     @{ Name = "Disable Brave Rewards"; Key = "BraveRewardsDisabled"; Value = 1; Type = "DWord"
-       Tip = "Removes Brave Rewards and BAT ads from the browser UI." },
+       Tip = "Removes Brave Rewards and keeps Brave's ads service off, so no sponsored New Tab Page images or notification ads. Brave Search's own result ads are not affected." },
     @{ Name = "Disable Brave Wallet"; Key = "BraveWalletDisabled"; Value = 1; Type = "DWord"
        Tip = "Disables the built-in cryptocurrency wallet and hides its UI." },
     @{ Name = "Disable Brave VPN"; Key = "BraveVPNDisabled"; Value = 1; Type = "DWord"
        Tip = "Removes the Brave VPN feature and its upsell prompts." },
     @{ Name = "Disable Brave AI Chat"; Key = "BraveAIChatEnabled"; Value = 0; Type = "DWord"
        Tip = "Disables Leo, Brave's built-in AI assistant, and removes it from the sidebar and address bar." },
-    @{ Name = "Disable Local AI (On-Device Models, Brave 1.94+)"; Key = "BraveLocalAIEnabled"; Value = 0; Type = "DWord"
-       Tip = "Stops Brave from downloading and running on-device AI models and from building an AI index of your browsing history. Separate from Brave AI Chat - disabling Leo does not cover this. Needs Brave 1.94 or newer - that is current stable, so most installs already have it; older versions ignore the key. Takes effect after a browser restart." },
+    @{ Name = "Disable Local AI (On-Device Models, Brave 1.94+, off by default on Release)"; Key = "BraveLocalAIEnabled"; Value = 0; Type = "DWord"
+       Tip = "Stops Brave from downloading and running on-device AI models and from building an AI index of your browsing history. Separate from Brave AI Chat - disabling Leo does not cover this. Off by default on Release and Beta (Nightly downloads the model); this keeps it off if Brave or you turn it on. Needs Brave 1.94 or newer; older versions ignore the key. Takes effect after a browser restart." },
     @{ Name = "Disable Brave Shields"; Key = "BraveShieldsDisabledForUrls"; Value = @("https://*", "http://*"); Type = "List"; Group = "shields"
-       Tip = "Turns Shields OFF for every site: no ad blocking, no tracker blocking. Also makes Enforce Ad Blocking, Enforce Fingerprinting Protection, Force HTTPS Upgrades and Cap Referrers do nothing, because Brave skips all four wherever Shields are off. Almost nobody wants this - it exists for kiosk/testing setups. Mutually exclusive with Force Shields On." },
+       Tip = "Turns Shields OFF for every site: no ad blocking, no tracker blocking. Every Shields & Content Protection row, Strip Tracking URL Parameters and Reduce Language Fingerprinting then do nothing; De-AMP, Debouncing and Global Privacy Control keep working. Almost nobody wants this - it exists for kiosk/testing setups. Mutually exclusive with Force Shields On." },
     @{ Name = "Force Shields On (All Sites)"; Key = "BraveShieldsEnabledForUrls"; Value = @("https://*", "http://*"); Type = "List"; Group = "shields"
        Tip = "Locks Shields ON for every site; the per-site Shields toggle stops working. Mutually exclusive with Disable Brave Shields." },
     @{ Name = "Disable Brave News"; Key = "BraveNewsDisabled"; Value = 1; Type = "DWord"
        Tip = "Removes the Brave News feed from the new tab page." },
     @{ Name = "Disable Brave Talk"; Key = "BraveTalkDisabled"; Value = 1; Type = "DWord"
        Tip = "Disables Brave Talk video calls." },
-    @{ Name = "Disable Brave Playlist"; Key = "BravePlaylistEnabled"; Value = 0; Type = "DWord"
-       Tip = "Disables the Playlist feature for saving and playing media in the sidebar." },
+    @{ Name = "Disable Brave Playlist (off by default on Release)"; Key = "BravePlaylistEnabled"; Value = 0; Type = "DWord"
+       Tip = "Disables the Playlist feature for saving and playing media in the sidebar. Playlist is off by default on Release and Beta (on in Nightly); this keeps it off if Brave or you turn it on." },
     @{ Name = "Disable Web Discovery"; Key = "BraveWebDiscoveryEnabled"; Value = 0; Type = "DWord"
        Tip = "Stops Brave from anonymously contributing pages you visit to the Brave Search index (Web Discovery Project)." },
     @{ Name = "Disable Speedreader"; Key = "BraveSpeedreaderEnabled"; Value = 0; Type = "DWord"
@@ -368,7 +368,7 @@ $braveFeatures = @(
     @{ Name = "Disable Sync"; Key = "SyncDisabled"; Value = 1; Type = "DWord"
        Tip = "Disables Brave Sync, which shares bookmarks, history, and settings across devices via a sync chain." },
     @{ Name = "Disable Email Aliases"; Key = "EmailAliasesEnabled"; Value = 0; Type = "DWord"
-       Tip = "Disables the Email Aliases feature for generating throwaway email addresses." }
+       Tip = "Disables the Email Aliases feature for generating throwaway email addresses, which current Brave releases turn on." }
 )
 
 $perfFeatures = @(
@@ -381,9 +381,9 @@ $perfFeatures = @(
     @{ Name = "Disable Hardware Acceleration"; Key = "HardwareAccelerationModeEnabled"; Value = 0; Type = "DWord"; Group = "hwaccel"
        Tip = "Forces GPU acceleration off. This is a departure from Brave's default and costs rendering performance and battery, so use it only when the GPU path is itself the problem: flickering or artifacts from a faulty driver, a VM or RDP session with no usable GPU, or corruption while screen sharing. Takes effect after a browser restart." },
     @{ Name = "Disable Media Router (Cast)"; Key = "EnableMediaRouter"; Value = 0; Type = "DWord"
-       Tip = "Disables the Google Cast media router and its background device discovery on the local network. Takes effect after a browser restart." },
-    @{ Name = "Disable Shopping List"; Key = "ShoppingListEnabled"; Value = 0; Type = "DWord"
-       Tip = "Disables the price-tracking shopping list feature." },
+       Tip = "Disables the Google Cast media router and its background device discovery on the local network. Takes effect after a browser restart. On a profile first opened under this policy, Cast stays off after it is removed until the Media Router toggle in brave://settings/extensions is turned back on and Brave restarted." },
+    @{ Name = "Disable Shopping List (no effect in Brave)"; Key = "ShoppingListEnabled"; Value = 0; Type = "DWord"
+       Tip = "Locks the price-tracking shopping list off. No effect in Brave: the feature is switched off and needs a Google sign-in Brave does not have. Kept as a lock in case that changes." },
     @{ Name = "Always Open PDF Externally"; Key = "AlwaysOpenPdfExternally"; Value = 1; Type = "DWord"
        Tip = "Downloads PDF files and opens them in your system PDF viewer instead of the built-in viewer." },
     @{ Name = "Disable Translate"; Key = "TranslateEnabled"; Value = 0; Type = "DWord"
@@ -397,7 +397,7 @@ $perfFeatures = @(
     @{ Name = "Disable Default Browser Prompt"; Key = "DefaultBrowserSettingEnabled"; Value = 0; Type = "DWord"
        Tip = "Stops Brave from asking to become your default browser." },
     @{ Name = "Disable Developer Tools"; Key = "DeveloperToolsAvailability"; Value = 2; Type = "DWord"
-       Tip = "Blocks DevTools (F12) and extension debugging everywhere. Don't enable this if you do web development." },
+       Tip = "Blocks DevTools (F12) and extension debugging everywhere, and turns extension Developer mode off (no Load unpacked). Don't enable this if you do web development." },
     @{ Name = "Disable Wayback Machine"; Key = "BraveWaybackMachineEnabled"; Value = 0; Type = "DWord"
        Tip = "Stops Brave from offering an archive.org snapshot when a page returns 404." }
 )
@@ -883,11 +883,14 @@ function Test-DohTemplate([string]$Raw) {
 
 # ---------------------------------------------------------------------------
 # LEAKED SHIELDS EXCEPTIONS
-# Brave writes managed *ForUrls content-setting policies through to each
-# profile's Preferences file. Removing the policy from the registry does NOT
-# roll those entries back, so unticking "Disable Brave Shields" leaves shields
-# stuck off. They land in every profile of every installed channel, because the
-# registry policy applies to all of them.
+# Some profiles carry braveShields exceptions for exactly the patterns the
+# "Disable Brave Shields" row writes (http://*,* and https://*,*), left behind
+# after that policy was applied and removed; while there they keep Shields off
+# after the row is unticked. Brave does not write the managed policy into
+# Preferences (policy content settings stay in memory), and no writer of these
+# entries has been identified, so this is a guard for profiles that carry
+# them, not a fix for a known cause. Every profile of every installed channel
+# is checked.
 # ---------------------------------------------------------------------------
 function Repair-OneBravePrefs([string]$pref) {
     if (-not (Test-Path $pref)) { return 0 }
@@ -925,9 +928,8 @@ function Get-UserAppDataRoots {
 
       The single-user case is the fast path and comes first: the invoking
       user's own root. But the policy this tool writes lives in HKLM and
-      applies to every account on the machine, so on a shared PC the leaked
-      Shields exceptions land in every profile that opened Brave while it was
-      active - not just the one running this.
+      applies to every account on the machine, so the scrub covers every
+      account's profiles too - not just the one running this.
 
       Other users' roots come from the ProfileList registry key rather than by
       globbing C:\Users, because that key is the authoritative mapping and it
@@ -1041,7 +1043,7 @@ function Get-RepairNote($repair) {
         if ($repair.Users -gt 1) {
             return " Also cleaned $($repair.Removed) leaked profile pref$plural across $($repair.Users) user profiles on this PC."
         }
-        return " Also cleaned $($repair.Removed) leaked profile pref$plural that earlier SlimBrave versions wrote into your Brave profile."
+        return " Also cleaned $($repair.Removed) leaked profile pref$plural from your Brave profile."
     }
     return ""
 }
@@ -1896,8 +1898,8 @@ function New-BarButton([string]$label,[bool]$accent){
                     if($m -ne "unmanaged"){
                         $out.DnsMode=$m
                         # Only the modes that actually write it. off/automatic
-                        # with a template is a combination Apply drops and the
-                        # Linux CLI rejects outright.
+                        # with a template is a combination Apply drops; the
+                        # Linux CLI rejects only off with --doh-templates.
                         if($script:dnsState.Tmpl -and ($m -eq "custom" -or $m -eq "secure")){ $out.DnsTemplates=$script:dnsState.Tmpl }
                     }
                     # Set-Content failure is NON-terminating, so without this
