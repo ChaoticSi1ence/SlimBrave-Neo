@@ -34,6 +34,16 @@ def _load(alias, filename):
     return module
 
 
+def _load_as(platform, alias, filename):
+    """Load a module with sys.platform faked for the length of the import."""
+    real_platform = sys.platform
+    sys.platform = platform
+    try:
+        return _load(alias, filename)
+    finally:
+        sys.platform = real_platform
+
+
 def _load_as_darwin(alias, filename):
     """Load a module with sys.platform faked as macOS.
 
@@ -43,12 +53,7 @@ def _load_as_darwin(alias, filename):
     Faking the platform for the length of the import is what makes them
     testable off a Mac; the module body only defines things.
     """
-    real_platform = sys.platform
-    sys.platform = "darwin"
-    try:
-        return _load(alias, filename)
-    finally:
-        sys.platform = real_platform
+    return _load_as("darwin", alias, filename)
 
 
 LINUX_MOD = _load("slimbrave_linux", "slimbrave-linux.py")
@@ -1169,10 +1174,10 @@ def _ps1_feature_rows():
     return rows
 
 
-# BraveVPNDisabled is labelled "(no effect on Linux builds)" in
-# slimbrave-linux.py only: enable_brave_vpn omits is_linux, so brave-core
-# compiles the handler out there while Windows and macOS honour it. Compare
-# that row on its key alone.
+# BraveVPNDisabled is labelled "(no effect on Linux builds)" by both Python
+# scripts when they run on Linux: enable_brave_vpn omits is_linux, so
+# brave-core compiles the handler out there while Windows and macOS honour
+# it. Compare that row on its key alone.
 PS1_NAME_EXEMPT_KEYS = {"BraveVPNDisabled"}
 
 
@@ -3207,9 +3212,13 @@ def _py_identity(feat):
 
 
 # One script may append a platform note to a Tip - the PS1 text first, word
-# for word, then its own sentence. Linux's VPN row is the only case: the key
-# is honoured on Windows and macOS and compiled out of Linux builds.
+# for word, then its own sentence. The VPN row on Linux is the only case:
+# the key is honoured on Windows and macOS and compiled out of Linux builds,
+# so slimbrave-linux.py always carries the note and slimbrave-mac.py carries
+# it when it runs on Linux.
 PS1_DESC_SUFFIX_ALLOWED = {"slimbrave_linux": {("BraveVPNDisabled", 1)}}
+if sys.platform.startswith("linux"):
+    PS1_DESC_SUFFIX_ALLOWED["slimbrave_mac"] = {("BraveVPNDisabled", 1)}
 
 
 def test_every_python_row_carries_the_ps1_description(mod):
@@ -3238,6 +3247,25 @@ def test_the_mac_scripts_linux_only_row_carries_its_description():
     m = re.search(r'"key": "BackgroundModeEnabled", "value": False,\s*"desc": "([^"]*)"\}\)', text)
     assert m, "the Linux-only BackgroundModeEnabled row has no description"
     assert m.group(1) == _ps1_tips()[("BackgroundModeEnabled", 0)]
+
+
+def test_the_mac_scripts_vpn_row_says_it_does_nothing_on_linux():
+    """slimbrave-mac.py relabels BraveVPNDisabled at import time when it runs
+    on Linux, where the key is compiled out, and leaves it plain on macOS,
+    where it works. Import the file as both, so every runner checks both."""
+    def vpn(module):
+        return next(f for cat in module.CATEGORIES for f in cat["features"]
+                    if f["key"] == "BraveVPNDisabled")
+
+    on_linux = vpn(_load_as("linux", "slimbrave_mac_linux", "slimbrave-mac.py"))
+    linux_row = vpn(LINUX_MOD)
+    assert on_linux["name"] == linux_row["name"] == "Disable Brave VPN (no effect on Linux builds)"
+    assert on_linux["desc"] == linux_row["desc"]
+
+    on_mac = vpn(MAC_DARWIN)
+    ps1_name = next(name for name, key in _ps1_feature_rows() if key == "BraveVPNDisabled")
+    assert on_mac["name"] == ps1_name
+    assert on_mac["desc"] == _ps1_tips()[("BraveVPNDisabled", 1)]
 
 
 def test_build_rows_carries_the_description_onto_every_setting_row(mod):

@@ -149,10 +149,10 @@ It writes to exactly three places:
 | `HKCU:\SOFTWARE\Policies\BraveSoftware\Brave` (or `HKEY_USERS\<your SID>\...` when elevated as another account) | Values are only **removed** here, never written, so a leftover user-scope policy cannot override the machine one. |
 | `%LOCALAPPDATA%\BraveSoftware\<channel>\User Data\<profile>\Preferences`, for **every interactive account on the machine** | Only the `profile.content_settings.exceptions.braveShields` entries for `http://*,*` and `https://*,*` are deleted. Nothing else in the file is read back out or changed. Covers Stable/Beta/Nightly/Dev and every profile (`Default`, `Profile 1`, ...). The policy this tool writes is machine-wide, so the scrub follows it: your own profile root plus every other interactive account (`S-1-5-21-*` in the ProfileList registry key) whose Brave data is readable; the status line says when other users' profiles were cleaned. Skipped entirely while Brave is running, because Brave would overwrite the file on its next save. |
 
-Those Shields entries are a leak from **pre-1.x SlimBrave**, which wrote
-content-setting exceptions straight into the profile. Removing the registry
-policy does not roll them back, so unchecking "Disable Brave Shields" would
-otherwise leave Shields stuck off.
+Those Shields entries have no identified writer: no SlimBrave version writes
+them (the managed policy lives in memory and is never copied into the
+profile), but profiles that carry them keep Shields off after "Disable Brave
+Shields" is unticked, so every Apply and Reset removes them as a guard.
 
 **Reset is scoped to this tool's own keys.** It removes only the policy names
 SlimBrave Neo manages, in both scopes, and the two DNS values. It does not
