@@ -644,17 +644,15 @@ CATEGORIES = [
         "features": [
             {"name": "Disable Metrics Reporting", "key": "MetricsReportingEnabled", "value": False, "desc": "Stops Brave from sending anonymous usage statistics and crash reports to Brave's servers."},
 
-            {"name": "Disable Safe Browsing Reporting (no effect in current Brave)", "key": "SafeBrowsingExtendedReportingEnabled", "value": False, "desc": "Locks extended Safe Browsing reports (details about suspicious pages and downloads sent to Google) off. No effect in current Brave: Chromium no longer reads this setting and Brave already keeps extended reporting off, so it is kept only as a lock. Safe Browsing protection itself stays on."},
-
             {"name": "Disable URL Data Collection", "key": "UrlKeyedAnonymizedDataCollectionEnabled", "value": False, "desc": "Stops URL-keyed anonymized data collection, which reports the URLs you visit to improve suggestion and safety features."},
 
             {"name": "Disable P3A Analytics", "key": "BraveP3AEnabled", "value": False, "desc": "Disables P3A (Privacy-Preserving Product Analytics), Brave's anonymized product usage telemetry."},
 
-            {"name": "Disable Stats Ping", "key": "BraveStatsPingEnabled", "value": False, "desc": "Stops the daily usage ping that counts this install in Brave's active-user statistics, plus the search-engine usage counts it carries and the referral-code check."},
+            {"name": "Disable Stats Ping", "key": "BraveStatsPingEnabled", "value": False, "desc": "Stops the daily usage ping that counts this install in Brave's active-user statistics, plus the search-engine usage counts it carries and the referral-code check. P3A Analytics sends its own copy of the search counts until it is disabled too."},
 
-            {"name": "Limit Variations to Critical Fixes", "key": "ChromeVariations", "value": 1, "group": "variations", "desc": "Restricts Brave's remote experiment seed (Griffin) to studies Brave marks critical, instead of the full set of A/B experiments. None applies to current Brave, so this currently acts like Disable Variations but would let through any it marks later. Mutually exclusive with Disable Variations."},
+            {"name": "Limit Variations to Critical Fixes", "key": "ChromeVariations", "value": 1, "group": "variations", "desc": "Restricts Brave's remote experiment seed (Griffin) to studies Brave marks critical. None applies to current Brave, so this acts like Disable Variations but would let through any it marks later. Takes effect after a restart. Mutually exclusive with Disable Variations."},
 
-            {"name": "Disable Variations / Griffin Experiments", "key": "ChromeVariations", "value": 2, "group": "variations", "desc": "Blocks the remote experiment seed entirely, so Brave can no longer flip features in your installed browser from its servers. Unlike Limit Variations to Critical Fixes, it would also refuse an emergency fix Brave marks critical; none applies to current Brave, so the two currently behave alike. Mutually exclusive with Limit Variations to Critical Fixes."},
+            {"name": "Disable Variations / Griffin Experiments", "key": "ChromeVariations", "value": 2, "group": "variations", "desc": "Refuses every study in Brave's remote experiment seed (Griffin), so Brave can't flip features in your browser from its servers; the seed is still downloaded. Unlike Limit Variations, it also refuses fixes marked critical. Takes effect after a restart. Mutually exclusive with Limit Variations."},
 
             {"name": "Disable Enhanced Spell Check", "key": "SpellCheckServiceEnabled", "value": False, "group": "spellcheck", "desc": "Locks off enhanced spell check, which sends what you type in web forms to Google. Brave already ships it off with no setting to turn it on; offline spell checking keeps working. Mutually exclusive with Disable Spellcheck, which turns spell checking off altogether and makes this row do nothing."},
 
@@ -665,15 +663,15 @@ CATEGORIES = [
         "features": [
             {"name": "Disable Safe Browsing (security downgrade)", "key": "SafeBrowsingProtectionLevel", "value": 0, "desc": "Turns Safe Browsing fully off. Brave already routes these lookups through its own servers, so Google never sees the sites you visit even with Safe Browsing on - turning it off buys almost no privacy and costs you the phishing and malware warning pages. Excluded from every preset for that reason."},
 
-            {"name": "Disable Autofill (Addresses)", "key": "AutofillAddressEnabled", "value": False, "desc": "Stops Brave from saving and auto-filling street addresses in web forms."},
+            {"name": "Disable Autofill (Addresses)", "key": "AutofillAddressEnabled", "value": False, "desc": "Stops Brave from saving and auto-filling addresses and other contact details in web forms. Chromium has deprecated this policy, so brave://policy lists it as Deprecated, but Brave still applies it; its replacement (AutofillSettings) does not work in Brave yet."},
 
-            {"name": "Disable Autofill (Credit Cards)", "key": "AutofillCreditCardEnabled", "value": False, "desc": "Stops Brave from saving and auto-filling credit card numbers in web forms."},
+            {"name": "Disable Autofill (Credit Cards)", "key": "AutofillCreditCardEnabled", "value": False, "desc": "Stops Brave from saving and auto-filling credit card numbers in web forms. Chromium has deprecated this policy, so brave://policy lists it as Deprecated, but Brave still applies it; its replacement (AutofillSettings) does not work in Brave yet."},
 
             {"name": "Disable Password Manager", "key": "PasswordManagerEnabled", "value": False, "desc": "Stops the built-in password manager from offering to save or generate passwords. Passwords already saved still autofill. Recommended if you use a dedicated password manager."},
 
             {"name": "Disable Password Leak Detection", "key": "PasswordLeakDetectionEnabled", "value": False, "desc": "Locks off the online check of your credentials against known breach lists, which runs after you sign in to a site and when you edit a saved login. Brave already ships it off; this keeps it off."},
 
-            {"name": "Disable Browser Sign-in", "key": "BrowserSignin", "value": 0, "desc": "Prevents signing in to the browser itself with an account."},
+            {"name": "Disable Browser Sign-in", "key": "BrowserSignin", "value": 0, "desc": "Brave has no Google sign-in for the browser itself; in Brave this locks off 'Allow Google login for extensions' (brave://settings/extensions), which Brave already ships off. Brave Account sign-in is not affected. Takes effect after a restart."},
 
             {"name": "Enable Global Privacy Control", "key": "BraveGlobalPrivacyControlEnabled", "value": True, "desc": "Sends the GPC signal with every request, telling sites not to sell or share your data. Legally binding in some regions (e.g. under CCPA)."},
 
@@ -687,9 +685,9 @@ CATEGORIES = [
 
             {"name": "Disable WebRTC IP Leak", "key": "WebRtcIPHandling", "value": "disable_non_proxied_udp", "desc": "Restricts WebRTC to proxied connections so video/voice calls can't expose your real IP address behind a VPN or proxy."},
 
-            {"name": "Disable QUIC Protocol", "key": "QuicAllowed", "value": False, "desc": "Disables the QUIC (HTTP/3) transport so all traffic uses TCP. Useful when a firewall or filter can't inspect QUIC; may slightly slow some Google sites."},
+            {"name": "Disable QUIC Protocol", "key": "QuicAllowed", "value": False, "desc": "Disables QUIC (HTTP/3) for web requests so they use TCP (HTTP/2 or HTTP/1.1). Useful when a firewall or filter can't inspect QUIC; may slightly slow some Google sites. WebRTC calls and WebTransport still use UDP."},
 
-            {"name": "Disable Network Prediction (Prefetch)", "key": "NetworkPredictionOptions", "value": 2, "desc": "Stops Brave from pre-resolving DNS and pre-connecting to links it guesses you might click, so no network requests are made for pages you never visit. Brave already defaults to this; the policy locks it."},
+            {"name": "Disable Network Prediction (Prefetch)", "key": "NetworkPredictionOptions", "value": 2, "desc": "Stops Brave from fetching pages ahead of your click when a site's speculation rules or prerender hints ask for it, and from pre-connecting to your search engine. Brave already defaults to this; the policy locks it."},
 
             {"name": "Block Third Party Cookies", "key": "BlockThirdPartyCookies", "value": True, "desc": "Blocks cookies set by domains other than the site you are visiting. Can break some embedded logins."},
 
@@ -699,9 +697,9 @@ CATEGORIES = [
 
             {"name": "Block Remote Debugging", "key": "RemoteDebuggingAllowed", "value": False, "desc": "Blocks the remote debugging port and pipe, the interface automation tools use to drive the browser and read your cookies and logged-in sessions. Disable Developer Tools does not cover this. Breaks Puppeteer, Playwright and the brave://inspect remote-debugging toggle. No restart needed."},
 
-            {"name": "Disable DNS Interception Probes", "key": "DNSInterceptionChecksEnabled", "value": False, "desc": "Stops Brave from resolving three random hostnames at startup and again on every network change to detect a hijacking DNS provider. Those lookups are visible to your ISP or DoH resolver and mark each launch."},
+            {"name": "Disable DNS Interception Probes (no effect in Brave)", "key": "DNSInterceptionChecksEnabled", "value": False, "desc": "No effect in Brave: Chromium has not made these three random-hostname lookups by default since version 97. They run only when the IntranetRedirectBehavior policy is set to 3, which SlimBrave never writes. Kept as a lock in case that changes."},
 
-            {"name": "Require HTTPS for Basic Auth", "key": "BasicAuthOverHttpEnabled", "value": False, "desc": "Refuses HTTP Basic authentication over plain HTTP so your username and password are never sent in the clear. Breaks logins on legacy routers, printers and other appliances that only serve HTTP."},
+            {"name": "Require HTTPS for Basic Auth", "key": "BasicAuthOverHttpEnabled", "value": False, "desc": "Refuses HTTP Basic authentication over plain HTTP so your username and password are never sent in the clear. Breaks logins on legacy routers, printers and other appliances that only serve HTTP, and plain-HTTP proxies that use Basic authentication."},
 
         ],
     },
@@ -736,13 +734,11 @@ CATEGORIES = [
         "features": [
             {"name": "Force Google SafeSearch", "key": "ForceGoogleSafeSearch", "value": True, "desc": "Forces SafeSearch on for all Google searches. Mainly useful for parental controls."},
 
-            {"name": "Filter Adult Content (SafeSites)", "key": "SafeSitesFilterBehavior", "value": 1, "desc": "Sends the address of every page and frame you load (without query string or fragment) to Google's Safe Search API to be rated, so adult pages can be blocked. This is a remote lookup, not a local filter, and whether it blocks anything in Brave is unverified. Mainly useful for parental controls."},
-
             {"name": "Disable Guest Mode", "key": "BrowserGuestModeEnabled", "value": False, "desc": "Removes guest browsing sessions: off-the-record windows that keep no history and run without your profile's extensions. Disable Incognito Mode does not remove them. These policies still apply inside guest windows."},
 
             {"name": "Block All Extensions", "key": "ExtensionInstallBlocklist", "value": ["*"], "desc": "Blocks installation of every extension and disables ones already installed. For lockdown/parental setups - a proxy or VPN extension would bypass DNS filtering."},
 
-            {"name": "Block Sideloaded (External) Extensions", "key": "BlockExternalExtensions", "value": True, "desc": "Blocks extensions that other programs install for you through the Windows registry or a drop-in file, which is how bundleware gets in. Extensions you install yourself keep working, so this rarely breaks anything."},
+            {"name": "Block Sideloaded (External) Extensions", "key": "BlockExternalExtensions", "value": True, "desc": "Blocks extensions other programs install through the Windows registry or a drop-in file (how bundleware gets in) and removes any added that way at the next launch, even ones you approved. Extensions you install yourself keep working."},
 
             {"name": "Disable Incognito Mode", "key": "IncognitoModeAvailability", "value": 1, "group": "incognito", "desc": "Removes private browsing entirely - no incognito windows can be opened. Mutually exclusive with Force Incognito Mode."},
 
@@ -753,7 +749,7 @@ CATEGORIES = [
     {
         "name": "Brave Features",
         "features": [
-            {"name": "Disable Brave Rewards", "key": "BraveRewardsDisabled", "value": True, "desc": "Removes Brave Rewards and keeps Brave's ads service off, so no sponsored New Tab Page images or notification ads. Brave Search's own result ads are not affected."},
+            {"name": "Disable Brave Rewards", "key": "BraveRewardsDisabled", "value": True, "desc": "Removes Brave Rewards and keeps Brave's ads service off, so no sponsored New Tab Page images or notification ads. Brave Search's own result ads are not affected, and an anonymous background fetch of the ads encryption key still runs unless Limit or Disable Variations is also set."},
 
             {"name": "Disable Brave Wallet", "key": "BraveWalletDisabled", "value": True, "desc": "Disables the built-in cryptocurrency wallet and hides its UI."},
 
@@ -761,7 +757,7 @@ CATEGORIES = [
 
             {"name": "Disable Brave AI Chat", "key": "BraveAIChatEnabled", "value": False, "desc": "Disables Leo, Brave's built-in AI assistant, and removes it from the sidebar and address bar."},
 
-            {"name": "Disable Local AI (On-Device Models, Brave 1.94+, off by default on Release)", "key": "BraveLocalAIEnabled", "value": False, "desc": "Stops Brave from downloading and running on-device AI models and from building an AI index of your browsing history. Separate from Brave AI Chat - disabling Leo does not cover this. Off by default on Release and Beta (Nightly downloads the model); this keeps it off if Brave or you turn it on. Needs Brave 1.94 or newer; older versions ignore the key. Takes effect after a browser restart."},
+            {"name": "Disable Local AI (On-Device Models, Brave 1.94+, off by default on Release)", "key": "BraveLocalAIEnabled", "value": False, "desc": "Stops Brave from downloading and running on-device AI models and from building an AI index of your browsing history. Separate from Brave AI Chat - disabling Leo does not cover this. Off by default on Release (on in Nightly and half of Beta); this keeps it off if Brave or you turn it on. Needs Brave 1.94 or newer; older versions ignore the key. Takes effect after a browser restart."},
 
             {"name": "Disable Brave Shields", "key": "BraveShieldsDisabledForUrls", "value": ["https://*", "http://*"], "group": "shields", "desc": "Turns Shields OFF for every site: no ad blocking, no tracker blocking. Every Shields & Content Protection row, Strip Tracking URL Parameters and Reduce Language Fingerprinting then do nothing; De-AMP, Debouncing and Global Privacy Control keep working. Almost nobody wants this - it exists for kiosk/testing setups. Mutually exclusive with Force Shields On."},
 
@@ -769,7 +765,7 @@ CATEGORIES = [
 
             {"name": "Disable Brave News", "key": "BraveNewsDisabled", "value": True, "desc": "Removes the Brave News feed from the new tab page."},
 
-            {"name": "Disable Brave Talk", "key": "BraveTalkDisabled", "value": True, "desc": "Disables Brave Talk video calls."},
+            {"name": "Disable Brave Talk", "key": "BraveTalkDisabled", "value": True, "desc": "Hides Brave Talk (private video calls) from the new tab page, sidebar and menus. The talk.brave.com website itself still works."},
 
             {"name": "Disable Brave Playlist (off by default on Release)", "key": "BravePlaylistEnabled", "value": False, "desc": "Disables the Playlist feature for saving and playing media in the sidebar. Playlist is off by default on Release and Beta (on in Nightly); this keeps it off if Brave or you turn it on."},
 
@@ -779,7 +775,7 @@ CATEGORIES = [
 
             {"name": "Disable Tor", "key": "TorDisabled", "value": True, "desc": "Removes the 'New private window with Tor' option."},
 
-            {"name": "Disable Sync", "key": "SyncDisabled", "value": True, "desc": "Disables Brave Sync, which shares bookmarks, history, and settings across devices via a sync chain."},
+            {"name": "Disable Sync", "key": "SyncDisabled", "value": True, "desc": "Disables Brave Sync, which shares bookmarks, history, and settings across devices via a sync chain. Applying it also removes this device from its chain, so once the policy is lifted it has to rejoin with a sync code from another device."},
 
             {"name": "Disable Email Aliases", "key": "EmailAliasesEnabled", "value": False, "desc": "Disables the Email Aliases feature for generating throwaway email addresses, which current Brave releases turn on."},
 
@@ -796,9 +792,9 @@ CATEGORIES = [
 
             {"name": "Enforce Fingerprinting Protection", "key": "DefaultBraveFingerprintingV2Setting", "value": 3, "desc": "Pins Shields fingerprinting protection on as managed policy, so it can't be turned off per site. Per-API exceptions (Brave's compatibility list or your own Shields toggles) still apply, and sites with Shields off are not covered."},
 
-            {"name": "Force HTTPS Upgrades (Strict)", "key": "DefaultBraveHttpsUpgradeSetting", "value": 2, "desc": "Always upgrades connections to HTTPS. Sites that can't serve HTTPS show a warning page instead of silently falling back to HTTP."},
+            {"name": "Force HTTPS Upgrades (Strict; not enforced on Brave's HTTPS-First rollout)", "key": "DefaultBraveHttpsUpgradeSetting", "value": 2, "desc": "Always upgrades connections to HTTPS; sites that can't serve it show a warning instead of falling back to HTTP. Not enforced where Brave moved to Chromium's HTTPS-First mode (Beta, Nightly, part of Release), which it only presets once; Limit or Disable Variations keeps it enforced."},
 
-            {"name": "Cap Referrers (Strict Origin)", "key": "DefaultBraveReferrersSetting", "value": 2, "group": "referrers", "desc": "Caps the Referer header at the origin for cross-site requests, locked as managed policy. Mutually exclusive with Allow Permissive Referrers."},
+            {"name": "Cap Referrers (Strict Origin)", "key": "DefaultBraveReferrersSetting", "value": 2, "group": "referrers", "desc": "Caps the Referer header at the origin for cross-origin requests, locked as managed policy. Mutually exclusive with Allow Permissive Referrers."},
 
             {"name": "Allow Permissive Referrers (unsafe-url)", "key": "DefaultBraveReferrersSetting", "value": 1, "group": "referrers", "desc": "Sends your full referring URL cross-origin when a site requests it. Compatibility escape hatch only - this weakens privacy and is excluded from every preset. Mutually exclusive with Cap Referrers."},
 
@@ -835,7 +831,7 @@ CATEGORIES = [
 
             {"name": "Disable Printing", "key": "PrintingEnabled", "value": False, "desc": "Disables printing from the browser entirely (including Ctrl+P)."},
 
-            {"name": "Disable Default Browser Prompt", "key": "DefaultBrowserSettingEnabled", "value": False, "desc": "Stops Brave from asking to become your default browser."},
+            {"name": "Disable Default Browser Prompt", "key": "DefaultBrowserSettingEnabled", "value": False, "desc": "Stops Brave from asking to become your default browser. Brave's first-run welcome page still offers Set as default, and clicking it with this policy on crashes Brave: choose Skip there."},
 
             {"name": "Disable Developer Tools", "key": "DeveloperToolsAvailability", "value": 2, "desc": "Blocks DevTools (F12) and extension debugging everywhere, and turns extension Developer mode off (no Load unpacked). Don't enable this if you do web development."},
 

@@ -8,7 +8,6 @@
             "*"
         ],
         "ForceGoogleSafeSearch": true,
-        "SafeSitesFilterBehavior": 1,
         "BrowserSignin": 0,
         "BraveDeAmpEnabled": true,
         "BraveDebouncingEnabled": true,
