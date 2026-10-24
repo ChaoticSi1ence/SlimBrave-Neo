@@ -1736,7 +1736,6 @@ V195_PRESET_POLICIES = {
         "PaymentMethodQueryEnabled": False,
         "QuicAllowed": False,
         "RemoteDebuggingAllowed": False,
-        "SafeBrowsingExtendedReportingEnabled": False,
         "ShoppingListEnabled": False,
         "SpellCheckServiceEnabled": False,
         "SyncDisabled": True,
@@ -1761,7 +1760,6 @@ V195_PRESET_POLICIES = {
         "DefaultBrowserSettingEnabled": False,
         "DnsOverHttpsMode": "automatic",
         "MetricsReportingEnabled": False,
-        "SafeBrowsingExtendedReportingEnabled": False,
         "ShoppingListEnabled": False,
         "SpellCheckServiceEnabled": False,
         "UrlKeyedAnonymizedDataCollectionEnabled": False,
@@ -1816,7 +1814,6 @@ V195_PRESET_POLICIES = {
         "PrintingEnabled": False,
         "QuicAllowed": False,
         "RemoteDebuggingAllowed": False,
-        "SafeBrowsingExtendedReportingEnabled": False,
         "SearchSuggestEnabled": False,
         "ShoppingListEnabled": False,
         "SpellcheckEnabled": False,
@@ -1875,7 +1872,6 @@ V195_PRESET_POLICIES = {
         "ForceGoogleSafeSearch": True,
         "IncognitoModeAvailability": 1,
         "RemoteDebuggingAllowed": False,
-        "SafeSitesFilterBehavior": 1,
         "SyncDisabled": True,
         "TorDisabled": True,
     },
@@ -3534,8 +3530,8 @@ def test_draw_frames_the_list_the_pane_and_the_buttons_at_80x24(mod, monkeypatch
     assert frame[bottom][0] == "+" and frame[bottom][78] == "+"
     assert set(frame[bottom][1:78]) <= {"-"}          # nothing to scroll: no marker
     first = frame[lay["list_top"]]
-    assert first[0] == "|" and first[78] == "|" and "0/8 on" in first
-    assert first.index("0/8 on") + len("0/8 on") <= 77   # counter inside the edge
+    assert first[0] == "|" and first[78] == "|" and "0/7 on" in first
+    assert first.index("0/7 on") + len("0/7 on") <= 77   # counter inside the edge
     assert frame[lay["pane_top"]].startswith("+- Description ")
     assert frame[lay["btn_top"]][0] == "+" and frame[lay["btn_top"] + 2][0] == "+"
     assert " Import " in frame[lay["btn_y"]] and frame[lay["btn_y"]][0] == "|"

@@ -1,7 +1,6 @@
 {
     "Features": {
         "MetricsReportingEnabled": false,
-        "SafeBrowsingExtendedReportingEnabled": false,
         "UrlKeyedAnonymizedDataCollectionEnabled": false,
         "BraveP3AEnabled": false,
         "BraveStatsPingEnabled": false,
