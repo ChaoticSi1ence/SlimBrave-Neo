@@ -1240,8 +1240,10 @@ def test_ps1_feature_table_matches_python(mod):
 # ---------------------------------------------------------------------------
 
 EXPECTED_CHOICES = {
+    # No Ask: under a managed 3 a site can prompt but never show a
+    # notification (AUDIT.md, DefaultNotificationsSetting row).
     "DefaultNotificationsSetting": [
-        ("Not managed", None), ("Allow", 1), ("Ask", 3), ("Block", 2)],
+        ("Not managed", None), ("Allow", 1), ("Block", 2)],
     "DefaultGeolocationSetting": [
         ("Not managed", None), ("Allow", 1), ("Ask", 3), ("Block", 2)],
     "DefaultSensorsSetting": [
@@ -1393,9 +1395,11 @@ def test_choice_key_absent_from_config_is_not_managed(mod, tmp_path, key):
 # keys specifically: it is a legal member of the *other* three enums, so a
 # row that quietly shares the wrong choices list would accept it here.
 # True is included because `True == 1` in Python — a JSON `true` must not
-# select "Allow" on the three keys that have one.
+# select "Allow" on the three keys that have one. 3 is listed for
+# notifications, the one key that is legal at 3 but offers no Ask.
 ILLEGAL_CHOICE_CASES = (
     [(key, 1) for key in ASK_BLOCK_ONLY_KEYS]
+    + [("DefaultNotificationsSetting", 3)]
     + [(key, bad) for key in sorted(EXPECTED_CHOICES)
        for bad in (0, 4, "2", True)]
 )
@@ -1431,10 +1435,12 @@ def test_illegal_choice_value_in_existing_policy_is_ignored(mod):
     mod.sync_rows_with_policy(rows, {
         "DefaultWebUsbGuardSetting": 1,     # no Allow member on this key
         "DefaultGeolocationSetting": 3,     # legal: Ask
+        "DefaultNotificationsSetting": 3,   # legal in Chromium, not offered
     })
     choices = _choice_rows(mod, rows)
     assert choices["DefaultWebUsbGuardSetting"]["selected"] == 0
     assert _selected_label(choices["DefaultGeolocationSetting"]) == "Ask"
+    assert _selected_label(choices["DefaultNotificationsSetting"]) == "Not managed"
 
 
 def test_legacy_array_config_selects_block(mod, tmp_path):
@@ -1712,9 +1718,10 @@ def test_ps1_embedded_preset_names_match_files():
 # them as inert (AUDIT.md, Considered and rejected), the lock-only
 # HardwareAccelerationModeEnabled left Performance Focused, and
 # AlwaysOpenPdfExternally left Maximum Privacy (its empty plugin list
-# undoes the preset's fingerprinting pin); those pins changed in the same
-# commit. A pin change outside such a deliberate curation is the drift
-# this table exists to catch.
+# undoes the preset's fingerprinting pin), and ChromeVariations left
+# Balanced Privacy and Developer (AUDIT ChromeVariations row); those pins
+# changed in the same commit. A pin change outside such a deliberate
+# curation is the drift this table exists to catch.
 #
 # Captured by loading the v1.9.5 scripts (git tag v1.9.5) and running
 # import_settings + _build_policy over the presets as they ship. The values
@@ -1745,7 +1752,6 @@ V195_PRESET_POLICIES = {
         "BraveWalletDisabled": True,
         "BraveWebDiscoveryEnabled": False,
         "BrowserSignin": 0,
-        "ChromeVariations": 1,
         "DefaultBrowserSettingEnabled": False,
         "DnsOverHttpsMode": "automatic",
         "MetricsReportingEnabled": False,
@@ -1770,7 +1776,6 @@ V195_PRESET_POLICIES = {
         "BraveTalkDisabled": True,
         "BraveVPNDisabled": True,
         "BraveWalletDisabled": True,
-        "ChromeVariations": 1,
         "DefaultBrowserSettingEnabled": False,
         "DnsOverHttpsMode": "automatic",
         "MetricsReportingEnabled": False,
@@ -1951,6 +1956,31 @@ def test_v195_snapshot_pins_the_tri_state_keys():
     assert maximum["DefaultSensorsSetting"] == 2
 
 
+def test_variations_rows_name_their_griffin_costs(mod):
+    """Either ChromeVariations row also refuses what Brave ships only through
+    Griffin (AUDIT ChromeVariations row); both descriptions must say so, and
+    neither may claim that no critical study applies."""
+    rows = {f["value"]: f for c in mod.CATEGORIES for f in c["features"]
+            if f["key"] == "ChromeVariations"}
+    assert set(rows) == {1, 2}
+    for row in rows.values():
+        assert "WebGL/WebGPU fingerprint masking" in row["desc"], row["name"]
+        assert "Google sign-in fix" in row["desc"], row["name"]
+        assert "None applies" not in row["desc"], row["name"]
+    assert "brave://flags" in rows[1]["desc"]
+
+
+def test_strict_https_preset_keeps_its_variations_partner():
+    """DefaultBraveHttpsUpgradeSetting = 2 stays enforced on Brave's
+    HTTPS-First rollout only while ChromeVariations filters
+    TransitionToUpstreamHttpsUpgrade (AUDIT DefaultBraveHttpsUpgradeSetting
+    row), so a preset that promises strict HTTPS must carry one of its rows."""
+    for preset in PRESETS:
+        features = json.loads(preset.read_text(encoding="utf-8"))["Features"]
+        if features.get("DefaultBraveHttpsUpgradeSetting") == 2:
+            assert features.get("ChromeVariations") in (1, 2), preset.name
+
+
 # ---------------------------------------------------------------------------
 # Collapsible sections, live filter and paging
 #
@@ -2100,11 +2130,11 @@ def test_header_counts_track_checkboxes_and_choice_rows(mod):
     _, ctl_total = mod.header_counts(rows, controls)
     _check_feature(mod, rows, "Block All Extensions")
     assert mod.header_counts(rows, controls) == (1, ctl_total)
-    # Selecting "Ask" counts, exactly like ticking a checkbox - under its
+    # Selecting a choice counts, exactly like ticking a checkbox - under its
     # own Site Permissions header, not the Access Controls one next door.
     site = _header_index(mod, rows, "Site Permissions")
     _, site_total = mod.header_counts(rows, site)
-    notifications = _set_choice(mod, rows, "Web Notifications", "Ask")
+    notifications = _set_choice(mod, rows, "Web Notifications", "Allow")
     assert mod.header_counts(rows, site) == (1, site_total)
     assert mod.header_counts(rows, controls) == (1, ctl_total)
     # Cycling back to "Not managed" takes the count away again.
@@ -2414,11 +2444,11 @@ def test_paging_branch_matches_the_helper_that_mirrors_it(script):
 def test_viewport_rows_leaves_room_for_the_chrome(mod):
     # Title, hints, the list box's two edges, the three-row button box and
     # the status line: eight rows. The description pane, when shown, takes
-    # its text lines (four at 80 and 120 columns) plus two edges on top.
+    # its text lines (four at 80 columns, three at 120) plus two edges on top.
     assert mod.viewport_rows(_FakeScreen(24, 80)) == 16
     assert mod.viewport_rows(_FakeScreen(24, 80), show_desc=True) == 10
     assert mod.viewport_rows(_FakeScreen(50, 120)) == 42
-    assert mod.viewport_rows(_FakeScreen(50, 120), show_desc=True) == 36
+    assert mod.viewport_rows(_FakeScreen(50, 120), show_desc=True) == 37
     # Never zero or negative, however small the terminal gets.
     assert mod.viewport_rows(_FakeScreen(6, 20)) == 1
     assert mod.viewport_rows(_FakeScreen(1, 20)) == 1
@@ -3279,10 +3309,12 @@ def test_build_rows_carries_the_description_onto_every_setting_row(mod):
 
 def test_pane_lines_follow_the_longest_description_at_that_width(mod):
     # At 80 columns the longest descriptions want five lines; the pane
-    # stops at four and they end in an ellipsis. From about 140 columns
-    # nothing needs more than three, and the list gets a row back.
+    # stops at four and they end in an ellipsis. At 100 they still want
+    # four. From about 120 columns nothing needs more than three, and the
+    # list gets a row back.
     assert mod.desc_pane_lines(80) == 4
-    assert mod.desc_pane_lines(120) == 4
+    assert mod.desc_pane_lines(100) == 4
+    assert mod.desc_pane_lines(120) == 3
     assert mod.desc_pane_lines(140) == 3
     assert mod.desc_pane_lines(20) == mod.DESC_PANE_MAX_LINES
 

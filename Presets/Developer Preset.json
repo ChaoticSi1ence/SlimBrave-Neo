@@ -13,7 +13,6 @@
         "BackgroundModeEnabled": false,
         "DefaultBrowserSettingEnabled": false,
         "BraveLocalAIEnabled": false,
-        "ChromeVariations": 1,
         "SpellCheckServiceEnabled": false
     },
     "DnsMode": "automatic"

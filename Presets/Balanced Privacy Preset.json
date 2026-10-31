@@ -31,7 +31,6 @@
         "RemoteDebuggingAllowed": false,
         "BasicAuthOverHttpEnabled": false,
         "BlockExternalExtensions": true,
-        "ChromeVariations": 1,
         "SpellCheckServiceEnabled": false
     },
     "DnsMode": "automatic"
