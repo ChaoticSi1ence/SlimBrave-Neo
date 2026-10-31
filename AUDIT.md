@@ -69,8 +69,10 @@ not append.
   service or flag changes. The rest is delivery plumbing. `SlimBrave.ps1`
   also deletes the user-scope copy
   (`HKU\<SID>` of the invoking user after its elevated relaunch, else `HKCU`)
-  of every key it manages, on Apply and Reset; an unticked or reset list
-  policy that is not exactly SlimBrave's is left alone in both scopes. Apply
+  of every key it manages, on Apply and Reset, except a list that is not
+  exactly SlimBrave's (as subkey values or as a JSON-array string): that is
+  left alone in the user scope, and in the machine scope too unless its row
+  is ticked. Apply
   and Reset also delete, from both scopes, the keys earlier versions wrote and
   this one no longer offers (`$script:retiredPolicies`:
   `AlternateErrorPagesEnabled` 0, `DNSInterceptionChecksEnabled` 0,
@@ -99,13 +101,15 @@ not append.
   `https://*,*` entries of `profile.content_settings.exceptions.braveShields`
   from each `Default` / `Profile *` `Preferences`. `SlimBrave.ps1` does this
   for the invoking account only (the `LOCALAPPDATA` its elevated relaunch
-  forwards) under `Brave-Browser{,-Beta,-Nightly,-Dev}`, skips any profile
-  reached through a junction or symbolic link, and does nothing while
-  `brave.exe` runs; the Python scripts do it only in the invoking user's home
-  (`$SUDO_USER`, else `$USER`), in a child process dropped to that user,
-  profile listing included, for the targeted channels, even while Brave runs,
-  with a warning that Brave will overwrite it, and name any profile they
-  could not read or rewrite. These scheme-wide
+  forwards) under `Brave-Browser{,-Beta,-Nightly,-Dev}` and
+  `Brave-Origin{,-Beta,-Nightly,-Dev}`, skips any profile reached through a
+  junction or symbolic link, and does nothing while `brave.exe` runs; the
+  Python scripts do it only in the invoking user's home (`$SUDO_USER`, else
+  `$USER`), in a child process dropped to that user, profile listing
+  included, for the targeted channels, even while Brave runs, with a warning
+  that Brave will overwrite it. All three count the profiles they could not
+  read or rewrite and name the folder to check, in the same words ('Failed
+  to clean N profiles; check ownership of ...'). These scheme-wide
   exceptions kept Shields off after the Shields list was removed; no
   SlimBrave version writes them itself (see Cross-cutting).
 - Three implementations kept in lockstep by tests: `SlimBrave.ps1` (Windows,
@@ -319,7 +323,7 @@ of `—` means the milestone was not recorded here — read it from the YAML.
 | BraveAIChatEnabled | ✅ | cr121 | bool | map, `ENABLE_AI_CHAT` | false = disable Leo; restart. Guard `enable_ai_chat = !is_brave_origin_branded`, so every regular build, Linux included. `IsAIChatEnabled` = `kAIChat` (on by default) **and** not managed `false` (`components/ai_chat/core/browser/utils.cc:102-106,131-134`; `kAIChat` at `components/ai_chat/core/common/features.cc:22,65-67`, both at `v1.98.64`); `false` removes the service (`browser/ai_chat/ai_chat_service_factory.cc:51`) and with it the sidebar item, toolbar button, omnibox provider, context menu, NTP input and `brave://leo-ai`. Does not cover on-device models (see BraveLocalAIEnabled), nor the browser-wide Brave WebMCP Tool Scripts component (`eingdhelnaolbpcdkgddekhifcjfkalf`): its registration reads only `kAIChat` and Blink `kWebMCP`, both on in code with no brave-core override, Griffin study or policy, and no pref (`chromium_src/chrome/browser/component_updater/registration.cc:64-70` at `v1.98.64`), so `EnsureInstalled` fetches it when missing (`components/web_mcp/core/browser/web_mcp_component_installer.cc:136-141`) and the periodic component update check keeps it current (`components/component_updater/component_updater_service.cc:438-466` at 156.0.8078.80). Nothing uses it under the policy: `WebMcpInjector` is built only behind `IsAllowedForContext` (`browser/ui/tabs/brave_tab_features.cc:92-99`). Only the rejected `ComponentUpdatesEnabled` stops the download; the description carries the caveat |
 | BraveLocalAIEnabled | ⚠️ feature off on Release | cr149 — **Brave 1.94**, branch-probed | bool | map, `ENABLE_LOCAL_AI` | false = unregister and uninstall the on-device model components, EmbeddingGemma (`components/local_ai/core/local_models_updater.cc:88-101,128-137`) and the speech models (`on_device_speech_models_component_installer.cc:134-140`), and make `IsHistoryEmbeddingsFeatureEnabled()` false (`rewrite/chrome/browser/history_embeddings/history_embeddings_utils.cc.yaml:42-45`): no vector index of history, no "Semantic history search" toggle in brave://settings/privacy, no history tool for Leo. **Feature off on Release:** history search needs `kHistoryEmbeddings`, off at 156.0.8078.48 and pinned off by brave-core (`rewrite/components/history_embeddings/core/history_embeddings_features.cc.yaml:7-13`); the speech models need `kBraveOnDeviceSpeechRecognition`, off in code (`components/local_ai/core/features.cc:10-11`, `v1.98.64`; same on `1.100.x` and master); Griffin's `BraveOnDeviceSpeechRecognitionStudy` (brave-variations#1942) enables it only on desktop Nightly 1.101+ (100%, `min_version: '156.1.101.1'`, no `policy_restriction`, so either `ChromeVariations` row filters it out), with no Beta or Release study. From 1.100 the speech model also needs the user opt-in `kOnDeviceSpeechModelEnabled` (default false), which this key's `false` clears along with the offer (`components/local_ai/core/on_device_speech_models_component_installer.cc:141-143` on `1.100.x`). Griffin turns `HistoryEmbeddings` on for desktop Nightly (100%) and Beta (50%, brave-variations#1936), with no Release study and no `policy_restriction`, so either `ChromeVariations` row filters both out; where it is on, EmbeddingGemma downloads at launch while indexing stays a per-profile opt-in. On Release the key only blocks a `brave://flags#brave-history-embeddings` opt-in. It is the only policy lever: Chromium's `HistorySearchSettings` and `GenAiDefaultSettings` never reach Brave. Separate buildflag (`ENABLE_LOCAL_AI`) and prefs from AI Chat. Restart for history search; the model registrars apply a change live; browser-wide. In five presets, all but Strict Parental Controls |
 | BraveShieldsDisabledForUrls | ✅ | cr107 | list | map, unguarded | scheme-wide patterns, see Cross-cutting; browser-wide; restart per YAML but applies live: Chromium's content-settings `PolicyProvider` re-reads the list on change (`components/content_settings/core/browser/content_settings_policy_provider.cc:451-455` at 156.0.8078.48). Where Shields are off, all five `DefaultBrave*` rows, `BraveTrackingQueryParametersFilteringEnabled` and `BraveReduceLanguageEnabled` do nothing; with `https://*` and `http://*` that is every web page. De-AMP, Debouncing and GPC have no Shields check and keep working. A policy Shields-off creates no Shields-down `COOKIES` rule, because only the pref provider's own `BRAVE_SHIELDS` rules feed them (`components/content_settings/core/browser/brave_content_settings_pref_provider.cc:1041-1042`). So third-party cookie blocking and `BlockThirdPartyCookies` keep working on listed sites. Ephemeral storage's tab-close cleanup does read the policy-aware Shields state and is skipped there (`browser/ephemeral_storage/ephemeral_storage_tab_helper.cc:231-242`, `components/ephemeral_storage/ephemeral_storage_service.cc:246-248`), as the DefaultBraveRemember1PStorageSetting row notes. Source-read, not runtime-tested |
-| BraveShieldsEnabledForUrls | ✅ | cr107 | list | map, unguarded | counterpart of the row above; browser-wide; restart per YAML but applies live. Pins Shields on for matched sites, and the ad-block, scripts, fingerprinting, cookie and storage controls grey out (`components/brave_shields/resources/panel_new/components/advanced_settings.tsx:85`). Their cookies are not pinned. The panel's main toggle stays clickable (`panel_new/components/main_card.tsx:84-87`) and, like the `IDC_TOGGLE_SHIELDS` command (`browser/ui/browser_commands.cc:509-525`), writes a user `BRAVE_SHIELDS` BLOCK with no managed check (`components/brave_shields/core/browser/brave_shields_utils.cc:220-226`). The policy outranks that rule for Shields. But `BravePrefProvider` turns every user Shields-down rule into a `COOKIES` ALLOW (Wildcard, site) rule (`components/content_settings/core/browser/brave_content_settings_pref_provider.cc:1041-1089`). That explicit setting lifts third-party cookie blocking on the site, voiding `BlockThirdPartyCookies` there, and gives third-party frames persistent rather than ephemeral storage (`chromium_src/components/content_settings/core/common/cookie_settings_base.cc:150-170,266-270`). The panel then reads the policy-aware state again and shows Shields on (`browser/ui/webui/brave_shields/shields_panel_data_handler.cc:314-316`), so it offers no way to remove the rule while the policy is set. The per-site HTTPS-upgrade dropdown does not grey out (`brave_shields_tab_helper.cc:425-441`), so a per-site HTTPS mode stays settable unless `DefaultBraveHttpsUpgradeSetting` is set too. It is the only key that stops a user dropping Shields per site, which would void every `DefaultBrave*` enforcer there. If the identical pattern is in both lists this one wins (`content_settings_policy_provider.cc:47-48`); the scripts keep the two rows mutually exclusive. Source-read, not runtime-tested |
+| BraveShieldsEnabledForUrls | ✅ | cr107 | list | map, unguarded | counterpart of the row above; browser-wide; restart per YAML but applies live. Pins Shields on for matched sites, and the ad-block, scripts, fingerprinting, cookie and storage controls grey out (`components/brave_shields/resources/panel_new/components/advanced_settings.tsx:85`). Their cookies are not pinned. The panel's main toggle stays clickable (`panel_new/components/main_card.tsx:84-87`) and, like the `IDC_TOGGLE_SHIELDS` command (`browser/ui/browser_commands.cc:509-525`), writes a user `BRAVE_SHIELDS` BLOCK with no managed check (`components/brave_shields/core/browser/brave_shields_utils.cc:220-226`). The policy outranks that rule for Shields. But `BravePrefProvider` turns every user Shields-down rule into a `COOKIES` ALLOW (Wildcard, site) rule (`components/content_settings/core/browser/brave_content_settings_pref_provider.cc:1041-1089`). That explicit setting lifts third-party cookie blocking on the site, voiding `BlockThirdPartyCookies` there, and gives third-party frames persistent rather than ephemeral storage (`chromium_src/components/content_settings/core/common/cookie_settings_base.cc:150-170,266-270`). The panel then reads the policy-aware state again and shows Shields on (`browser/ui/webui/brave_shields/shields_panel_data_handler.cc:314-316`), so it offers no way to remove the rule while the policy is set. The per-site HTTPS-upgrade dropdown does not grey out (`brave_shields_tab_helper.cc:425-441`), so a per-site HTTPS mode stays settable unless `DefaultBraveHttpsUpgradeSetting` is set too. It is the only key that stops a user dropping Shields per site, which would void every `DefaultBrave*` enforcer there. If the identical pattern is in both lists this one wins (`content_settings_policy_provider.cc:47-48`); the scripts keep the two rows mutually exclusive, and when an imported file or the policy on disk names both, all three keep this row, as Brave would. Source-read, not runtime-tested |
 | BraveNewsDisabled | ✅ | cr138 | bool | map, `ENABLE_BRAVE_NEWS` | true = disable; restart. Unset, News stays off until the user opts in on the new tab page (`brave.today.opted_in`, default `false`). `true` makes `brave_news::IsEnabled` false whatever the user chose (`components/brave_news/common/pref_names.cc:34-41`), so the feed is never fetched, and hides News on the new tab page, the RSS page action and its commands. Edge: the sidebar News item checks only `kBraveNewsSidebar` and the opt-in (`components/sidebar/browser/sidebar_service.cc:770-783`), so a profile that opted in before the policy keeps a button that opens an empty panel. `kBraveNewsNewUserOptIn`, which would opt every new profile in, is off by default with no study (see What's next). Source-read, not runtime-tested |
 | BraveTalkDisabled | ✅ | cr138 | bool | map, `ENABLE_BRAVE_TALK` | true = disable; restart. Removes Talk's browser entry points: the new tab page widget (`browser/ui/webui/brave_new_tab_page_refresh/new_tab_page_initializer.cc:242-244`), the sidebar item and the `IDC_SHOW_BRAVE_TALK` command (`browser/ui/brave_browser_command_controller.cc:398-402`). No navigation check reads the pref: `talk.brave.com` still opens as a website |
 | BravePlaylistEnabled | ⚠️ feature off on Release/Beta | cr139 | bool | map, `ENABLE_PLAYLIST` | **Key live, feature off outside Nightly.** `kPlaylist` is `FEATURE_DISABLED_BY_DEFAULT` on every non-iOS build (`components/playlist/core/common/features.cc:13-19`), `IsPlaylistAllowed()` needs feature **and** no policy `false` (`components/playlist/core/browser/utils.cc:18-29`), and the only enabling study, `DefaultPlaylistStudy`, is Nightly-only (no `policy_restriction`). `false` bites on Nightly and wherever the user turns on `brave://flags/#playlist`; on Release and Beta it is a guard. The YAML's "enabled by default" is wrong for desktop. Restart |
@@ -368,7 +372,7 @@ Dispatch for every row is `factory` unless the Notes say otherwise.
 | BackgroundModeEnabled | ⚠️ Win/Linux only | cr19 | bool | false | **Windows and Linux only** (`chrome.win:19-`, `chrome.linux:19-`; the factory entry sits under a Windows/Linux guard, 156.0.8078.48 `:2008-2012`); browser-wide (local state `background_mode.enabled`). Unmanaged default on (156.0.8078.80 `chrome/browser/background/extensions/background_mode_manager.cc:351`; no brave-core override). Background mode starts only while an enabled extension holds the `background` permission, or a hosted app has a background page (`background_application_list_model.cc:252-262`, `background_mode_manager.cc:825-828`), and no brave-core component extension does, so without a user-installed one the key only locks *Continue running background apps when Brave is closed* in Settings > System (`app/settings_brave_strings.grdp:331-333`; `chrome/browser/resources/settings/system_page/system_page.html.ts:15-19`). With one, false also stops Brave staying resident and, on Windows, registering to launch at sign-in (`background_mode_manager.cc:399-401,847-848`). `slimbrave-mac.py` also runs on Linux, so it builds the row only under `sys.platform.startswith("linux")`; on macOS a preset naming the key has it silently ignored |
 | AlwaysOpenPdfExternally | ✅ | cr55 | bool | true | pref `plugins.always_open_pdf_externally` (desktop only); true turns the PDF viewer off (156.0.8078.48 `chrome/browser/plugins/plugin_prefs.cc:52-54`), so a PDF downloads and opens only when the user opens it: auto-open needs *Always open in system viewer* (`download.open_pdf_in_system_reader`) or a user or `AutoOpenFileTypes` entry (156.0.8078.80 `chrome/browser/download/download_prefs.cc:492-506,618-626`), and Brave's `download.prompt_for_download` default (true, `browser/brave_profile_prefs.cc:222-223`) shows Save As first. No brave-core override. **Visible to sites:** `navigator.pdfViewerEnabled` turns false and `navigator.plugins`/`navigator.mimeTypes` go empty in every Shields mode, because Blink lists the PDF entries only while the viewer is available (156.0.8078.80 `third_party/blink/renderer/modules/plugins/dom_plugin_array.cc:56-67`, `navigator_plugins.cc:75-76`) and brave-core's plugin farbling runs inside that block (`patches/third_party-blink-renderer-modules-plugins-dom_plugin_array.cc.patch:9-10`); the per-site randomized list becomes a constant. In no preset for that reason |
 | TranslateEnabled | ✅ | cr12 | bool | false | Brave translates through its own `translate.brave.com`, not Google: `kUseBraveTranslateGo` is on by default (`components/translate/core/common/brave_translate_features.cc:13-14`) and brave-core's overrides of `translate_script.cc` and `translate_util.cc` point the script and requests there; Google is reached only under a test switch. Auto-translate is off (`kBraveEnableAutoTranslate`). A managed false also refuses manual translation (156.0.8078.48 `components/translate/core/browser/translate_prefs.cc:193-200`). The key removes the feature, not a Google data flow |
-| SpellcheckEnabled | ✅ | cr65 | bool | false | desktop only; mutually exclusive with SpellCheckServiceEnabled |
+| SpellcheckEnabled | ✅ | cr65 | bool | false | desktop only; mutually exclusive with SpellCheckServiceEnabled, which does nothing once this is false, so when an imported file or the policy on disk names both, all three keep this row |
 | SearchSuggestEnabled | ✅ | cr8 | bool | false | Brave registers the default false (`browser/brave_profile_prefs.cc:249-251`) but flips it to true for every regular profile when the desktop first run found an OS-locale region of AR, AT, BR, CA, DE, ES, FR, GB, IN, IT, MX or US; a locale with no region counts as US (`browser/search_engines/search_engine_provider_util.cc:35-38,140-164`). On those installs the key is what turns suggestions off, and it locks the toggle |
 | PrintingEnabled | ✅ | cr8 | bool | false | Also removes Save as PDF. The pref gates `PrintViewManager::GetPrintPreviewParams` (156.0.8078.80 `chrome/browser/printing/print_view_manager.cc:392-395`). Brave's print-preview extractor needs that call, so extraction fails with `PrinterSettingsInvalid` (`browser/screenshot/print_preview_extractor_internal.cc:406-410`); brave-core never reads `kPrintingEnabled`. Leo then cannot read docs.google.com, watermark.silverchair.com or scanned PDFs (text PDFs go through `PDFDocumentHelper`, `components/ai_chat/content/browser/associated_web_contents_content.cc:204-242,467-475`). The Screenshot tool's Full page fails silently on PDFs and those hosts (`browser/ui/screenshot/screenshot_controller.cc:283-290`; hosts `components/screenshot/content/pdf_utils.h:19-23`; the bubble passes `base::DoNothing()`, `browser/ui/views/toolbar/screenshot_bubble_view.cc:109`). Unlike with DeveloperToolsAvailability, the error resets the tool (`screenshot_controller.cc:328-334,462-469`). Leo's screenshots of ordinary pages use PaintPreview and still work. Maximum Privacy also writes `BraveAIChatEnabled` false, so there it loses Save as PDF and Full page on PDFs and the two hosts. Source-read, not runtime-tested |
 | DefaultBrowserSettingEnabled | ✅ | cr11 | bool | false | desktop only; browser-wide. Any managed value stops the startup default-browser prompt (156.0.8078.48 `chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt.cc:85-90`). `false` also replaces the *Make default* button in `brave://settings` with 'Brave cannot determine or set the default browser' (156.0.8078.80 `chrome/browser/resources/settings/default_browser_page/default_browser_page.ts:106-111`). Brave's `brave://welcome` opens only on first run (`browser/ui/startup/brave_startup_tab_provider_impl.cc:24-25`) and offers *Set as default* without reading `isDisabledByPolicy` (`components/brave_welcome_ui/components/welcome/index.tsx:37-38,95`). With this key false, the click hits the `CHECK(!DefaultBrowserIsDisabledByPolicy())` in `DefaultBrowserHandler::SetAsDefaultBrowser` (`chrome/browser/ui/webui/settings/settings_default_browser_handler.cc:126`) and crashes the browser — click *Skip*. The unlinked `brave://welcome-new` has the same unchecked step (`browser/resources/brave_welcome_page/components/welcome_step.tsx:27,56`). brave-browser#60038 (closed 2026-10-28) reports the crash at runtime on 1.97.59 for Linux. Its fix, brave-core#40997, hides the button under the policy on both pages, but only on 1.100.x and master (first tag `v1.100.41`), not on 1.98.x or 1.99.x |
@@ -713,14 +717,17 @@ Origin-specific code.
   `DefaultWindowManagementSetting` and `DefaultClipboardSetting`
   (`content_settings_registry.cc:354-355,374,384,403,534-535,544-545` at
   156.0.8078.80). This tool offers only the schema's values (for
-  notifications only 1 and 2, see its row): a value outside a key's legal
-  set is left unmanaged on import and named in the message, and a quoted
-  `"1"` or a `true` is rejected in all three implementations. A
-  fraction or exponent is not always rejected: the Python scripts accept only
-  a JSON integer, but `SlimBrave.ps1` also accepts a `[double]` and rounds it
-  — under PowerShell 7 `2.0`, `2e0` and `2.5`; under Windows PowerShell 5.1,
-  its elevated host, only exponent forms such as `2e0`, since `2.0` and `2.5`
-  arrive as `[decimal]` and are rejected (What's next). A managed
+  notifications only 1 and 2, see its row): on a choice row a value outside
+  the key's legal set is left unmanaged on import and named in the message.
+  Import also takes a value only in its policy's JSON type, in all three
+  implementations: an integer policy (every choice row, and the checkbox rows
+  for Variations, Incognito, the Safe Browsing level, Browser sign-in,
+  Developer Tools, Network Prediction, the JavaScript optimizer, YouTube
+  Restricted Mode, the five `DefaultBrave*` settings and, in `SlimBrave.ps1`
+  only, dynamic code) only a JSON integer, so a quoted `"1"`, a `true`, `2.0`
+  or `2e0` is refused and named; a boolean policy `true`/`false` or `0`/`1`
+  (Windows exports write 0/1); a list policy an array; a string policy a
+  string. A managed
   `Default*Setting` is a Wildcard/Wildcard rule in `PolicyProvider`
   (156.0.8078.80
   `components/content_settings/core/browser/content_settings_policy_provider.cc:270-275,687-690,703-713`).
@@ -1269,26 +1276,39 @@ Watch list, each with the trigger that turns it into work:
 - Tool fixes with no upstream trigger, open until chosen: (1) DoH parity —
   the Python scripts write and export a template with `automatic` and check
   only that a `custom`/`secure` template is non-empty; `SlimBrave.ps1` writes
-  one only with `custom`/`secure` and validates it as an absolute https URL
-  (`Test-DohTemplate`); pick one behaviour and test it. (2) Linux Origin
+  one only with `custom`/`secure` and validates each whitespace-separated
+  template with Chromium's own rule in `Test-DohTemplate`: balanced,
+  non-nested `{...}` sections, an https URL with a host once expanded, the
+  `dns` variable outside the host (`IsValidDohTemplate`,
+  `net/dns/public/dns_over_https_server_config.cc:47-71` at 156.0.8078.80);
+  pick one behaviour and test it, and make the Python check apply the same
+  rule. (2) Linux Origin
   detection: a Beta- or Nightly-only deb/rpm install also gets a stable
   `Origin` record, because the bare `brave-origin` alternative points at its
   launcher (see What the tool does with it). (3) macOS Origin: `MAC_CHANNELS`
   lacks `com.brave.Browser.origin{,.beta,.nightly}` (see Platform policy
-  locations). (4) Import names only values a row cannot take (off-enum choices;
-  in `SlimBrave.ps1` also a foreign list or an unknown `DnsMode`) and, in the
-  Python scripts, Origin built-ins, so a key that matches no row
-  (`AlternateErrorPagesEnabled`, `DNSInterceptionChecksEnabled`,
-  `MediaRecommendationsEnabled`, `SafeBrowsingExtendedReportingEnabled`,
-  `SafeSitesFilterBehavior`, `ShoppingListEnabled`, `BackgroundModeEnabled`
-  and `NetworkServiceSandboxEnabled` on macOS, or `DynamicCodeSettings` in
-  the Python scripts) is dropped without a word. (5)
-  `SlimBrave.ps1` import accepts a float for a choice
-  key and rounds it: under PowerShell 7 `2.0`, `2e0` and `2.5`; under Windows
-  PowerShell 5.1, the elevated relaunch host, only exponent forms such as
-  `2e0`, since `2.0` and `2.5` arrive as `[decimal]` and are rejected and
-  named (see Cross-cutting, Content-setting enums); the Python scripts reject
-  all of them. (6) macOS persist `on`: a re-Apply removes the installed
+  locations). (4) Import names the values a row cannot take: an off-enum
+  choice, a value outside its policy's JSON type (a `true` or `"2"` for an
+  integer policy, a string for a boolean or list policy), an unknown
+  `DnsMode`, and the dropped row of a contradictory exclusion group; in
+  `SlimBrave.ps1` also a foreign list. The Python scripts also name Origin
+  built-ins. A key that matches no row (`AlternateErrorPagesEnabled`,
+  `DNSInterceptionChecksEnabled`, `MediaRecommendationsEnabled`,
+  `SafeBrowsingExtendedReportingEnabled`, `SafeSitesFilterBehavior`,
+  `ShoppingListEnabled`, `BackgroundModeEnabled` and
+  `NetworkServiceSandboxEnabled` on macOS, or `DynamicCodeSettings` in the
+  Python scripts), or a legal value no row writes, is still dropped without
+  a word. `SlimBrave.ps1` also matches key names (`Features` included),
+  string values and list entries in any letter case. The Python scripts need
+  the exact case everywhere but the `DnsMode` value: a lowercase `features`
+  is refused, and anything else in the wrong case is dropped silently. Make
+  all three exact-case once every dropped key is named. (5) `SlimBrave.ps1`
+  started from a mapped network drive or a `subst` drive relaunches elevated
+  with a path the elevated session usually cannot see, and the new window
+  closes without a message; the README says to run it from a local folder.
+  Fix only together with a Windows run of both cases: rewrite a mapped drive
+  to its UNC `DisplayRoot`, refuse a `subst` drive with a message. (6) macOS
+  persist `on`: a re-Apply removes the installed
   profile and SlimBrave's keys in the selected plists before the new profile
   is approved. If approving a re-staged profile with the same
   `PayloadIdentifier` and `PayloadUUID` replaces the installed one in place
@@ -1439,6 +1459,43 @@ Watch list, each with the trigger that turns it into work:
     Reset scrub a profile carrying both Shields entries and leave no
     `Preferences.slimbrave-*` file, a profile whose `User Data` is a junction
     is skipped, and a second account carrying the entries is untouched.
+  - Windows PowerShell 5.1 pass before release, over Import, Re-sync and
+    Apply: v2.4.0's changes to `SlimBrave.ps1` have never run, since CI only
+    parses the script and runs PSScriptAnalyzer. On Windows 10 or 11:
+    (a) import a file whose Features name both `BraveShieldsDisabledForUrls`
+    and `BraveShieldsEnabledForUrls` as `["https://*","http://*"]`, then the
+    same with the two keys swapped: Force Shields On is staged both times and
+    the status names `BraveShieldsDisabledForUrls`. (b) Import
+    `{"Features":"x"}`: 'Import failed - not a SlimBrave config', with the
+    staged rows and DNS mode unchanged; import `{"Features":[]}`: it imports
+    with nothing ticked. (c) Import
+    `{"Features":{"DefaultNotificationsSetting":3000000000}}`, then the same
+    with `1e10`, `2e0`, `2.0` and `3`: each imports, without 'Import failed',
+    with the value named in the status and Web Notifications left at Not
+    managed; `{"Features":{"DefaultBraveReferrersSetting":true}}` ticks
+    nothing and names the key. (d) Export with DNS `custom` and a template
+    whose host is not ASCII (`https://dns.exämple/dns-query`), then import
+    the file: the template comes back unchanged. (e) With no
+    `HKCU\SOFTWARE\Policies\BraveSoftware\Brave` key, Apply: no 'Left alone'
+    in the status. Write `BraveShieldsEnabledForUrls` by hand as subkey
+    values `1` = `http://*`, `2` = `https://*` and Re-sync: Force Shields On
+    shows ticked. (f) A REG_SZ `ExtensionInstallBlocklist` = `["x"]` in both
+    HKLM and HKCU survives an Apply with its row unticked and a Reset, while
+    a REG_SZ `["*"]` is removed by that Apply. (g) Tick a row, deny write on
+    `HKLM\SOFTWARE\Policies\BraveSoftware\Brave` with an ACL and Apply: the
+    status starts 'Failed to write:' and closing the window still asks about
+    unapplied changes. (h) With Brave closed, seed both leaked Shields
+    entries in `BraveSoftware\Brave-Origin\User Data\Default\Preferences` and
+    Apply: they are gone. Deny write on one profile folder and seed it too:
+    the status says 'Failed to clean 1 profile; check ownership of' that
+    `User Data` folder. (i) DNS `custom` with
+    `https://dns.google/dns-query{?dns`: Apply refuses it with the unmatched
+    brace message; `https://dns.google/dns-query{?dns}` applies. (j)
+    Optional: as a standard user with UAC turned off, start the script: one
+    'Not elevated' message and no second window. (k) For Tool fixes (5), not
+    blocking: start it from a mapped drive (with and without
+    `EnableLinkedConnections`) and from a `subst` drive, under same-account
+    and over-the-shoulder UAC, and record what each does.
   - One session on a Mac (macOS 13+ and 26), for Tool fixes (6) and (7); it
     blocks nothing. With the SlimBrave profile installed, stage a changed
     profile with the same `PayloadIdentifier` and `PayloadUUID` and approve

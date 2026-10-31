@@ -292,42 +292,67 @@ def test_import_legacy_array_safe_browsing_key_keeps_its_old_row(mod, tmp_path):
     assert _get_feature(mod, rows, "Lock Safe Browsing On (Standard)")["checked"] is False
 
 
-# A group whose members sit on two different keys (the spellcheck group is
-# the other), so a config can name both and ask for force-off and force-on
-# over the same wildcards.
+# The two groups whose members sit on different keys, so a config or a
+# policy file can name both: the Shields pair asks for force-off and
+# force-on over the same wildcards, and the spellcheck pair names
+# SpellCheckServiceEnabled, which does nothing once SpellcheckEnabled is off.
 SHIELDS_OFF = ("Disable Brave Shields", "BraveShieldsDisabledForUrls")
 SHIELDS_ON = ("Force Shields On (All Sites)", "BraveShieldsEnabledForUrls")
 SHIELDS_WILDCARDS = ["https://*", "http://*"]
+SPELL_SERVICE = ("Disable Enhanced Spell Check", "SpellCheckServiceEnabled")
+SPELL_ALL = ("Disable Spellcheck", "SpellcheckEnabled")
+CONFLICT_MSG = "mutually exclusive with another imported row"
 
 
-@pytest.mark.parametrize("order,winner", [
-    ((SHIELDS_OFF, SHIELDS_ON), SHIELDS_ON),
-    ((SHIELDS_ON, SHIELDS_OFF), SHIELDS_OFF),
+@pytest.mark.parametrize("order", [
+    (SHIELDS_OFF, SHIELDS_ON),
+    (SHIELDS_ON, SHIELDS_OFF),
 ], ids=["off-then-on", "on-then-off"])
-def test_import_collapses_conflicting_shields_rows(mod, tmp_path, order, winner):
-    """Last key listed wins, matching the PS1 CheckedChanged handler."""
+def test_import_collapses_conflicting_shields_rows(mod, tmp_path, order):
+    """The later row in table order wins whatever the key order, which is
+    what Brave enforces when both lists are set."""
     cfg = _write_config(tmp_path, "both.json",
                         {key: SHIELDS_WILDCARDS for _, key in order})
     rows = mod.build_rows()
-    ok, _ = mod.import_settings(rows, str(cfg))
+    ok, msg = mod.import_settings(rows, str(cfg))
     assert ok
     # Nothing outside the group is touched either, so compare the whole set
     checked = [row["text"] for row in rows
                if row["type"] == mod.ROW_FEATURE and row["checked"]]
-    assert checked == [winner[0]]
+    assert checked == [SHIELDS_ON[0]]
     policy, err = mod._build_policy(rows)
     assert err == ""
-    assert policy == {winner[1]: SHIELDS_WILDCARDS}
+    assert policy == {SHIELDS_ON[1]: SHIELDS_WILDCARDS}
+    assert CONFLICT_MSG in msg and SHIELDS_OFF[1] in msg, msg
 
 
-def test_import_legacy_array_collapses_shields_group(mod, tmp_path):
-    cfg = _write_config(tmp_path, "legacy-both.json",
-                        [SHIELDS_OFF[1], SHIELDS_ON[1]])
+@pytest.mark.parametrize("order", [
+    (SPELL_SERVICE, SPELL_ALL),
+    (SPELL_ALL, SPELL_SERVICE),
+], ids=["service-then-all", "all-then-service"])
+def test_import_collapses_conflicting_spellcheck_rows(mod, tmp_path, order):
+    cfg = _write_config(tmp_path, "spell.json", {key: False for _, key in order})
     rows = mod.build_rows()
-    ok, _ = mod.import_settings(rows, str(cfg))
+    ok, msg = mod.import_settings(rows, str(cfg))
+    assert ok
+    policy, err = mod._build_policy(rows)
+    assert err == ""
+    assert policy == {"SpellcheckEnabled": False}
+    assert CONFLICT_MSG in msg and SPELL_SERVICE[1] in msg, msg
+
+
+@pytest.mark.parametrize("names", [
+    [SHIELDS_OFF[1], SHIELDS_ON[1]],
+    [SHIELDS_ON[1], SHIELDS_OFF[1]],
+], ids=["off-then-on", "on-then-off"])
+def test_import_legacy_array_collapses_shields_group(mod, tmp_path, names):
+    cfg = _write_config(tmp_path, "legacy-both.json", names)
+    rows = mod.build_rows()
+    ok, msg = mod.import_settings(rows, str(cfg))
     assert ok
     assert _get_feature(mod, rows, SHIELDS_ON[0])["checked"] is True
     assert _get_feature(mod, rows, SHIELDS_OFF[0])["checked"] is False
+    assert CONFLICT_MSG in msg and SHIELDS_OFF[1] in msg, msg
 
 
 def test_parse_imported_features_formats(mod):
@@ -335,6 +360,204 @@ def test_parse_imported_features_formats(mod):
     assert mod._parse_imported_features(["A", "B"]) == ({"A": None, "B": None}, True)
     assert mod._parse_imported_features("garbage") == ({}, False)
     assert mod._parse_imported_features(None) == ({}, False)
+
+
+# ---------------------------------------------------------------------------
+# Import checks, in the order import_settings runs them: the JSON itself, a
+# Features block, the DNS fields, each value's JSON type. Every refusal
+# returns before any row changes.
+# ---------------------------------------------------------------------------
+
+
+def _preticked_rows(mod):
+    """Rows with Disable Metrics Reporting ticked and DNS set to off."""
+    rows = mod.build_rows()
+    _check_feature(mod, rows, "Disable Metrics Reporting")
+    _set_dns(mod, rows, "off")
+    return rows
+
+
+def _assert_untouched(mod, rows):
+    assert _checked_policy_pairs(mod, rows) == {"MetricsReportingEnabled": False}
+    assert mod.get_dns_mode(rows) == "off"
+
+
+def _write_json(tmp_path, data, name="cfg.json"):
+    path = tmp_path / name
+    path.write_text(json.dumps(data))
+    return path
+
+
+NOT_A_CONFIG = [
+    ({}, "empty"),
+    ({"DnsMode": "off"}, "dns-only"),
+    ({"Features": None}, "null"),
+    ({"Features": "x"}, "string"),
+    ({"Features": 5}, "number"),
+    ({"Features": False}, "false"),
+    ({"features": {"MetricsReportingEnabled": False}}, "lowercase-key"),
+    ({"roots": {}, "version": 1}, "bookmarks"),
+]
+
+
+@pytest.mark.parametrize("config", [c for c, _ in NOT_A_CONFIG],
+                         ids=[i for _, i in NOT_A_CONFIG])
+def test_import_without_a_features_block_is_refused(mod, tmp_path, config):
+    """These used to import as a success after clearing every row, and
+    --import then wrote an empty policy. Now nothing changes."""
+    rows = _preticked_rows(mod)
+    ok, msg = mod.import_settings(rows, str(_write_json(tmp_path, config)))
+    assert ok is False
+    assert "no Features block" in msg
+    _assert_untouched(mod, rows)
+
+
+@pytest.mark.parametrize("features", [{}, []], ids=["object", "array"])
+def test_import_with_an_empty_features_block_still_imports(mod, tmp_path, features):
+    rows = _preticked_rows(mod)
+    ok, msg = mod.import_settings(rows, str(_write_config(tmp_path, "empty.json", features)))
+    assert ok, msg
+    assert _checked_policy_pairs(mod, rows) == {}
+    assert mod.get_dns_mode(rows) == "unmanaged"
+
+
+def test_cli_import_of_a_file_without_features_writes_nothing(mod, tmp_path, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(mod, "apply_policy",
+                        lambda *a, **k: calls.append(a) or (True, "applied"))
+    path = _write_json(tmp_path, {"MetricsReportingEnabled": False}, "policy.json")
+    assert mod.cli_import(str(path), None) == 1
+    assert calls == []
+    assert "no Features block" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("tmpl", [5, True, {"a": 1}, ["https://a/dns-query", 7]],
+                         ids=["number", "true", "object", "mixed-list"])
+def test_import_refuses_a_template_that_is_not_a_string(mod, tmp_path, tmpl):
+    rows = _preticked_rows(mod)
+    path = _write_json(tmp_path, {"Features": {}, "DnsMode": "custom", "DnsTemplates": tmpl})
+    ok, msg = mod.import_settings(rows, str(path))
+    assert ok is False
+    assert "DnsTemplates" in msg
+    _assert_untouched(mod, rows)
+
+
+def test_import_joins_a_template_list_with_spaces(mod, tmp_path):
+    """As SlimBrave.ps1's [string] cast joins an array."""
+    rows = mod.build_rows()
+    path = _write_json(tmp_path, {"Features": {}, "DnsMode": "custom", "DnsTemplates":
+                                  ["https://a/dns-query", "https://b/dns-query"]})
+    ok, msg = mod.import_settings(rows, str(path))
+    assert ok, msg
+    assert mod.get_dns_template(rows) == "https://a/dns-query https://b/dns-query"
+
+
+@pytest.mark.parametrize("tmpl", [False, 0, []], ids=["false", "zero", "empty-list"])
+def test_import_takes_a_falsy_template_as_none(mod, tmp_path, tmpl):
+    rows = mod.build_rows()
+    ok, msg = mod.import_settings(rows, str(_write_json(tmp_path, {"Features": {}, "DnsTemplates": tmpl})))
+    assert ok, msg
+    assert mod.get_dns_template(rows) == ""
+    assert mod.get_dns_mode(rows) == "unmanaged"
+
+
+@pytest.mark.parametrize("text", [
+    "[" * 100000 + "]" * 100000,
+    '{"Features": {"ChromeVariations": ' + "1" * 5000 + "}}",
+], ids=["deep-nesting", "5000-digit-integer"])
+def test_import_reports_json_it_cannot_read_instead_of_raising(mod, tmp_path, text):
+    path = tmp_path / "bad.json"
+    path.write_text(text)
+    rows = _preticked_rows(mod)
+    ok, msg = mod.import_settings(rows, str(path))
+    assert ok is False
+    assert "Invalid JSON" in msg
+    _assert_untouched(mod, rows)
+
+
+def _dns_policy_after_import(mod, tmp_path, mode):
+    """Rows synced to DNS off, then a file naming `mode`; the policy built."""
+    rows = mod.build_rows()
+    mod.sync_rows_with_policy(rows, {"DnsOverHttpsMode": "off"})
+    ok, msg = mod.import_settings(rows, str(_write_json(tmp_path, {"Features": {}, "DnsMode": mode})))
+    assert ok, msg
+    policy, err = mod._build_policy(rows)
+    assert err == ""
+    return policy, msg
+
+
+def test_import_takes_the_dns_mode_in_any_letter_case(mod, tmp_path):
+    policy, _ = _dns_policy_after_import(mod, tmp_path, "Automatic")
+    assert policy.get("DnsOverHttpsMode") == "automatic"
+
+
+@pytest.mark.parametrize("mode", ["bogus", 5], ids=["word", "number"])
+def test_import_names_an_unknown_dns_mode_and_leaves_dns_unmanaged(mod, tmp_path, mode):
+    """The mode the TUI had before the import (off) does not survive."""
+    policy, msg = _dns_policy_after_import(mod, tmp_path, mode)
+    assert "DnsOverHttpsMode" not in policy
+    assert f"DnsMode={mode}" in msg
+
+
+def test_sync_ignores_a_template_that_is_not_a_string(mod):
+    rows = mod.build_rows()
+    mod.sync_rows_with_policy(rows, {"DnsOverHttpsMode": "secure", "DnsOverHttpsTemplates": 5})
+    assert mod.get_dns_template(rows) == ""
+
+
+# A value only in its policy's JSON type: an integer policy only a JSON
+# integer, a boolean true/false or an integer, a list an array.
+WRONG_TYPE_CASES = [
+    ("ChromeVariations", True),
+    ("DefaultBraveReferrersSetting", True),
+    ("IncognitoModeAvailability", True),
+    ("SafeBrowsingProtectionLevel", False),
+    ("BrowserSignin", False),
+    ("ChromeVariations", "2"),
+    ("ChromeVariations", 2.0),
+    ("MetricsReportingEnabled", "0"),
+    ("MetricsReportingEnabled", None),
+    ("ExtensionInstallBlocklist", "*"),
+]
+
+
+@pytest.mark.parametrize("key,bad", WRONG_TYPE_CASES,
+                         ids=[f"{k}-{v!r}" for k, v in WRONG_TYPE_CASES])
+def test_import_takes_a_value_only_in_its_policys_json_type(mod, tmp_path, key, bad):
+    """`True == 1` in Python, so a JSON true used to tick ChromeVariations 1
+    or Allow Permissive Referrers; now it is refused and named, once even
+    where two rows share the key."""
+    path = _write_config(tmp_path, "bad.json", {key: bad})
+    rows = mod.build_rows()
+    ok, msg = mod.import_settings(rows, str(path))
+    assert ok, msg
+    assert not any(r["checked"] for r in rows
+                   if r["type"] == mod.ROW_FEATURE and r["key"] == key)
+    policy, err = mod._build_policy(rows)
+    assert err == ""
+    assert key not in policy
+    tail = msg[len(f"Imported from {path}"):]
+    assert tail.count(key) == 1, f"{key}={bad!r} is not named once in: {msg!r}"
+
+
+@pytest.mark.parametrize("key,value,name", [
+    ("MetricsReportingEnabled", 0, "Disable Metrics Reporting"),
+    ("MetricsReportingEnabled", False, "Disable Metrics Reporting"),
+    ("BraveRewardsDisabled", 1, "Disable Brave Rewards"),
+    ("BraveShieldsEnabledForUrls", ["http://*", "https://*"], SHIELDS_ON[0]),
+], ids=["metrics-0", "metrics-false", "rewards-1", "shields-reordered"])
+def test_import_still_takes_windows_numbers_and_reordered_lists(mod, tmp_path, key, value, name):
+    rows = mod.build_rows()
+    ok, msg = mod.import_settings(rows, str(_write_config(tmp_path, "ok.json", {key: value})))
+    assert ok, msg
+    assert _get_feature(mod, rows, name)["checked"] is True
+    assert "left unmanaged" not in msg
+
+
+def test_sync_does_not_tick_an_integer_row_from_a_bool(mod):
+    rows = mod.build_rows()
+    mod.sync_rows_with_policy(rows, {"ChromeVariations": True})
+    assert _checked_policy_pairs(mod, rows) == {}
 
 
 # ---------------------------------------------------------------------------
@@ -466,16 +689,23 @@ def test_sync_rows_with_policy_respects_referrers_group(mod):
         mod, rows, "Cap Referrers (Strict Origin)")["checked"] is False
 
 
-def test_sync_rows_with_policy_collapses_conflicting_shields(mod):
+@pytest.mark.parametrize("first,second,winner,loser", [
+    (SHIELDS_OFF, SHIELDS_ON, SHIELDS_ON, SHIELDS_OFF),
+    (SHIELDS_ON, SHIELDS_OFF, SHIELDS_ON, SHIELDS_OFF),
+    (SPELL_SERVICE, SPELL_ALL, SPELL_ALL, SPELL_SERVICE),
+    (SPELL_ALL, SPELL_SERVICE, SPELL_ALL, SPELL_SERVICE),
+], ids=["shields-off-first", "shields-on-first", "spell-service-first", "spell-all-first"])
+def test_sync_rows_with_policy_collapses_conflicting_shields(mod, first, second, winner, loser):
     # A policy file holding both keys is exactly what the buggy import used
-    # to write; reading it back must not tick both rows again.
+    # to write; reading it back must not tick both rows again, and the row
+    # kept is the later one in table order, whatever order the file has.
+    def value(key):
+        return SHIELDS_WILDCARDS if key in (SHIELDS_OFF[1], SHIELDS_ON[1]) else False
     rows = mod.build_rows()
-    mod.sync_rows_with_policy(rows, {
-        SHIELDS_OFF[1]: SHIELDS_WILDCARDS,
-        SHIELDS_ON[1]: SHIELDS_WILDCARDS,
-    })
-    assert _get_feature(mod, rows, SHIELDS_ON[0])["checked"] is True
-    assert _get_feature(mod, rows, SHIELDS_OFF[0])["checked"] is False
+    mod.sync_rows_with_policy(rows, {first[1]: value(first[1]),
+                                     second[1]: value(second[1])})
+    assert _get_feature(mod, rows, winner[0])["checked"] is True
+    assert _get_feature(mod, rows, loser[0])["checked"] is False
 
 
 def test_sync_rows_shows_secure_plus_template_as_custom(mod):
@@ -4362,6 +4592,44 @@ def test_ps1_engine_guards_are_wired_not_merely_defined():
     relaunch = relaunch[:relaunch.index("Start-Process")]
     assert '`"$($script:selfPath)`"' in relaunch, "the relaunch path is unquoted again"
 
+    # Apply's removal loop skips a scope that does not exist, as Reset's
+    # does, so an absent user key is not reported as a list left alone.
+    assert re.search(
+        r"foreach \(\$scope in @\(\$script:machineReg, \$script:userReg\)\) \{\s*"
+        r"if \(-not \(Test-Path \$scope\)\) \{ continue \}\s*"
+        r"if \(-not \(Remove-OwnedListPolicy \$scope \$key \$declaredLists\)\)", apply_body), (
+        "Apply's removal loop does not skip an absent scope")
+    # A ticked list's user-scope copy goes under the ownership test too.
+    assert "Remove-ListPolicy $script:userReg" not in apply_body
+    assert "[void](Remove-OwnedListPolicy $script:userReg $f.Key $declaredLists)" in apply_body
+    # Ownership checks the JSON-string form as well as the subkey.
+    exact = _ps1_function(text, "Test-ListPolicyIsExactly")
+    assert re.search(r"try \{ \$parsed = ConvertFrom-Json -InputObject \$raw -ErrorAction Stop \}"
+                     r" catch \{ return \$false \}", exact), "the JSON-string form is not parsed inside a try"
+    assert "@(ConvertFrom-Json" not in exact and "| ConvertFrom-Json)" not in exact
+    assert exact.index("ConvertFrom-Json") < exact.index("Join-Path $RegistryPath $Name")
+    # Provider errors do not throw by themselves: each write says Stop.
+    set_list = _ps1_function(text, "Set-ListPolicy")
+    for verb in ("Remove-Item -Path $listKey", "New-Item -Path $listKey", "Set-ItemProperty -Path $listKey"):
+        line = next(ln for ln in set_list.splitlines() if verb in ln)
+        assert "-ErrorAction Stop" in line, f"Set-ListPolicy: {verb} does not stop on failure"
+    assert re.search(r"Set-ItemProperty -Path \$script:machineReg -Name \$f\.Key `\s*\n\s*-Value [^\n]*"
+                     r"-ErrorAction Stop", apply_body), "Apply's scalar write does not stop on failure"
+    assert re.search(r'Set-ItemProperty -Path \$script:machineReg -Name "DnsOverHttpsMode" '
+                     r'[^\n]*-ErrorAction Stop', apply_body), "the DNS mode write does not stop on failure"
+    assert re.search(r'Set-ItemProperty -Path \$script:machineReg -Name "DnsOverHttpsTemplates" `\s*\n'
+                     r'\s*-Value [^\n]*-ErrorAction Stop', apply_body), "the template write does not stop on failure"
+    prefs = _ps1_function(text, "Repair-OneBravePrefs")
+    assert re.search(r"Move-Item [^\n]*-ErrorAction Stop", prefs)
+    assert "catch { }" not in apply_body, "Apply swallows a failed write"
+    assert "$failed += $key" in apply_body and "$failed += 'DnsOverHttpsMode'" in apply_body
+    failed_at = apply_body.index("if ($failed.Count -gt 0)")
+    assert "Failed to write: " in apply_body[failed_at:]
+    assert "return $false" in apply_body[failed_at:apply_body.index("$lead = ", failed_at)], (
+        "Apply marks a failed write as applied")
+    assert not re.search(r"\$ErrorActionPreference\s*=", text), (
+        "$ErrorActionPreference is set; Repair-BravePrefs would inherit it")
+
 
 def test_ps1_legacy_array_import_takes_the_first_row_per_key():
     """Several policy keys carry two rows with opposite values (Force vs
@@ -4376,6 +4644,189 @@ def test_ps1_legacy_array_import_takes_the_first_row_per_key():
     assert re.search(r"\$handled\.ContainsKey\(\$row\.key\)", branch), (
         "the first-row-per-key guard does not key on $row.key"
     )
+
+
+def _ps1_live():
+    """SlimBrave.ps1 with whole-line comments removed."""
+    return re.sub(r"(?m)^\s*#.*$", "", (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8"))
+
+
+def test_ps1_import_applies_the_python_rules():
+    """The import rules the Python tests above pin, in SlimBrave.ps1, which
+    nothing here can run: the later row of a group wins and is named,
+    Features must be an object or an array, a value is taken only in its
+    policy's JSON type with nothing cast, the file is read as UTF-8, and a
+    failed import puts the staged state back."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    live = _ps1_live()
+
+    groups = _ps1_function(live, "Enforce-ExclusionGroups")
+    assert "[array]::Reverse($rows)" in groups and "foreach ($row in $rows)" in groups
+    assert "First row of a group wins" not in text
+    assert "$script:importConflicts += $row.key" in groups
+    # An array before anything appends: += onto $null joins strings.
+    init = re.search(r"^\$script:importConflicts = @\(\)$", live, re.MULTILINE)
+    assert init and init.start() < live.index("Sync-FromRegistry }"), (
+        "$script:importConflicts is not an array before the first Re-sync")
+
+    imp = _ps1_function(live, "Import-PresetIntoState")
+    assert "$script:importConflicts = @()" in imp
+    assert "[int]$want" not in imp, "the choice import casts, and a [long] past Int32 throws"
+    assert "$ok = ($want -is [int] -or $want -is [long])" in imp
+    assert "[double]" not in imp and "[byte]" not in imp
+    # An unmatched choice (an off-enum value such as Notifications' 3) is named.
+    assert 'if (-not $matched) { $script:importNotes += "$($row.key)=$want" }' in imp
+    assert "$fits = ($want -is [array])" in imp
+    assert "if ($fits -and $wantList.Count -eq $mine.Count -and" in imp
+    assert "$fits = ($want -is [string])" in imp
+    assert "$script:intEnumKeys -contains $row.key" in imp
+    assert "$fits = (($want -is [bool]) -or ($want -is [int]) -or ($want -is [long]))" in imp
+    assert 'if (-not $fits) {\n                $script:importNotes += "$($row.key)=$want"' in imp
+
+    handler = live[live.index('"Import" {'):]
+    handler = handler[:handler.index('Set-Status "Import failed')]
+    assert "[System.IO.File]::ReadAllText($dlg.FileName)" in handler
+    assert "Get-Content" not in handler
+    guard = handler[handler.index("if(-not ($cfg -is"):handler.index('throw "no Features block"')]
+    assert "$cfg.Features -is [array]" in guard
+    assert "$cfg.Features -is [System.Management.Automation.PSCustomObject]" in guard
+    assert "[pscustomobject]" not in guard.lower() and "[psobject]" not in guard.lower()
+    try_at = handler.index("try{")
+    assert handler.index("$snap[$id]=@{On=$script:state[$id].On; Sel=$script:state[$id].Sel}") < try_at
+    assert handler.index("$dnsSnap=@{Mode=$script:dnsState.Mode; Tmpl=$script:dnsState.Tmpl}") < try_at
+    catch = re.search(r"\} catch \{((?:[^{}]|\{[^{}]*\})*)\}", handler[handler.index("$ok=$true"):])
+    assert catch, "the Import handler has no catch after the import"
+    body = catch.group(1)
+    for restore in ("$script:state[$id].On=$snap[$id].On", "$script:state[$id].Sel=$snap[$id].Sel",
+                    "$script:dnsState.Mode=$dnsSnap.Mode", "$script:dnsState.Tmpl=$dnsSnap.Tmpl"):
+        assert restore in body, f"a failed import does not restore {restore}"
+    assert body.rstrip().endswith("$ok=$false")
+    assert "($script:importNotes | Sort-Object -Unique)" in handler
+    assert "($script:importConflicts | Sort-Object -Unique)" in handler
+    assert "mutually exclusive with another imported row" in handler
+
+
+# DynamicCodeSettings is an integer enum (chrome.win only), offered by the
+# PS1 alone, so no Python row can vouch for its type.
+PS1_ONLY_INT_KEYS = {"DynamicCodeSettings"}
+
+
+def test_ps1_int_enum_keys_are_the_python_integer_rows(mod):
+    """The PS1 tables write booleans and enums alike as DWord, so its import
+    learns which checkbox rows take only a JSON integer from
+    $script:intEnumKeys. It must name exactly the rows whose Python value is
+    an int and not a bool, or one script refuses a value another takes."""
+    live = _ps1_live()
+    m = re.search(r"^\$script:intEnumKeys = @\(([^)]*)\)", live, re.MULTILINE)
+    assert m, "$script:intEnumKeys is missing"
+    ps1 = re.findall(r"'([^']*)'", m.group(1))
+    assert len(ps1) == len(set(ps1))
+    py = {feat["key"] for cat in mod.CATEGORIES for feat in cat["features"]
+          if "choices" not in feat and type(feat["value"]) is int}
+    assert PS1_ONLY_INT_KEYS <= PLATFORM_OMITTED_KEYS
+    assert set(ps1) == py | PS1_ONLY_INT_KEYS
+    ps1_rows = _ps1_feature_rows()
+    for key in PS1_ONLY_INT_KEYS:
+        assert [v for (_, k), (v, _, _) in ps1_rows.items() if k == key] == [1], key
+
+
+def _ps1_rows_in_table_order():
+    """[(name, key, group)] for every PS1 feature row, in Get-AllRows order."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    # Get-AllRows walks $categories; file order is the same order only
+    # while $categories lists the tables in the order they are defined.
+    defined = re.findall(r"^\$(\w+Features) = @\($", text, re.MULTILINE)
+    cats = text[text.index("$categories = @("):]
+    listed = re.findall(r"Features = \$(\w+)", cats[:cats.index("\n)\n")])
+    assert listed == defined, "$categories no longer lists the tables in file order"
+    return [(m.group(1), m.group(2), m.group(4)) for m in _PS1_FEATURE_RE.finditer(text)]
+
+
+def _group_members(triples):
+    groups = {}
+    for name, key, group in triples:
+        if group:
+            groups.setdefault(group, []).append((name, key))
+    return groups
+
+
+def test_exclusion_groups_list_their_members_in_the_same_order_everywhere(mod):
+    """An import or a policy that ticks two members of a group keeps the
+    later one in table order, in all three scripts. Category order differs
+    between the PS1 and Python, so this is what keeps that rule in lockstep:
+    every group, with its members in the same order."""
+    ps1 = _group_members(_ps1_rows_in_table_order())
+    py = _group_members([(f["name"], f["key"], f.get("group"))
+                         for cat in mod.CATEGORIES for f in cat["features"]])
+    assert ps1 == py
+    # The two groups that span two keys, where the order decides what Brave
+    # is left with: Force Shields On, and spell checking off altogether.
+    for group, first, later in (("shields", "BraveShieldsDisabledForUrls", "BraveShieldsEnabledForUrls"),
+                                ("spellcheck", "SpellCheckServiceEnabled", "SpellcheckEnabled")):
+        keys = [key for _, key in ps1[group]]
+        assert keys.index(first) < keys.index(later), group
+
+
+def _ps1_doh_brace_pattern():
+    doh = _ps1_function(_ps1_live(), "Test-DohTemplate")
+    m = re.search(r"\$piece -notmatch '([^']*)'", doh)
+    assert m, "Test-DohTemplate no longer checks each template's braces"
+    return m.group(1)
+
+
+def test_ps1_windows_fixes_are_wired():
+    live = _ps1_live()
+    user_root = _ps1_function(live, "Repair-OneUserRoot")
+    channels = re.search(r"foreach \(\$channelDir in @\(([^)]*)\)\)", user_root)
+    assert channels, "Repair-OneUserRoot has no channel list"
+    for name in ("Brave-Origin", "Brave-Origin-Beta", "Brave-Origin-Nightly", "Brave-Origin-Dev"):
+        assert f"'{name}'" in channels.group(1), name
+    # The relaunched copy that is still not elevated stops instead of looping.
+    branch = live[live.index("if (-not $isAdmin) {"):]
+    assert branch.index("IsNullOrWhiteSpace($OriginalSid)") < branch.index("Start-Process")
+    reader = _ps1_function(live, "Read-LivePolicy")
+    assert '-notlike "PS*"' not in reader
+    assert "'PSProvider')" in reader and "-cnotcontains $pr.Name" in reader
+    doh = _ps1_function(live, "Test-DohTemplate")
+    assert "foreach ($piece in @($v -split '\\s+' | Where-Object { $_ }))" in doh
+    assert "$uri.Host -like '*slimbraveprobe*'" in doh
+    assert _ps1_doh_brace_pattern() == r"^[^{}]*(\{[^{}]*\}[^{}]*)*$"
+
+
+@pytest.mark.parametrize("template,ok", [
+    ("https://dns.google/dns-query{?dns}", True),
+    ("https://a.example/dns-query", True),
+    ("https://a.example/q{?dns}", True),
+    ("https://dns.google/dns-query{?dns", False),
+    ("https://a.example/q}", False),
+    ("https://a.example/{{dns}}", False),
+])
+def test_ps1_doh_brace_rule_refuses_what_chromium_refuses(template, ok):
+    """Chromium rejects an unbalanced or nested brace and still sets the
+    pref, which leaves secure mode with no resolver. The pattern has no
+    lookaround or backreference, so Python's re reads it as .NET does."""
+    assert bool(re.search(_ps1_doh_brace_pattern(), template)) is ok
+
+
+def test_ps1_names_profiles_it_could_not_clean_in_the_python_words(mod):
+    """All three scripts report a failed prefs scrub the same way:
+    Repair-OneBravePrefs returns -1 where _scrub_one_prefs does (a file it
+    cannot read, or cannot rewrite), and Get-RepairNote says what
+    _scrub_failure_note says."""
+    live = _ps1_live()
+    one = _ps1_function(live, "Repair-OneBravePrefs")
+    assert "catch { return -1 }" in one, "an unreadable Preferences is not a failure"
+    assert one.count("return -1") == 3, "a failed rewrite or move is not reported"
+    root = _ps1_function(live, "Repair-OneUserRoot")
+    assert "catch { $n = -1 }" in root and "return @{ Removed = $removed; Failed = $failed }" in root
+    prefs = _ps1_function(live, "Repair-BravePrefs")
+    assert prefs.count("Failed = ") == 2
+    note = _ps1_function(live, "Get-RepairNote")
+    assert ('" Failed to clean $n profile$plural; check ownership of " + '
+            '(@($repair.Failed.Keys) -join ", ") + "."') in note
+    assert mod._scrub_failure_note({"D1": 1}) == "Failed to clean 1 profile; check ownership of D1."
+    assert (mod._scrub_failure_note({"D1": 1, "D2": 2})
+            == "Failed to clean 3 profiles; check ownership of D1, D2.")
 
 
 def test_ps1_paint_handlers_agree_on_text_rendering():
@@ -4449,7 +4900,11 @@ def test_ps1_owner_drawn_controls_take_keyboard_focus():
     # inside one: Import rebuilds after its try, not in it.
     assert "add_ThreadException" in live, "no thread-exception guard"
     imp = live[live.index('"Import" {'):]
-    assert re.search(r"\} catch \{ \$ok=\$false \}[\s\S]*?if\(\$ok\)\{[\s\S]*?Refresh-View", imp), (
+    # The catch restores the staged state (one level of braces for its loop)
+    # and ends on $ok=$false; the rebuild comes only after it.
+    catch = re.search(r"\} catch \{(?:[^{}]|\{[^{}]*\})*\$ok=\$false\s*\}", imp)
+    assert catch and "Refresh-View" not in imp[:catch.end()] and re.search(
+        r"if\(\$ok\)\{[\s\S]*?Refresh-View", imp[catch.end():]), (
         "Import rebuilds the page inside its try block"
     )
     assert "$form.Dispose()" in live, "the form is never disposed while the script scope is alive"

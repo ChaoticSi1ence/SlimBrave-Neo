@@ -1102,31 +1102,63 @@ def activate_row(rows, row):
     return True
 
 
-def _enforce_groups(rows, features_map):
+def _value_fits_row(row, value):
+    """True when `value` has the JSON type of the policy a checkbox row writes.
+
+    Import and policy-sync take a value only in that type, the rule
+    SlimBrave.ps1's import applies too: an integer policy only a JSON
+    integer, a boolean policy true/false or an integer, a list policy an
+    array, the string policy a string.
+    """
+    want = row["value"]
+    if isinstance(want, bool):
+        return type(value) in (bool, int)  # Windows exports write 0/1
+    if isinstance(want, int):
+        return type(value) is int  # True == 1 must not pick an enum member
+    if isinstance(want, list):
+        return isinstance(value, list)
+    return isinstance(value, str)
+
+
+def _value_matches_row(row, value):
+    """True when `value` is exactly what a checkbox row writes."""
+    if not _value_fits_row(row, value):
+        return False
+    if isinstance(row["value"], list):
+        # Order means nothing to Chromium, as in SlimBrave.ps1's Compare-Object.
+        return sorted(value, key=str) == sorted(row["value"])
+    return value == row["value"]
+
+
+def _enforce_groups(rows):
     """Collapse every group down to at most one checked row.
 
     Import and policy-sync set `checked` per row with no group awareness,
     so a config naming both BraveShieldsDisabledForUrls and
-    BraveShieldsEnabledForUrls ticks both and _build_policy emits force-off
-    and force-on for the same wildcards. `features_map` supplies the source
-    order (the config's or the policy's key order) and the last key listed
-    wins, matching the PS1 CheckedChanged handler's behaviour.
+    BraveShieldsEnabledForUrls ticks both and _build_policy would emit
+    force-off and force-on for the same wildcards. The later row in table
+    order wins, whatever order the file or policy lists the keys in. Where
+    the members sit on different keys that is what Brave enforces when both
+    are set: BraveShieldsEnabledForUrls is applied after the Disabled list,
+    so it wins for the same patterns, and SpellCheckServiceEnabled does
+    nothing once SpellcheckEnabled is false. SlimBrave.ps1's
+    Enforce-ExclusionGroups applies the same rule.
+
+    Returns the keys of the rows it unchecked, for the import message.
     """
     # Choice rows never reach the bodies below: every test here is gated on
     # ROW_FEATURE, and a choice row carries neither "checked" nor a group.
-    order = list(features_map)
-    groups = {r.get("group") for r in rows
-              if r["type"] == ROW_FEATURE and r.get("group")}
+    dropped = []
+    groups = dict.fromkeys(r["group"] for r in rows
+                           if r["type"] == ROW_FEATURE and r.get("group"))
     for group in groups:
         members = [r for r in rows
                    if r["type"] == ROW_FEATURE
                    and r.get("group") == group and r["checked"]]
-        if len(members) < 2:
-            continue
-        keep = max(members, key=lambda r: order.index(r["key"]))
-        for r in members:
-            if r is not keep:
-                r["checked"] = False
+        for r in members[:-1]:
+            r["checked"] = False
+            dropped.append(r["key"])
+    return dropped
 
 # ---------------------------------------------------------------------------
 # BOM-aware JSON reader (handles PowerShell UTF-16 exports)
@@ -2425,13 +2457,20 @@ def sync_rows_with_policy(rows, policy):
     """Pre-check rows that match an existing policy on disk."""
     if not policy:
         return
+    # A template that is not a string (a hand-edited file) reads as none
+    # instead of crashing the TUI at launch.
+    dns_tmpl = policy.get("DnsOverHttpsTemplates", "")
+    if not isinstance(dns_tmpl, str):
+        dns_tmpl = ""
     for row in rows:
         if row["type"] == ROW_FEATURE:
             # An inert row stays unticked whatever the file says, so the
             # next Apply drops the dead key rather than carrying it.
             if row.get("inert"):
                 continue
-            if row["key"] in policy and policy[row["key"]] == row["value"]:
+            # The value must be in its policy's JSON type, as on import, so
+            # a true on disk does not tick an integer row.
+            if row["key"] in policy and _value_matches_row(row, policy[row["key"]]):
                 row["checked"] = True
         elif row["type"] == ROW_CHOICE:
             # A value that is not a legal member of this key's enum leaves
@@ -2443,7 +2482,6 @@ def sync_rows_with_policy(rows, policy):
                     row["selected"] = idx
         elif row["type"] == ROW_DNS:
             dns_val = policy.get("DnsOverHttpsMode")
-            dns_tmpl = policy.get("DnsOverHttpsTemplates", "")
             # If mode is "secure" and a template is set, show as "custom"
             if dns_val == "secure" and dns_tmpl:
                 if "custom" in row["options"]:
@@ -2451,12 +2489,11 @@ def sync_rows_with_policy(rows, policy):
             elif dns_val in row["options"]:
                 row["selected"] = row["options"].index(dns_val)
         elif row["type"] == ROW_DNS_TEMPLATE:
-            tmpl = policy.get("DnsOverHttpsTemplates", "")
-            if tmpl:
-                row["value"] = tmpl
-                row["cursor"] = len(tmpl)
+            if dns_tmpl:
+                row["value"] = dns_tmpl
+                row["cursor"] = len(dns_tmpl)
                 row["scroll"] = 0
-    _enforce_groups(rows, policy)
+    _enforce_groups(rows)
 
 
 def detect_persist_mode():
@@ -2563,12 +2600,20 @@ def _parse_imported_features(features_obj):
 
 
 def import_settings(rows, path):
-    """Import a SlimBrave Neo JSON config and update TUI row states."""
+    """Import a SlimBrave Neo JSON config and update TUI row states.
+
+    Every refusal returns before any row is touched, so a failed import
+    leaves the selections as they were. The order matches SlimBrave.ps1's
+    Import: the file, a JSON object, a Features block, the DNS fields, each
+    value against its policy's type, then the exclusion groups.
+    """
     try:
         config = read_json_file(path)
     except FileNotFoundError:
         return False, f"File not found: {path}"
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+    except (ValueError, RecursionError) as e:
+        # JSONDecodeError, UnicodeDecodeError and the 4300-digit integer
+        # limit are all ValueErrors; a deeply nested file is RecursionError.
         return False, f"Invalid JSON: {e}"
     except OSError as e:
         return False, f"Read error: {e}"
@@ -2580,13 +2625,46 @@ def import_settings(rows, path):
             f"Invalid config: expected a JSON object, got {type(config).__name__}"
         )
 
-    features_map, is_legacy = _parse_imported_features(config.get("Features"))
-    dns_mode = config.get("DnsMode", "")
-    dns_template = config.get("DnsTemplates", "") or ""
-    if not dns_mode:
-        # No DnsMode in the file means DNS is unmanaged (a bare
-        # DnsTemplates is treated as custom for legacy exports).
+    # A file without a Features object or array (the policy file, a
+    # Bookmarks dump, a DNS-only file, a lowercase `features`) is not a
+    # SlimBrave config. Taking it used to clear every row and report
+    # success, and --import then wrote an empty policy.
+    features = config.get("Features")
+    if not isinstance(features, (dict, list)):
+        return False, "Invalid config: no Features block (not a SlimBrave Neo config)"
+    features_map, is_legacy = _parse_imported_features(features)
+
+    # Values left unmanaged and named in the result message: a choice
+    # key's value that is not a legal member of its enum, a value outside
+    # its policy's JSON type, and an unknown DnsMode. Written out, such a
+    # value is one Brave would ignore or misapply (a 1 on local fonts,
+    # window management or clipboard becomes a managed Allow).
+    skipped_choices = []
+
+    # A list of strings is joined with spaces, as SlimBrave.ps1's [string]
+    # cast joins an array; anything falsy is no template, as there. No
+    # strip: SlimBrave.ps1 does not trim either.
+    raw_tmpl = config.get("DnsTemplates")
+    if isinstance(raw_tmpl, list) and all(isinstance(t, str) for t in raw_tmpl):
+        raw_tmpl = " ".join(raw_tmpl)
+    if not raw_tmpl:
+        dns_template = ""
+    elif isinstance(raw_tmpl, str):
+        dns_template = raw_tmpl
+    else:
+        return False, "Invalid config: DnsTemplates must be a string"
+    # No DnsMode in the file means DNS is unmanaged (a bare DnsTemplates is
+    # treated as custom for legacy exports). The mode is matched in any
+    # letter case, as SlimBrave.ps1 matches it; an unknown one leaves DNS
+    # unmanaged and is named.
+    raw_mode = config.get("DnsMode")
+    if not raw_mode:
         dns_mode = "custom" if dns_template else "unmanaged"
+    elif isinstance(raw_mode, str) and raw_mode.lower() in DNS_MODES:
+        dns_mode = raw_mode.lower()
+    else:
+        dns_mode = "unmanaged"
+        skipped_choices.append(f"DnsMode={raw_mode}")
 
     # Legacy array format can't distinguish value-1 vs value-2 for keys
     # with multiple rows (IncognitoModeAvailability). To avoid silently
@@ -2594,11 +2672,6 @@ def import_settings(rows, path):
     # who imported the Parental Controls preset — only the first matching
     # row per key is checked in legacy mode.
     legacy_handled = set()
-    # Choice keys whose value is not a legal member of that key's enum.
-    # They stay unmanaged and are named in the result message rather than
-    # being written out as a value Brave would ignore or misapply (a 1 on
-    # local fonts, window management or clipboard becomes a managed Allow).
-    skipped_choices = []
     # Keys the config names that are built into Brave Origin on this
     # machine: left unmanaged, and counted in the result message.
     skipped_inert = []
@@ -2621,8 +2694,13 @@ def import_settings(rows, path):
                 else:
                     row["checked"] = True
                     legacy_handled.add(key)
+            elif not _value_fits_row(row, expected):
+                row["checked"] = False
+                # Two rows can share a key; it is named once.
+                if key not in skipped_choices:
+                    skipped_choices.append(key)
             else:
-                row["checked"] = (expected == row["value"])
+                row["checked"] = _value_matches_row(row, expected)
         elif row["type"] == ROW_CHOICE:
             # Import is authoritative: a key the config does not name goes
             # back to "Not managed", matching the old unticked checkbox.
@@ -2639,14 +2717,14 @@ def import_settings(rows, path):
                 else:
                     row["selected"] = idx
         elif row["type"] == ROW_DNS:
-            if dns_mode in row["options"]:
-                row["selected"] = row["options"].index(dns_mode)
+            # Always set, so the TUI never keeps its pre-import mode.
+            row["selected"] = row["options"].index(dns_mode)
         elif row["type"] == ROW_DNS_TEMPLATE:
             row["value"] = dns_template
             row["cursor"] = len(dns_template)
             row["scroll"] = 0
 
-    _enforce_groups(rows, features_map)
+    dropped = _enforce_groups(rows)
     msg = f"Imported from {path}"
     if skipped_choices:
         msg += ("; left unmanaged because the value is not one this policy "
@@ -2655,6 +2733,9 @@ def import_settings(rows, path):
         n = len(skipped_inert)
         msg += (f"; {n} key{'s' if n != 1 else ''} built into Brave Origin "
                 "left unmanaged")
+    if dropped:
+        msg += ("; left unmanaged because it is mutually exclusive with "
+                "another imported row: " + ", ".join(dropped))
     return True, msg
 
 # ---------------------------------------------------------------------------

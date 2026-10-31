@@ -80,7 +80,7 @@ iwr "https://raw.githubusercontent.com/ChaoticSi1ence/SlimBrave-Neo/v2.1.0/SlimB
 
 A tag never moves, so both of those fetch the same file every time.
 
-Requires Administrator privileges; the script re-launches itself elevated. It opens showing the policy already on the machine.
+Requires Administrator privileges; the script re-launches itself elevated, so run it from a local folder: the elevated copy cannot see a `subst` drive or, usually, a mapped network drive, and started from one it closes without a message. It opens showing the policy already on the machine.
 
 **Every policy explains itself.** Each row carries a plain-English description under its title — *"Stops the daily usage ping that counts this install in Brave's active-user statistics, plus the search-engine usage counts it carries and the referral-code check"* — rather than hiding it in a tooltip. Where the text is longer than the row, a chevron expands it in place.
 

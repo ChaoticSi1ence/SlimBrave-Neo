@@ -29,6 +29,17 @@ $isAdmin = (New-Object Security.Principal.WindowsPrincipal(
     [Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
+    # $OriginalSid is set only by the relaunch below. Seeing it here means
+    # the relaunched copy is still not elevated (UAC off and a standard
+    # account, for one), and relaunching again would loop without end.
+    if (-not [string]::IsNullOrWhiteSpace($OriginalSid)) {
+        [void][System.Windows.Forms.MessageBox]::Show(
+            'SlimBrave relaunched itself to get Administrator rights, but the new window is still not elevated, so it stopped instead of relaunching again. Run it from an administrator account.',
+            'Not elevated',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error)
+        exit 1
+    }
     if ([string]::IsNullOrWhiteSpace($script:selfPath)) {
         [void][System.Windows.Forms.MessageBox]::Show(
             "Run this from a saved .ps1 file so it can relaunch itself as Administrator.",
@@ -151,7 +162,21 @@ function Test-ListPolicyIsExactly {
     # disk exactly the one SlimBrave writes? An admin's own blocklist is a
     # superset (or a different set entirely) and must not be deleted just
     # because the matching box is unchecked. Absent means nothing to
-    # protect, so removal is safe.
+    # protect, so removal is safe. Chromium reads a list in either form (see
+    # List-policy helpers), and every form present must be exactly ours.
+    # First the REG_SZ holding a JSON array, the form SlimBrave wrote before
+    # 0f14e74; ConvertFrom-Json is assigned, never wrapped in @(), because
+    # Windows PowerShell 5.1 emits a JSON array as one object.
+    $item = Get-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue
+    if ($null -ne $item) {
+        $raw = $item.$Name
+        if (-not ($raw -is [string])) { return $false }
+        try { $parsed = ConvertFrom-Json -InputObject $raw -ErrorAction Stop } catch { return $false }
+        $vals = @()
+        foreach ($x in $parsed) { $vals += [string]$x }
+        if (-not (($vals.Count -eq $Expected.Count) -and -not (Compare-Object $vals $Expected))) { return $false }
+    }
+    # Then the numbered values in the subkey.
     $listKey = Join-Path $RegistryPath $Name
     if (-not (Test-Path $listKey)) { return $true }
     $props = Get-ItemProperty -Path $listKey -ErrorAction SilentlyContinue
@@ -774,6 +799,9 @@ foreach ($name in $script:embeddedPresets.Keys) {
 # semantics as v2.0.x main: scoped Reset, and DNS "secure" requiring a template.
 
 $script:dnsState = @{ Mode = 0; Tmpl = "" }
+# Keys of the rows Enforce-ExclusionGroups unticked, for the Import status.
+# An array from the start: += onto $null concatenates strings instead.
+$script:importConflicts = @()
 
 # ---------------------------------------------------------------------------
 # REGISTRY
@@ -859,21 +887,23 @@ function ConvertTo-RegValue($value) {
 # ---------------------------------------------------------------------------
 # List-policy helpers
 #
-# Chromium list policies on Windows live in a subkey with numbered REG_SZ
-# values (e.g. ...\BraveShieldsDisabledForUrls\1 = "https://*"). Writing the
-# list as a single REG_SZ holding a JSON array has no effect - Chromium
-# won't parse it, and the corresponding policy silently stays at its
-# default.
+# Chromium takes a list policy on Windows in either of two forms: numbered
+# REG_SZ values in a subkey (e.g. ...\BraveShieldsDisabledForUrls\1 =
+# "https://*"), the ADMX form, which Set-ListPolicy writes; or one REG_SZ
+# value holding a JSON array (registry_dict.cc:128), the form SlimBrave
+# wrote before 0f14e74. When both exist it reads the subkey.
+# Each write here stops on failure (-ErrorAction Stop), so Apply's catch
+# names the key instead of counting it as written.
 # ---------------------------------------------------------------------------
 function Set-ListPolicy([string]$RegistryPath, [string]$Name, [string[]]$Values) {
     $listKey = Join-Path $RegistryPath $Name
-    if (Test-Path $listKey) { Remove-Item -Path $listKey -Recurse -Force }
+    if (Test-Path $listKey) { Remove-Item -Path $listKey -Recurse -Force -ErrorAction Stop }
     if (Get-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue) {
         Remove-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue
     }
-    New-Item -Path $listKey -Force | Out-Null
+    New-Item -Path $listKey -Force -ErrorAction Stop | Out-Null
     for ($i = 0; $i -lt $Values.Count; $i++) {
-        Set-ItemProperty -Path $listKey -Name ($i + 1) -Value $Values[$i] -Type String -Force
+        Set-ItemProperty -Path $listKey -Name ($i + 1) -Value $Values[$i] -Type String -Force -ErrorAction Stop
     }
 }
 
@@ -937,15 +967,30 @@ function Test-DohTemplate([string]$Raw) {
     if ($v.Length -gt 2048) {
         return @{ Ok = $false; Value = $v; Reason = "The template is unreasonably long (over 2048 characters)." }
     }
-    $uri = $null
-    if (-not [System.Uri]::TryCreate($v, [System.UriKind]::Absolute, [ref]$uri)) {
-        return @{ Ok = $false; Value = $v; Reason = "That is not a complete URL. A DoH template looks like https://cloudflare-dns.com/dns-query." }
-    }
-    if ($uri.Scheme -ne "https") {
-        return @{ Ok = $false; Value = $v; Reason = "DoH templates must use https. Chromium rejects '$($uri.Scheme)', which would leave secure DNS with no working resolver." }
-    }
-    if ([string]::IsNullOrWhiteSpace($uri.Host)) {
-        return @{ Ok = $false; Value = $v; Reason = "The URL has no hostname." }
+    # Chromium's own rule, per whitespace-separated template (IsValidDohTemplate,
+    # net/dns/public/dns_over_https_server_config.cc): balanced, non-nested
+    # {...} sections; once they are expanded, an https URL with a host; and
+    # the dns variable outside the host. A template it rejects still reaches
+    # the pref, so secure mode would be left with no resolver at all. Each
+    # {...} section is swapped for a probe word before the URL checks.
+    foreach ($piece in @($v -split '\s+' | Where-Object { $_ })) {
+        if ($piece -notmatch '^[^{}]*(\{[^{}]*\}[^{}]*)*$') {
+            return @{ Ok = $false; Value = $v; Reason = 'A { or } in the template is unmatched or nested. Chromium would reject it and leave secure DNS with no working resolver.' }
+        }
+        $probe = $piece -replace '\{[^{}]*\}', 'slimbraveprobe'
+        $uri = $null
+        if (-not [System.Uri]::TryCreate($probe, [System.UriKind]::Absolute, [ref]$uri)) {
+            return @{ Ok = $false; Value = $v; Reason = "That is not a complete URL. A DoH template looks like https://cloudflare-dns.com/dns-query." }
+        }
+        if ($uri.Scheme -ne "https") {
+            return @{ Ok = $false; Value = $v; Reason = "DoH templates must use https. Chromium rejects '$($uri.Scheme)', which would leave secure DNS with no working resolver." }
+        }
+        if ([string]::IsNullOrWhiteSpace($uri.Host)) {
+            return @{ Ok = $false; Value = $v; Reason = "The URL has no hostname." }
+        }
+        if ($uri.Host -like '*slimbraveprobe*') {
+            return @{ Ok = $false; Value = $v; Reason = 'The {dns} variable cannot be part of the hostname.' }
+        }
     }
     return @{ Ok = $true; Value = $v; Reason = "" }
 }
@@ -983,9 +1028,16 @@ function Test-NoReparsePoint([string]$root, [string]$path) {
 }
 
 function Repair-OneBravePrefs([string]$pref, [string]$root) {
+    # Returns the number of entries removed, or -1 when an existing file
+    # cannot be read, or holds the entries and cannot be rewritten: the
+    # contract of _scrub_one_prefs in the Python scripts, so all three report
+    # a failed scrub the same way (Get-RepairNote). A missing file, one that
+    # is not JSON and a profile reached through a link are nothing to do.
     if (-not (Test-NoReparsePoint $root $pref)) { return 0 }
-    if (-not (Test-Path -LiteralPath $pref)) { return 0 }
-    try { $j = Get-Content -LiteralPath $pref -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return 0 }
+    if (-not (Test-Path -LiteralPath $pref -PathType Leaf)) { return 0 }
+    try { $text = Get-Content -LiteralPath $pref -Raw -Encoding UTF8 -ErrorAction Stop } catch { return -1 }
+    if ([string]::IsNullOrWhiteSpace($text)) { return 0 }
+    try { $j = $text | ConvertFrom-Json -ErrorAction Stop } catch { return 0 }
     $bs = $null
     if ($j.profile -and $j.profile.content_settings -and $j.profile.content_settings.exceptions) {
         $bs = $j.profile.content_settings.exceptions.braveShields
@@ -1013,15 +1065,16 @@ function Repair-OneBravePrefs([string]$pref, [string]$root) {
         $stream.Close()
         $stream = $null
         # Checked again just before the rename, for a link swapped in since.
+        # The entries are still there, so this profile counts as not cleaned.
         if (-not (Test-NoReparsePoint $root $pref)) {
             Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-            return 0
+            return -1
         }
         Move-Item -LiteralPath $tmp -Destination $pref -Force -ErrorAction Stop
     } catch {
         if ($null -ne $stream) { $stream.Close() }
         if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
-        return 0
+        return -1
     }
     return $removed
 }
@@ -1047,34 +1100,47 @@ function Get-UserAppDataRoots {
 
 function Repair-OneUserRoot([string]$localAppData) {
     # One unreadable or locked profile must not abort the sweep; the other
-    # profiles still get their repair.
+    # profiles still get their repair. A profile that could not be cleaned
+    # is counted under its User Data folder, which the status names. Brave
+    # Origin keeps its profiles beside Brave's (Brave-Origin*).
     $removed = 0
-    foreach ($channelDir in @('Brave-Browser', 'Brave-Browser-Beta', 'Brave-Browser-Nightly', 'Brave-Browser-Dev')) {
+    $failed = [ordered]@{}
+    foreach ($channelDir in @('Brave-Browser', 'Brave-Browser-Beta', 'Brave-Browser-Nightly', 'Brave-Browser-Dev', 'Brave-Origin', 'Brave-Origin-Beta', 'Brave-Origin-Nightly', 'Brave-Origin-Dev')) {
         $userData = Join-Path $localAppData "BraveSoftware\$channelDir\User Data"
         if (-not (Test-Path $userData)) { continue }
         $profileDirs = Get-ChildItem -Path $userData -Directory -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' }
         foreach ($dir in $profileDirs) {
-            try { $removed += Repair-OneBravePrefs (Join-Path $dir.FullName 'Preferences') $localAppData } catch { }
+            try { $n = Repair-OneBravePrefs (Join-Path $dir.FullName 'Preferences') $localAppData } catch { $n = -1 }
+            if ($n -ge 0) {
+                $removed += $n
+            } elseif ($failed.Contains($userData)) {
+                $failed[$userData] = $failed[$userData] + 1
+            } else {
+                $failed[$userData] = 1
+            }
         }
     }
-    return $removed
+    return @{ Removed = $removed; Failed = $failed }
 }
 
 function Repair-BravePrefs {
-    # Every Brave channel runs as brave.exe on Windows.
+    # Every Brave channel, Origin's included, runs as brave.exe on Windows.
     $running = ($null -ne (Get-Process brave -ErrorAction SilentlyContinue))
     # Chromium serves prefs from an in-memory PrefService and rewrites the file
     # on shutdown, so a scrub done now is discarded the moment the user closes
     # Brave - which is exactly what we tell them to do next. Report it instead
     # of claiming a clean that will not survive.
-    if ($running) { return @{ Removed = 0; Running = $true; Skipped = $true } }
+    if ($running) { return @{ Removed = 0; Failed = @{}; Running = $true; Skipped = $true } }
 
     $removed = 0
+    $failed = [ordered]@{}
     foreach ($root in Get-UserAppDataRoots) {
-        $removed += Repair-OneUserRoot $root.Path
+        $r = Repair-OneUserRoot $root.Path
+        $removed += $r.Removed
+        foreach ($dir in @($r.Failed.Keys)) { $failed[$dir] = $r.Failed[$dir] }
     }
-    return @{ Removed = $removed; Running = $false; Skipped = $false }
+    return @{ Removed = $removed; Failed = $failed; Running = $false; Skipped = $false }
 }
 
 function Join-Status([string]$lead, $repair) {
@@ -1106,12 +1172,21 @@ function Get-RepairNote($repair) {
         # something about, so it goes first (see Join-Status) and says so.
         return " Close Brave fully and run this again to clear leaked profile prefs - Brave is running, and it would overwrite the fix on its next save."
     }
+    $note = ""
     if ($repair.Removed -gt 0) {
         $plural = ""
         if ($repair.Removed -ne 1) { $plural = "s" }
-        return " Also cleaned $($repair.Removed) leaked profile pref$plural from your Brave profile."
+        $note = " Also cleaned $($repair.Removed) leaked profile pref$plural from your Brave profile."
     }
-    return ""
+    # The same words as the Python scripts' _scrub_failure_note.
+    if (($null -ne $repair.Failed) -and ($repair.Failed.Count -gt 0)) {
+        $n = 0
+        foreach ($c in $repair.Failed.Values) { $n += $c }
+        $plural = ""
+        if ($n -ne 1) { $plural = "s" }
+        $note += " Failed to clean $n profile$plural; check ownership of " + (@($repair.Failed.Keys) -join ", ") + "."
+    }
+    return $note
 }
 
 function Invoke-ApplyPolicy {
@@ -1160,25 +1235,37 @@ function Invoke-ApplyPolicy {
     $skippedLists = @{}
     $uniqueKeys = (Get-AllRows | ForEach-Object { $_.key } | Select-Object -Unique)
     $written = 0
+    # Registry provider errors do not stop a script on their own, so every
+    # write below carries -ErrorAction Stop (never $ErrorActionPreference,
+    # which Repair-BravePrefs would inherit); a key whose write fails is
+    # named here instead of being counted as written.
+    $failed = @()
     foreach ($key in $uniqueKeys) {
         if ($selected.ContainsKey($key)) {
             $f = $selected[$key]
             try {
                 if ($f.Type -eq "List") {
                     Set-ListPolicy $script:machineReg $f.Key ([string[]]$f.Value)
-                    Remove-ListPolicy $script:userReg $f.Key
+                    # The user-scope copy goes under the same ownership test
+                    # as every other list removal: one that is not exactly
+                    # SlimBrave's stays (the machine value outranks it).
+                    [void](Remove-OwnedListPolicy $script:userReg $f.Key $declaredLists)
                 } else {
                     Set-ItemProperty -Path $script:machineReg -Name $f.Key `
-                        -Value (ConvertTo-RegValue $f.Value) -Type $f.Type -Force
+                        -Value (ConvertTo-RegValue $f.Value) -Type $f.Type -Force -ErrorAction Stop
                     if ((Test-Path $script:userReg) -and
                         (Get-ItemProperty -Path $script:userReg -Name $key -ErrorAction SilentlyContinue)) {
                         Remove-ItemProperty -Path $script:userReg -Name $key -ErrorAction SilentlyContinue
                     }
                 }
                 $written++
-            } catch { }
+            } catch { $failed += $key }
         } else {
+            # A scope that does not exist holds nothing to remove. Nothing
+            # creates the user-scope key, so without this skip a Shields row
+            # reported 'Left alone' on nearly every Apply; Reset skips it too.
             foreach ($scope in @($script:machineReg, $script:userReg)) {
+                if (-not (Test-Path $scope)) { continue }
                 if (-not (Remove-OwnedListPolicy $scope $key $declaredLists)) {
                     if ($declaredLists.ContainsKey($key)) { $skippedLists[$key] = $true }
                 }
@@ -1206,23 +1293,31 @@ function Invoke-ApplyPolicy {
         # apart so the template field can be required for one and not the other.
         $writeMode = $mode
         if ($mode -eq "custom") { $writeMode = "secure" }
-        Set-ItemProperty -Path $script:machineReg -Name "DnsOverHttpsMode" -Value $writeMode -Type String -Force
-        # Chromium does honour a template in "automatic" mode, but this UI
-        # greys the template box out there and captions it "Only used by the
-        # custom and secure modes". Writing it anyway pinned a resolver the
-        # interface said was inactive, with the box disabled so it could not be
-        # cleared. Match what the user is shown; "custom" is the way to pair a
-        # template with a mode here.
-        $wantsTemplate = ($mode -eq "custom" -or $mode -eq "secure")
-        if ($wantsTemplate -and -not [string]::IsNullOrWhiteSpace($script:dnsState.Tmpl)) {
-            Set-ItemProperty -Path $script:machineReg -Name "DnsOverHttpsTemplates" `
-                -Value $script:dnsState.Tmpl -Type String -Force
-        } else {
-            Remove-ItemProperty -Path $script:machineReg -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
-        }
-        $written++
+        try {
+            Set-ItemProperty -Path $script:machineReg -Name "DnsOverHttpsMode" -Value $writeMode -Type String -Force -ErrorAction Stop
+            # Chromium does honour a template in "automatic" mode, but this UI
+            # greys the template box out there and captions it "Only used by the
+            # custom and secure modes". Writing it anyway pinned a resolver the
+            # interface said was inactive, with the box disabled so it could not be
+            # cleared. Match what the user is shown; "custom" is the way to pair a
+            # template with a mode here.
+            $wantsTemplate = ($mode -eq "custom" -or $mode -eq "secure")
+            if ($wantsTemplate -and -not [string]::IsNullOrWhiteSpace($script:dnsState.Tmpl)) {
+                Set-ItemProperty -Path $script:machineReg -Name "DnsOverHttpsTemplates" `
+                    -Value $script:dnsState.Tmpl -Type String -Force -ErrorAction Stop
+            } else {
+                Remove-ItemProperty -Path $script:machineReg -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
+            }
+            $written++
+        } catch { $failed += 'DnsOverHttpsMode' }
     }
     $repair = Repair-BravePrefs
+    # A failed write leaves the staged state unapplied (Apply returns false,
+    # so the Apply handler does not take a new snapshot) and says which keys.
+    if ($failed.Count -gt 0) {
+        Set-Status (Join-Status ("Failed to write: " + (($failed | Sort-Object) -join ", ") + ". Applied $written policies.") $repair)
+        return $false
+    }
     $lead = "Applied $written policies. Restart Brave, then check brave://policy."
     if ($skippedLists.Count -gt 0) {
         $lead += " Left alone because the list on disk is not the one SlimBrave writes: " +
@@ -1274,7 +1369,9 @@ function Read-LivePolicy {
     $live = @{}
     if (Test-Path $script:machineReg) {
         foreach ($pr in (Get-ItemProperty $script:machineReg).PSObject.Properties) {
-            if ($pr.Name -notlike "PS*") { $live[$pr.Name] = $pr.Value }
+            # Only the provider's own note properties are skipped, by exact
+            # name: a policy whose name starts with 'Ps' is still a policy.
+            if (@('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') -cnotcontains $pr.Name) { $live[$pr.Name] = $pr.Value }
         }
         foreach ($sk in (Get-ChildItem $script:machineReg -ErrorAction SilentlyContinue)) {
             $vals = @()
@@ -1298,7 +1395,12 @@ function Sync-FromRegistry {
                 if ([string]$row.choices[$i][1] -eq [string]$lv) { $script:state[$row.Id].Sel = $i; break }
             }
         } elseif ($row.value -is [array]) {
-            if (($lv -is [array]) -and ((($lv) -join ",") -eq (($row.value) -join ","))) {
+            # Order means nothing to Chromium. Compared as Import and the
+            # ownership test compare, so a reordered copy of SlimBrave's list
+            # shows ticked instead of being removed by the next Apply; the
+            # Python scripts' sync compares the same way.
+            $mine = @(); foreach ($x in $row.value) { $mine += [string]$x }
+            if (($lv -is [array]) -and ($lv.Count -eq $mine.Count) -and -not (Compare-Object $lv $mine)) {
                 $script:state[$row.Id].On = $true
             }
         } else {
@@ -1325,19 +1427,52 @@ function Enforce-ExclusionGroups {
     # The toggle handler collapses a group as you click, but Import and
     # Re-sync write $script:state directly and never ran that rule - so two
     # members of one group could be staged together and Apply wrote both.
-    # main collapsed groups through CheckedChanged; the Python ports do it in
-    # _enforce_groups. First row of a group wins, deterministically.
+    # The later row in table order wins, as Brave does when both keys are
+    # set (BraveShieldsEnabledForUrls is applied after the Disabled list;
+    # SpellCheckServiceEnabled does nothing once SpellcheckEnabled is false);
+    # same rule as _enforce_groups in the Python scripts. The rows are walked
+    # in reverse, so the first ticked member met is the one kept. Each row
+    # unticked here is recorded for the Import status; Re-sync ignores it.
+    $rows = @(Get-AllRows)
+    [array]::Reverse($rows)
     $seen = @{}
-    foreach ($row in Get-AllRows) {
+    foreach ($row in $rows) {
         if (-not $row.group) { continue }
         if (-not $script:state[$row.Id].On) { continue }
-        if ($seen.ContainsKey($row.group)) { $script:state[$row.Id].On = $false; continue }
+        if ($seen.ContainsKey($row.group)) {
+            $script:state[$row.Id].On = $false
+            $script:importConflicts += $row.key
+            continue
+        }
         $seen[$row.group] = $true
     }
 }
 
+# Checkbox rows whose policy is an integer enum. The tables above hold
+# booleans and enums alike as DWord, so import needs this list to take only a
+# JSON integer for these keys, as the Python scripts' _value_fits_row does. A
+# test holds it equal to the Python rows whose value is an int (not a bool),
+# plus DynamicCodeSettings, which only this script offers.
+$script:intEnumKeys = @(
+    'BrowserSignin',
+    'ChromeVariations',
+    'DefaultBraveAdblockSetting',
+    'DefaultBraveFingerprintingV2Setting',
+    'DefaultBraveHttpsUpgradeSetting',
+    'DefaultBraveReferrersSetting',
+    'DefaultBraveRemember1PStorageSetting',
+    'DefaultJavaScriptOptimizerSetting',
+    'DeveloperToolsAvailability',
+    'DynamicCodeSettings',
+    'ForceYouTubeRestrict',
+    'IncognitoModeAvailability',
+    'NetworkPredictionOptions',
+    'SafeBrowsingProtectionLevel'
+)
+
 function Import-PresetIntoState($preset) {
     $script:importNotes = @()
+    $script:importConflicts = @()
     foreach ($id in @($script:state.Keys)) { $script:state[$id].On = $false; $script:state[$id].Sel = 0 }
     $feat = $preset.features
     if ($feat -is [array]) {
@@ -1378,13 +1513,15 @@ function Import-PresetIntoState($preset) {
         if ($null -eq $feat.PSObject.Properties[$row.key]) { continue }
         $want = $feat.$($row.key)
         if (Test-IsChoiceRow $row) {
-            # Type-strict, as main and both Python ports are: a quoted "1" is
-            # not a member of the enum, and neither is $true.
-            $ok = ($want -is [int] -or $want -is [long] -or $want -is [byte] -or $want -is [double])
+            # Type-strict, as both Python ports are: only a JSON integer is a
+            # member of the enum, and nothing is cast, so nothing can throw. A
+            # quoted "1", a $true, a [long] past Int32 or a fraction or
+            # exponent (2.0, 2e0) matches no choice and is named.
+            $ok = ($want -is [int] -or $want -is [long])
             $matched = $false
             if ($ok) {
                 for ($i = 1; $i -lt $row.choices.Count; $i++) {
-                    if ([string]$row.choices[$i][1] -eq [string][int]$want) {
+                    if ([string]$row.choices[$i][1] -eq [string]$want) {
                         $script:state[$row.Id].Sel = $i; $matched = $true; break
                     }
                 }
@@ -1395,15 +1532,30 @@ function Import-PresetIntoState($preset) {
             # means an imported single-site exception such as
             # BraveShieldsDisabledForUrls = ["https://intranet.example"] stages
             # this row, and Apply then writes SlimBrave's own wildcard - turning
-            # one site into the whole web.
+            # one site into the whole web. Only a JSON array is a list: a bare
+            # "*" is named, not taken for ["*"].
+            $fits = ($want -is [array])
             $wantList = @(); foreach ($x in @($want)) { $wantList += [string]$x }
             $mine = @();     foreach ($x in $row.value) { $mine += [string]$x }
-            if ($wantList.Count -eq $mine.Count -and
+            if ($fits -and $wantList.Count -eq $mine.Count -and
                 -not (Compare-Object $wantList $mine)) {
                 $script:state[$row.Id].On = $true
             } else { $script:importNotes += $row.key }
         } else {
-            if ([string](ConvertTo-RegValue $want) -eq [string](ConvertTo-RegValue $row.value)) {
+            # A value only in its policy's JSON type, as the Python scripts'
+            # _value_fits_row takes it: the string row a string; an integer
+            # enum a JSON integer, so a $true cannot pick value 1; a boolean
+            # $true / $false or an integer (Windows exports write 0/1).
+            if ($row.value -is [string]) {
+                $fits = ($want -is [string])
+            } elseif ($script:intEnumKeys -contains $row.key) {
+                $fits = (($want -is [int]) -or ($want -is [long]))
+            } else {
+                $fits = (($want -is [bool]) -or ($want -is [int]) -or ($want -is [long]))
+            }
+            if (-not $fits) {
+                $script:importNotes += "$($row.key)=$want"
+            } elseif ([string](ConvertTo-RegValue $want) -eq [string](ConvertTo-RegValue $row.value)) {
                 $script:state[$row.Id].On = $true
             }
         }
@@ -1994,28 +2146,50 @@ function New-BarButton([string]$label,[bool]$accent){
                 $dlg.InitialDirectory=Get-InvokerDocs
                 if($dlg.ShowDialog() -eq "OK"){
                     $ok=$false
+                    # Import-PresetIntoState clears every row before it reads the
+                    # file, so anything that throws part-way would leave the
+                    # selections wiped behind 'Import failed'. The catch puts this
+                    # copy back: 'Import failed' always means nothing changed.
+                    $snap=@{}
+                    foreach($id in @($script:state.Keys)){ $snap[$id]=@{On=$script:state[$id].On; Sel=$script:state[$id].Sel} }
+                    $dnsSnap=@{Mode=$script:dnsState.Mode; Tmpl=$script:dnsState.Tmpl}
                     try{
-                        $cfg=Get-Content $dlg.FileName -Raw | ConvertFrom-Json
+                        # ReadAllText reads UTF-8 by default and honours a UTF-8,
+                        # UTF-16 or UTF-32 BOM, so the BOM-less UTF-8 Export writes
+                        # and older UTF-16 exports both read back unchanged.
+                        $cfg=[System.IO.File]::ReadAllText($dlg.FileName) | ConvertFrom-Json
                         # ConvertFrom-Json only throws on malformed JSON. Any other
                         # .json - a bookmarks dump, "[]", a bare string - parses fine,
                         # and Import-PresetIntoState clears every staged row BEFORE it
                         # looks for Features, so without this guard a wrong file wiped
-                        # the selections and still reported "Imported". The throw lands
-                        # in the catch below, which is the honest message.
+                        # the selections and still reported "Imported". Features must
+                        # be an object or a legacy array; a scalar is refused too. The
+                        # full type name, never [pscustomobject], which matches almost
+                        # anything. The throw lands in the catch below, which is the
+                        # honest message.
                         if(-not ($cfg -is [System.Management.Automation.PSCustomObject]) -or
                            $null -eq $cfg.PSObject.Properties['Features'] -or
-                           $null -eq $cfg.Features){ throw "no Features block" }
+                           $null -eq $cfg.Features -or
+                           -not (($cfg.Features -is [System.Management.Automation.PSCustomObject]) -or ($cfg.Features -is [array]))){ throw "no Features block" }
                         Import-PresetIntoState @{features=$cfg.Features;dns=$cfg.DnsMode;tmpl=$cfg.DnsTemplates}
                         $ok=$true
-                    } catch { $ok=$false }
+                    } catch {
+                        foreach($id in @($snap.Keys)){ $script:state[$id].On=$snap[$id].On; $script:state[$id].Sel=$snap[$id].Sel }
+                        $script:dnsState.Mode=$dnsSnap.Mode; $script:dnsState.Tmpl=$dnsSnap.Tmpl
+                        $ok=$false
+                    }
                     # The rebuild and the status run OUTSIDE the try: a handler
                     # that fires while a try block is active anywhere up the
                     # chain turns its own errors into the .NET crash dialog.
                     if($ok){
                         Refresh-View
                         $msg="Imported from $([System.IO.Path]::GetFileName($dlg.FileName))"
+                        # Unique: two rows can share a key and name it twice.
                         if($script:importNotes.Count -gt 0){
-                            $msg+=" Left unmanaged, because the imported value is not one this policy accepts: "+(($script:importNotes | Sort-Object) -join ", ")+"."
+                            $msg+=" Left unmanaged, because the imported value is not one this policy accepts: "+(($script:importNotes | Sort-Object -Unique) -join ", ")+"."
+                        }
+                        if($script:importConflicts.Count -gt 0){
+                            $msg+=" Left unmanaged, because it is mutually exclusive with another imported row: "+(($script:importConflicts | Sort-Object -Unique) -join ", ")+"."
                         }
                         Set-Status $msg
                     } else { Set-Status "Import failed - not a SlimBrave config" }

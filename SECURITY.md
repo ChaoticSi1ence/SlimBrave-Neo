@@ -157,8 +157,8 @@ It writes to exactly three places:
 | Location | What happens there |
 |----------|--------------------|
 | `HKLM:\SOFTWARE\Policies\BraveSoftware\Brave` | One value per ticked option (or one numbered subkey for list policies), plus `DnsOverHttpsMode` / `DnsOverHttpsTemplates`. Created only when you press Apply — opening the app writes nothing. |
-| `HKCU:\SOFTWARE\Policies\BraveSoftware\Brave` (or `HKEY_USERS\<your SID>\...` when elevated as another account) | Values are only **removed** here, never written, so a leftover user-scope policy cannot override the machine one. |
-| `%LOCALAPPDATA%\BraveSoftware\<channel>\User Data\<profile>\Preferences`, for the account you ran it from (the profile path the elevated relaunch forwards) | Only the `profile.content_settings.exceptions.braveShields` entries for `http://*,*` and `https://*,*` are deleted. Nothing else in the file is read back out or changed. Covers Stable/Beta/Nightly/Dev and every profile (`Default`, `Profile 1`, ...). Other accounts are never touched, and a profile reached through a junction or symbolic link is skipped. Skipped entirely while Brave is running, because Brave would overwrite the file on its next save. |
+| `HKCU:\SOFTWARE\Policies\BraveSoftware\Brave` (or `HKEY_USERS\<your SID>\...` when elevated as another account) | Values are only **removed** here, never written: the user-scope copy of every key SlimBrave manages, so a stale user policy does not take effect once SlimBrave stops managing that key (while SlimBrave writes a key, the machine value already outranks it). A list is removed only when it is exactly SlimBrave's, as below. |
+| `%LOCALAPPDATA%\BraveSoftware\<channel>\User Data\<profile>\Preferences`, for the account you ran it from (the profile path the elevated relaunch forwards) | Only the `profile.content_settings.exceptions.braveShields` entries for `http://*,*` and `https://*,*` are deleted. Nothing else in the file is read back out or changed. Covers Brave and Brave Origin, Stable/Beta/Nightly/Dev, and every profile (`Default`, `Profile 1`, ...). Other accounts are never touched, and a profile reached through a junction or symbolic link is skipped. A profile whose file cannot be read or rewritten is counted in the status, with the folder to check. Skipped entirely while Brave is running, because Brave would overwrite the file on its next save. |
 
 Those Shields entries have no identified writer: no SlimBrave version writes
 them (the managed policy lives in memory and is never copied into the
@@ -183,9 +183,10 @@ other values inside it — a group-policy `ExtensionInstallForcelist`,
 
 Reset clears the managed **values** outright; that is what a reset is for. Both
 Reset and Apply are stricter about **list** policies: one is removed only when
-the list on disk is byte-for-byte the one SlimBrave writes, so an
+the list on disk holds exactly the entries SlimBrave writes, in each form
+Chromium reads (numbered values in a subkey, or one JSON-array string), so an
 `ExtensionInstallBlocklist` an admin or a GPO owns is left in place and both
-actions report how many they skipped.
+actions report what they skipped.
 
 ### Linux — `slimbrave-linux.py`
 
