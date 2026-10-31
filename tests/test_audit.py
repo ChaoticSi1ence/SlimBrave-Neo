@@ -110,6 +110,14 @@ def test_nothing_rejected_is_written():
     assert dead_in_tables == []
 
 
+def test_every_rejected_row_names_a_key():
+    # A Key(s) cell the parser cannot read, such as `WebRtc*LogCollectionAllowed`
+    # (a mid-name `*`), would guard nothing.
+    unnamed = [row["Key(s)"] for _header, rows in REJECTED_TABLES for row in rows
+               if not _keys_in(row["Key(s)"])]
+    assert unnamed == [], unnamed
+
+
 def test_status_cells_use_the_vocabulary():
     for header, rows in BRAVE_TABLES + CHROMIUM_TABLES + REJECTED_TABLES:
         assert "Status" in header, header
