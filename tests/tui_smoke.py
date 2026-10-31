@@ -10,10 +10,10 @@ mode off, expecting the ASCII fallback the scripts pick when the codec
 cannot encode the box glyphs.
 
 Needs tmux, passwordless sudo (the scripts refuse to run otherwise) and a
-policy-file path inside the script's allowed directories. CI only; it
-writes nothing - the TUI is quit without Apply.
+policy-file path that passes the script's own directory and file-name
+check. CI only; it writes nothing - the TUI is quit without Apply.
 
-    python3 tests/tui_smoke.py slimbrave-linux.py /etc/brave/policies/managed/smoke.json
+    python3 tests/tui_smoke.py slimbrave-linux.py /etc/brave/policies/managed/slimbrave-smoke.json
 """
 import os
 import pathlib
@@ -25,13 +25,16 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 COLS, ROWS = 80, 24
 
 
-def tmux(*args):
-    return subprocess.run(["tmux", *args], check=True, capture_output=True,
-                          text=True, encoding="utf-8").stdout
+def tmux(session, *args):
+    # Each pass gets its own tmux server (-L, named after the session). On a
+    # shared server, killing the first pass's only session shuts the server
+    # down, and the next pass's new-session can race that shutdown and fail.
+    return subprocess.run(["tmux", "-L", session, *args], check=True,
+                          capture_output=True, text=True, encoding="utf-8").stdout
 
 
 def screen(session):
-    rows = tmux("capture-pane", "-t", session, "-p").split("\n")
+    rows = tmux(session, "capture-pane", "-t", session, "-p").split("\n")
     rows = rows[:ROWS] + [""] * (ROWS - len(rows))
     return [r.rstrip() for r in rows]
 
@@ -48,7 +51,7 @@ def wait_for(session, needle, timeout=30):
 
 
 def press(session, key, settle=0.5):
-    tmux("send-keys", "-t", session, key)
+    tmux(session, "send-keys", "-t", session, key)
     time.sleep(settle)
     return screen(session)
 
@@ -60,7 +63,7 @@ def run(script, policy_file, env, label):
     # is passed explicitly because sudo resets it.
     cmd = (f"sudo env {env_str} python3 {ROOT / script} --policy-file {policy_file}; "
            "echo EXIT=$?; sleep 60")
-    tmux("new-session", "-d", "-s", session, "-x", str(COLS), "-y", str(ROWS), cmd)
+    tmux(session, "new-session", "-d", "-s", session, "-x", str(COLS), "-y", str(ROWS), cmd)
     frames = {}
     try:
         frames["start"] = wait_for(session, "Settings")
@@ -71,7 +74,7 @@ def run(script, policy_file, env, label):
         press(session, "q")
         frames["exit"] = wait_for(session, "EXIT=")
     finally:
-        subprocess.run(["tmux", "kill-session", "-t", session], capture_output=True)
+        subprocess.run(["tmux", "-L", session, "kill-server"], capture_output=True)
     return frames
 
 

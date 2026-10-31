@@ -2,6 +2,7 @@
     "Features": {
         "MetricsReportingEnabled": false,
         "UrlKeyedAnonymizedDataCollectionEnabled": false,
+        "AccessibilityImageLabelsEnabled": false,
         "BraveP3AEnabled": false,
         "BraveStatsPingEnabled": false,
         "AutofillAddressEnabled": false,
@@ -19,7 +20,6 @@
         "NetworkPredictionOptions": 2,
         "BlockThirdPartyCookies": true,
         "PaymentMethodQueryEnabled": false,
-        "AlternateErrorPagesEnabled": false,
         "DefaultNotificationsSetting": 2,
         "DefaultGeolocationSetting": 2,
         "DefaultSensorsSetting": 2,
@@ -42,8 +42,6 @@
         "DefaultBraveRemember1PStorageSetting": 2,
         "BackgroundModeEnabled": false,
         "EnableMediaRouter": false,
-        "ShoppingListEnabled": false,
-        "AlwaysOpenPdfExternally": true,
         "TranslateEnabled": false,
         "SpellcheckEnabled": false,
         "SearchSuggestEnabled": false,
@@ -52,10 +50,16 @@
         "DeveloperToolsAvailability": 2,
         "BraveWaybackMachineEnabled": false,
         "BraveLocalAIEnabled": false,
-        "DNSInterceptionChecksEnabled": false,
         "RemoteDebuggingAllowed": false,
         "BasicAuthOverHttpEnabled": false,
         "BlockExternalExtensions": true,
-        "ChromeVariations": 1
+        "ExtensionInstallTypeBlocklist": [
+            "command_line"
+        ],
+        "ChromeVariations": 1,
+        "XSLTEnabled": false,
+        "DefaultJavaScriptOptimizerSetting": 2,
+        "SitePerProcess": true,
+        "OriginKeyedProcessesEnabled": true
     }
 }

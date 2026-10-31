@@ -28,6 +28,7 @@ import json
 import locale
 import os
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -44,8 +45,9 @@ if IS_MAC:
     import uuid
     POLICY_DIR = "/Library/Managed Preferences"
     POLICY_FILE = os.path.join(POLICY_DIR, "com.brave.Browser.plist")
-    # Directories a `--policy-file` argument is permitted to target on macOS.
-    # Allowed locations mirror the documented Chromium managed-policy paths.
+    # Directories a `--policy-file` argument may name a file directly inside
+    # on macOS (see _is_allowed_policy_file for the file-name rule). Allowed
+    # locations mirror the documented Chromium managed-policy paths.
     ALLOWED_POLICY_DIRS = (
         "/Library/Managed Preferences",
         "/Library/Preferences",
@@ -181,41 +183,49 @@ def is_origin_only(installations):
         for i in installations)
 
 
-def _user_home_for_brave():
-    """Return the home directory of the real user (the one running sudo).
+def _invoking_user():
+    """Return (name, uid, gid, home) of the user who ran this, or None.
 
-    Brave's profile lives under the invoking user's home, not root's.
-    Returns None when we can't determine it.
+    The one answer to "who is the user here": the prefs scrub, Export and
+    the macOS profile hand-off all act for this account. The name is
+    SUDO_USER, else USER, which a plain `su` to root leaves as the caller's.
+    None when neither is set, the name is root, pwd does not know it (or
+    there is no pwd, as on Windows), or it maps to uid 0, so nothing is ever
+    done as root, or in root's home, on its behalf.
     """
-    sudo_user = os.environ.get("SUDO_USER") or os.environ.get("USER")
-    if not sudo_user or sudo_user == "root":
+    name = os.environ.get("SUDO_USER") or os.environ.get("USER")
+    if not name or name == "root":
         return None
-    home = os.path.expanduser(f"~{sudo_user}")
-    # expanduser returns the input unchanged when the user is unknown
-    if home.startswith("~"):
-        return None
-    return home
-
-
-def _chown_to_sudo_user(path):
-    """Return a root-created file to the invoking user (no-op without sudo)."""
-    sudo_user = os.environ.get("SUDO_USER")
-    if not sudo_user:
-        return
     try:
         import pwd
-        user_info = pwd.getpwnam(sudo_user)
-        os.chown(path, user_info.pw_uid, user_info.pw_gid)
-    except (ImportError, KeyError, OSError):
-        pass
+        info = pwd.getpwnam(name)
+    except (ImportError, KeyError):
+        return None
+    if info.pw_uid == 0:
+        return None
+    return (name, info.pw_uid, info.pw_gid, info.pw_dir)
+
+
+def _user_home_for_brave():
+    """Return the invoking user's home directory (see _invoking_user).
+
+    Brave's profile lives under the invoking user's home, not root's.
+    """
+    identity = _invoking_user()
+    return identity[3] if identity else None
 
 
 def _mac_app_search_paths(app_name):
-    """Possible locations for a Brave app bundle (system + per-user)."""
+    """Possible locations for a Brave app bundle (system + per-user).
+
+    The per-user one is the invoking user's ~/Applications (_invoking_user),
+    so a plain `su` searches theirs, not root's; with no invoking user (a
+    root login) it is the running account's own.
+    """
     paths = [f"/Applications/{app_name}"]
-    sudo_user = os.environ.get("SUDO_USER")
-    if sudo_user:
-        paths.append(f"/Users/{sudo_user}/Applications/{app_name}")
+    home = _user_home_for_brave()
+    if home:
+        paths.append(os.path.join(home, "Applications", app_name))
     else:
         paths.append(os.path.expanduser(f"~/Applications/{app_name}"))
     return paths
@@ -279,22 +289,30 @@ def _profile_prefs_paths(default_prefs_path):
     return paths or [default_prefs_path]
 
 
-def _is_within_allowed_policy_dir(path):
-    """Return True if `path`'s realpath lives under an allowed policy dir.
+def _is_allowed_policy_file(path):
+    """True if `path` is a policy file SlimBrave may write and delete.
 
     Prevents `--policy-file /etc/shadow --reset` (run under a permissive
-    sudoers rule) from deleting arbitrary files. Legitimate use needs no
-    other path. On Linux, Brave reads policies only from /etc/brave/policies;
-    it never reads /etc/chromium/policies, which the list still accepts.
+    sudoers rule) from deleting arbitrary files. Two rules, both on the
+    realpath, so a symlinked directory or file cannot lead out: the file
+    sits directly in one of ALLOWED_POLICY_DIRS, never in a subdirectory,
+    and its name is SlimBrave's own. On macOS that is a channel's
+    com.brave.Browser[.beta|.nightly].plist, the only plists Brave reads
+    there (by bundle id); on Linux, slimbrave*.json. Chromium reads a
+    managed directory without descending into it, so neither rule hides a
+    file Brave would read. On Linux, Brave reads policies only from
+    /etc/brave/policies; it never reads /etc/chromium/policies, which the
+    list still accepts.
     """
-    real_path = os.path.realpath(path)
-    for allowed in ALLOWED_POLICY_DIRS:
-        real_allowed = (
-            os.path.realpath(allowed) if os.path.exists(allowed) else allowed
-        )
-        if real_path.startswith(real_allowed + os.sep):
-            return True
-    return False
+    real = os.path.realpath(path)
+    parent, name = os.path.split(real)
+    allowed = {os.path.realpath(d) if os.path.exists(d) else d
+               for d in ALLOWED_POLICY_DIRS}
+    if parent not in allowed:
+        return False
+    if IS_MAC:
+        return name in {c["bundle_id"] + ".plist" for c in MAC_CHANNELS}
+    return name.startswith("slimbrave") and name.endswith(".json")
 
 
 def _atomic_write(path, data, *, binary=False, mode=0o644):
@@ -305,6 +323,12 @@ def _atomic_write(path, data, *, binary=False, mode=0o644):
     target directory entry without following a symlink that happened to
     exist there. Also avoids leaving a half-written policy if the
     process is killed mid-write.
+
+    The data is fsynced before the rename, as Chromium's ImportantFileWriter
+    does, so a crash or power cut leaves the old file or the new one, never
+    an empty one: ext4's rename heuristic misses a freshly created file and
+    XFS has none. The directory is fsynced afterwards where POSIX allows it,
+    on a best-effort basis.
     """
     directory = os.path.dirname(path) or "."
     fd, tmp = tempfile.mkstemp(prefix=".slimbrave.", suffix=".tmp", dir=directory)
@@ -322,13 +346,28 @@ def _atomic_write(path, data, *, binary=False, mode=0o644):
                 os.fchmod(f.fileno(), mode)
             else:
                 os.chmod(tmp, mode)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, path)
-    except Exception:
+    except BaseException:
+        # BaseException, so a Ctrl+C mid-write leaves no temp file either.
         try:
             os.unlink(tmp)
         except OSError:
             pass
         raise
+    if os.name == "posix":
+        # Makes the rename itself durable. Outside the cleanup above: the
+        # file is already in place, so a directory that cannot be opened or
+        # synced fails nothing.
+        try:
+            dir_fd = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
 
 # ---------------------------------------------------------------------------
 # Brave browser detection
@@ -616,8 +655,8 @@ def detect_brave():
 # Features with a `group` key are mutually exclusive within that group:
 # checking one silently unchecks the others. Used for policies where two
 # rows set conflicting values for the same key (IncognitoModeAvailability,
-# HardwareAccelerationModeEnabled,
-# DefaultBraveReferrersSetting, ChromeVariations), for the Shields URL
+# HardwareAccelerationModeEnabled, DefaultBraveReferrersSetting,
+# ChromeVariations, SafeBrowsingProtectionLevel), for the Shields URL
 # lists, and for the two spellcheck rows — upstream states the enhanced
 # spell check policy has no effect once SpellcheckEnabled is false.
 
@@ -630,29 +669,36 @@ def detect_brave():
 #
 # The enum is NOT uniform. Allow=1 is a legal member of the notifications,
 # geolocation and sensors settings only; for the guard settings (WebUSB,
-# Serial, WebHID) and for local fonts / window management, value 1 is not a
-# member at all and Chromium rejects it, so those rows never offer "Allow".
+# Serial, WebHID) and for local fonts / window management / clipboard,
+# value 1 is not a schema member. Chromium does not reject one: it drops it
+# for the guard settings and applies it as a managed Allow for the other
+# three, so those rows never offer "Allow".
+# Notifications offers no Ask either: a managed Ask lets no notification
+# through (AUDIT.md, DefaultNotificationsSetting row).
 # Each row keeps the `value` it wrote as a checkbox: that is what a legacy
 # array-format config resolves to on import, and what the SlimBrave.ps1
 # feature table is compared against.
 CHOICES_ALLOW_ASK_BLOCK = [("Not managed", None), ("Allow", 1), ("Ask", 3), ("Block", 2)]
+CHOICES_ALLOW_BLOCK = [("Not managed", None), ("Allow", 1), ("Block", 2)]
 CHOICES_ASK_BLOCK = [("Not managed", None), ("Ask", 3), ("Block", 2)]
 
 CATEGORIES = [
     {
         "name": "Telemetry & Reporting",
         "features": [
-            {"name": "Disable Metrics Reporting", "key": "MetricsReportingEnabled", "value": False, "desc": "Stops Brave from sending anonymous usage statistics and crash reports to Brave's servers."},
+            {"name": "Disable Metrics Reporting", "key": "MetricsReportingEnabled", "value": False, "desc": "Stops Brave from uploading crash reports: locks 'Automatically send diagnostic reports' off, hides the prompt after a crash and blocks Send now on brave://crashes. Beta and Nightly turn it on by default; on Release the welcome page pre-ticks it. P3A and the usage ping have their own rows."},
 
-            {"name": "Disable URL Data Collection", "key": "UrlKeyedAnonymizedDataCollectionEnabled", "value": False, "desc": "Stops URL-keyed anonymized data collection, which reports the URLs you visit to improve suggestion and safety features."},
+            {"name": "Disable URL Data Collection", "key": "UrlKeyedAnonymizedDataCollectionEnabled", "value": False, "desc": "Locks 'Make searches and browsing better' (URL-keyed anonymized data collection) off. Brave already ships it off; its only switch, the hidden Privacy Guide at brave://settings/privacy/guide, goes away once any policy is set. This also overrides an opt-in made there earlier."},
+
+            {"name": "Disable Google Image Descriptions", "key": "AccessibilityImageLabelsEnabled", "value": False, "desc": "Brave already keeps Google's image descriptions off and no longer offers the opt-in. A profile that accepted it in an older version still sends unlabeled images to Google whenever a screen reader runs; this turns that off and locks it."},
 
             {"name": "Disable P3A Analytics", "key": "BraveP3AEnabled", "value": False, "desc": "Disables P3A (Privacy-Preserving Product Analytics), Brave's anonymized product usage telemetry."},
 
             {"name": "Disable Stats Ping", "key": "BraveStatsPingEnabled", "value": False, "desc": "Stops the daily usage ping that counts this install in Brave's active-user statistics, plus the search-engine usage counts it carries and the referral-code check. P3A Analytics sends its own copy of the search counts until it is disabled too."},
 
-            {"name": "Limit Variations to Critical Fixes", "key": "ChromeVariations", "value": 1, "group": "variations", "desc": "Restricts Brave's remote experiment seed (Griffin) to studies Brave marks critical. None applies to current Brave, so this acts like Disable Variations but would let through any it marks later. Takes effect after a restart. Mutually exclusive with Disable Variations."},
+            {"name": "Limit Variations to Critical Fixes", "key": "ChromeVariations", "value": 1, "group": "variations", "desc": "Restricts Brave's remote seed (Griffin) to studies Brave marks critical, so features Brave turns on only that way stay off, such as WebGL/WebGPU fingerprint masking (brave://flags restores it) and a Google sign-in fix. Takes effect after a restart. Mutually exclusive with Disable Variations."},
 
-            {"name": "Disable Variations / Griffin Experiments", "key": "ChromeVariations", "value": 2, "group": "variations", "desc": "Refuses every study in Brave's remote experiment seed (Griffin), so Brave can't flip features in your browser from its servers; the seed is still downloaded. Unlike Limit Variations, it also refuses fixes marked critical. Takes effect after a restart. Mutually exclusive with Limit Variations."},
+            {"name": "Disable Variations / Griffin Experiments", "key": "ChromeVariations", "value": 2, "group": "variations", "desc": "Refuses every study in Brave's remote seed (Griffin), critical fixes too, so features Brave turns on only that way stay off, such as WebGL/WebGPU fingerprint masking and a Google sign-in fix. The seed is still downloaded. Takes effect after a restart. Mutually exclusive with Limit Variations."},
 
             {"name": "Disable Enhanced Spell Check", "key": "SpellCheckServiceEnabled", "value": False, "group": "spellcheck", "desc": "Locks off enhanced spell check, which sends what you type in web forms to Google. Brave already ships it off with no setting to turn it on; offline spell checking keeps working. Mutually exclusive with Disable Spellcheck, which turns spell checking off altogether and makes this row do nothing."},
 
@@ -661,7 +707,7 @@ CATEGORIES = [
     {
         "name": "Privacy & Security",
         "features": [
-            {"name": "Disable Safe Browsing (security downgrade)", "key": "SafeBrowsingProtectionLevel", "value": 0, "desc": "Turns Safe Browsing fully off. Brave already routes these lookups through its own servers, so Google never sees the sites you visit even with Safe Browsing on - turning it off buys almost no privacy and costs you the phishing and malware warning pages. Excluded from every preset for that reason."},
+            {"name": "Disable Safe Browsing (security downgrade)", "key": "SafeBrowsingProtectionLevel", "value": 0, "group": "safebrowsing", "desc": "Turns Safe Browsing fully off. Brave routes these lookups through its own servers, so Google never learns who made them; turning it off buys almost no privacy and costs you the phishing and malware warning pages. Excluded from every preset. Mutually exclusive with Lock Safe Browsing On."},
 
             {"name": "Disable Autofill (Addresses)", "key": "AutofillAddressEnabled", "value": False, "desc": "Stops Brave from saving and auto-filling addresses and other contact details in web forms. Chromium has deprecated this policy, so brave://policy lists it as Deprecated, but Brave still applies it; its replacement (AutofillSettings) does not work in Brave yet."},
 
@@ -671,49 +717,59 @@ CATEGORIES = [
 
             {"name": "Disable Password Leak Detection", "key": "PasswordLeakDetectionEnabled", "value": False, "desc": "Locks off the online check of your credentials against known breach lists, which runs after you sign in to a site and when you edit a saved login. Brave already ships it off; this keeps it off."},
 
-            {"name": "Disable Browser Sign-in", "key": "BrowserSignin", "value": 0, "desc": "Brave has no Google sign-in for the browser itself; in Brave this locks off 'Allow Google login for extensions' (brave://settings/extensions), which Brave already ships off. Brave Account sign-in is not affected. Takes effect after a restart."},
+            {"name": "Disable Browser Sign-in", "key": "BrowserSignin", "value": 0, "desc": "Brave has no Google browser sign-in; this locks 'Allow Google login for extensions' (brave://settings/extensions) off, as Brave already ships it. Extensions can still open Google's sign-in popup via chrome.identity. Brave Account is not affected. Takes effect after a restart."},
 
-            {"name": "Enable Global Privacy Control", "key": "BraveGlobalPrivacyControlEnabled", "value": True, "desc": "Sends the GPC signal with every request, telling sites not to sell or share your data. Legally binding in some regions (e.g. under CCPA)."},
+            {"name": "Enable Global Privacy Control", "key": "BraveGlobalPrivacyControlEnabled", "value": True, "desc": "Brave already sends the Global Privacy Control signal (asking sites not to sell or share your data) on every request and has no setting for it; this keeps it on if Adblock-Only mode (English UI only) is turned on. Works even where Shields are down."},
 
-            {"name": "Enable De-AMP", "key": "BraveDeAmpEnabled", "value": True, "desc": "Skips Google AMP pages and loads the publisher's original page instead."},
+            {"name": "Enable De-AMP", "key": "BraveDeAmpEnabled", "value": True, "desc": "Keeps De-AMP on: Google AMP pages are skipped for the publisher's original page. Brave already does this by default; this locks the Settings toggle and stops Adblock-Only mode from turning it off."},
 
-            {"name": "Enable Debouncing", "key": "BraveDebouncingEnabled", "value": True, "desc": "Skips known tracking redirects and navigates straight to the final destination URL."},
+            {"name": "Enable Debouncing", "key": "BraveDebouncingEnabled", "value": True, "desc": "Keeps debouncing on: known tracking redirects are skipped and you go straight to the final URL. Brave already does this by default; this locks the Settings toggle and stops Adblock-Only mode from turning it off."},
 
-            {"name": "Strip Tracking URL Parameters", "key": "BraveTrackingQueryParametersFilteringEnabled", "value": True, "desc": "Removes known tracking parameters (fbclid, gclid, mc_eid, ...) from URLs before they load."},
+            {"name": "Strip Tracking URL Parameters", "key": "BraveTrackingQueryParametersFilteringEnabled", "value": True, "desc": "Brave already strips known tracking parameters (fbclid, gclid, mc_eid, ...) from URLs and has no setting for it; this keeps stripping on if Adblock-Only mode (English UI only) is turned on. Needs Shields up."},
 
-            {"name": "Reduce Language Fingerprinting", "key": "BraveReduceLanguageEnabled", "value": True, "desc": "Reports a generic language configuration to sites, making your browser harder to fingerprint."},
+            {"name": "Reduce Language Fingerprinting", "key": "BraveReduceLanguageEnabled", "value": True, "desc": "Brave already does this by default; this locks its Settings toggle on. Sites get only your first language in the Accept-Language header and, on Windows, macOS and a few Linux distros, only a standard font list. Needs Shields up and fingerprinting protection on."},
 
             {"name": "Disable WebRTC IP Leak", "key": "WebRtcIPHandling", "value": "disable_non_proxied_udp", "desc": "Restricts WebRTC to proxied connections so video/voice calls can't expose your real IP address behind a VPN or proxy."},
 
             {"name": "Disable QUIC Protocol", "key": "QuicAllowed", "value": False, "desc": "Disables QUIC (HTTP/3) for web requests so they use TCP (HTTP/2 or HTTP/1.1). Useful when a firewall or filter can't inspect QUIC; may slightly slow some Google sites. WebRTC calls and WebTransport still use UDP."},
 
-            {"name": "Disable Network Prediction (Prefetch)", "key": "NetworkPredictionOptions", "value": 2, "desc": "Stops Brave from fetching pages ahead of your click when a site's speculation rules or prerender hints ask for it, and from pre-connecting to your search engine. Brave already defaults to this; the policy locks it."},
+            {"name": "Disable Network Prediction (Prefetch)", "key": "NetworkPredictionOptions", "value": 2, "desc": "Stops Brave from fetching pages ahead of your click when a site's speculation rules or prerender hints ask for it, and from pre-connecting to your search engine. Brave already defaults to this; the policy locks it against Sync and extensions."},
 
-            {"name": "Block Third Party Cookies", "key": "BlockThirdPartyCookies", "value": True, "desc": "Blocks cookies set by domains other than the site you are visiting. Can break some embedded logins."},
+            {"name": "Block Third Party Cookies", "key": "BlockThirdPartyCookies", "value": True, "desc": "Brave already blocks third-party cookies by default; this locks that, so the global 'Allow all cookies' choice in Shields settings, extensions, Sync and Adblock-Only mode can't turn it off. Per-site Shields exceptions still work, e.g. for an embedded login that breaks."},
 
             {"name": "Block Payment Method Probing", "key": "PaymentMethodQueryEnabled", "value": False, "desc": "Stops sites from learning whether you have payment methods saved: canMakePayment() always answers yes and hasEnrolledInstrument() always answers no, so neither reveals anything."},
 
-            {"name": "Disable Alternate Error Pages (no effect in Brave)", "key": "AlternateErrorPagesEnabled", "value": False, "desc": "No effect in Brave: Brave never runs the web-service helper for navigation errors that this setting controls, and keeps captive-portal (Wi-Fi sign-in page) detection on either way. Kept as a lock; Brave already ships it off."},
-
             {"name": "Block Remote Debugging", "key": "RemoteDebuggingAllowed", "value": False, "desc": "Blocks the remote debugging port and pipe, the interface automation tools use to drive the browser and read your cookies and logged-in sessions. Disable Developer Tools does not cover this. Breaks Puppeteer, Playwright and the brave://inspect remote-debugging toggle. No restart needed."},
-
-            {"name": "Disable DNS Interception Probes (no effect in Brave)", "key": "DNSInterceptionChecksEnabled", "value": False, "desc": "No effect in Brave: Chromium has not made these three random-hostname lookups by default since version 97. They run only when the IntranetRedirectBehavior policy is set to 3, which SlimBrave never writes. Kept as a lock in case that changes."},
 
             {"name": "Require HTTPS for Basic Auth", "key": "BasicAuthOverHttpEnabled", "value": False, "desc": "Refuses HTTP Basic authentication over plain HTTP so your username and password are never sent in the clear. Breaks logins on legacy routers, printers and other appliances that only serve HTTP, and plain-HTTP proxies that use Basic authentication."},
 
+            {"name": "Block Local Network Access", "key": "LocalNetworkAccessBlockedForUrls", "value": ["*"], "desc": "Stops public websites from reaching devices on your local network (router, NAS, printers, smart-home hubs) or apps on this computer, with no prompt or per-site exception; Brave otherwise asks. Pages opened from a local address still work. Breaks web apps that pair with local devices or helper apps."},
+
+            {"name": "Disable XSLT", "key": "XSLTEnabled", "value": False, "desc": "Turns off XSLT, the legacy XML transform engine behind XSLTProcessor and xml-stylesheet pages, an attack surface Chromium is removing; this keeps it off, even for sites that opt back in. XML styled with it (some RSS feeds and sitemaps) shows unstyled. Takes full effect after a restart."},
+
+            {"name": "Disable JavaScript Optimization (hardening)", "key": "DefaultJavaScriptOptimizerSetting", "value": 2, "desc": "Turns off V8's optimizing compilers (TurboFan, Maglev) on websites; Brave says this makes it more resistant to attacks. Sites keep working, WebAssembly included, but script-heavy pages and web apps run slower, with no per-site exception. Applies to tabs opened after the change."},
+
+            {"name": "Remove 'Always Allow' from App-Launch Prompts", "key": "ExternalProtocolDialogShowAlwaysOpenCheckbox", "value": False, "desc": "Removes the 'Always allow' checkbox from the prompt Brave shows before a site opens an external app, so every launch (mailto:, Zoom, Teams, Steam, ms-* links) needs a click. Apps you already set to always open from a site still open without asking."},
+
+            {"name": "Force Site Isolation for Every Site", "key": "SitePerProcess", "value": True, "desc": "Keeps every site in its own process, as Brave already does on desktop, and stops brave://flags#site-isolation-trial-opt-out or --disable-site-isolation-trials from turning it off. Takes effect after a restart."},
+
+            {"name": "Isolate Subdomains in Separate Processes", "key": "OriginKeyedProcessesEnabled", "value": True, "desc": "Puts each origin (for example mail.example.com and docs.example.com) in its own process rather than one per site, for stronger protection against Spectre-style leaks between subdomains. Uses more processes and memory. Takes effect after a restart. A brave://flags setting overrides it."},
+
+            # DynamicCodeSettings is chrome.win only: SlimBrave.ps1 alone offers it.
         ],
     },
     {
-        # Content-setting defaults sites are granted: every row here is a
-        # selector (Not managed / Ask / Block, plus Allow where Chromium
-        # has one), never a checkbox.
+        # Content-setting defaults sites are granted: each is a selector
+        # (Not managed / Ask / Block, plus Allow where Chromium has one).
+        # The microphone and camera rows at the end are checkboxes: their
+        # policies are booleans whose true equals unset.
         "name": "Site Permissions",
         "features": [
-            {"name": "Web Notifications", "key": "DefaultNotificationsSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK, "desc": "Sets the default for desktop notifications. Block stops every site from asking or showing them, Ask keeps the permission prompt, Allow grants it to every site."},
+            {"name": "Web Notifications", "key": "DefaultNotificationsSetting", "value": 2, "choices": CHOICES_ALLOW_BLOCK, "desc": "Sets the default for desktop notifications. Block stops every site from asking or showing them; Allow lets every site show them. Either overrides your per-site settings. Not managed keeps Brave's normal prompt (a managed Ask would let no notification through)."},
 
-            {"name": "Location Access", "key": "DefaultGeolocationSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK, "desc": "Sets the default for reading your physical location. Block removes the prompt entirely, so maps and delivery sites will need the location typed manually; Ask keeps the prompt."},
+            {"name": "Location Access", "key": "DefaultGeolocationSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK, "desc": "Sets the default for reading your physical location. Block removes the prompt entirely, so maps and delivery sites will need the location typed manually; Ask prompts every time a site asks and remembers no answer. Any choice overrides your per-site settings."},
 
-            {"name": "Motion Sensors", "key": "DefaultSensorsSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK, "desc": "Sets the default for motion and orientation sensors, a known fingerprinting vector. Blocking rarely breaks anything on desktop."},
+            {"name": "Motion Sensors", "key": "DefaultSensorsSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK, "desc": "Motion and orientation sensors are a fingerprinting vector, and Brave already blocks them by default. Block locks that: neither the settings page nor a per-site exception, even one made earlier, can allow them. Ask and Allow loosen Brave's default."},
 
             {"name": "WebUSB Access", "key": "DefaultWebUsbGuardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK, "desc": "Sets the default for sites talking to USB devices. Block removes the prompt and breaks web-based hardware wallets (Ledger, Trezor) and in-browser firmware flashers; Ask keeps the prompt. Chromium has no Allow state for this key."},
 
@@ -725,6 +781,12 @@ CATEGORIES = [
 
             {"name": "Multi-Screen Access", "key": "DefaultWindowManagementSetting", "value": 2, "choices": CHOICES_ASK_BLOCK, "desc": "Sets the default for sites reading your monitor layout and placing windows on a chosen screen. Blocking breaks the full-screen presentation mode in some web apps. Chromium has no Allow state for this key."},
 
+            {"name": "Clipboard Read Access", "key": "DefaultClipboardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK, "desc": "Sets the default for sites reading your clipboard without you pasting. Block removes the prompt and breaks Paste buttons inside web apps; Ask keeps the prompt. Either one overrides sites you allowed before. Ctrl+V and copy buttons still work. Chromium has no Allow state for this key."},
+
+            {"name": "Block Microphone Access", "key": "AudioCaptureAllowed", "value": False, "desc": "Stops every site and extension from using the microphone or any other audio input, with no prompt; per-site Allow exceptions stop working too. Breaks web calls and meetings (Meet, Zoom or Teams on the web, Discord, Brave Talk), voice messages and dictation on websites."},
+
+            {"name": "Block Camera Access", "key": "VideoCaptureAllowed", "value": False, "desc": "Stops every site and extension from using the camera or any other video input, with no prompt; per-site Allow exceptions stop working too. Breaks web video calls (Meet, Zoom or Teams on the web, Discord, Brave Talk), webcam ID checks and in-browser QR scanners."},
+
         ],
     },
     {
@@ -734,15 +796,27 @@ CATEGORIES = [
         "features": [
             {"name": "Force Google SafeSearch", "key": "ForceGoogleSafeSearch", "value": True, "desc": "Forces SafeSearch on for all Google searches. Mainly useful for parental controls."},
 
+            {"name": "Force YouTube Restricted Mode (Strict)", "key": "ForceYouTubeRestrict", "value": 2, "desc": "Forces YouTube's Strict Restricted Mode on youtube.com and its country domains, including videos other sites embed from them; the user cannot turn it off. Many videos become unavailable and comments are hidden. Videos embedded from youtube-nocookie.com are not restricted."},
+
+            {"name": "Lock Safe Browsing On (Standard)", "key": "SafeBrowsingProtectionLevel", "value": 1, "group": "safebrowsing", "desc": "Locks Safe Browsing at Standard protection so it cannot be switched to No protection in brave://settings/security. Lookups go through Brave's proxy, as they do by default. Mutually exclusive with Disable Safe Browsing."},
+
+            {"name": "Block Bypassing Safe Browsing Warnings", "key": "DisableSafeBrowsingProceedAnyway", "value": True, "desc": "Removes the option to continue past Safe Browsing's malware and phishing warnings, so a flagged site cannot be opened, even one flagged by mistake. Does not cover certificate or download warnings. Does nothing while Safe Browsing is off; Lock Safe Browsing On keeps it on."},
+
+            {"name": "Block Bypassing Certificate Warnings", "key": "SSLErrorOverrideAllowed", "value": False, "desc": "Removes the Proceed link, and the typed bypass, from certificate-error pages, so a site whose certificate is invalid, expired or self-signed cannot be opened at all. Breaks router, NAS and printer admin pages and local dev servers that use self-signed certificates."},
+
             {"name": "Disable Guest Mode", "key": "BrowserGuestModeEnabled", "value": False, "desc": "Removes guest browsing sessions: off-the-record windows that keep no history and run without your profile's extensions. Disable Incognito Mode does not remove them. These policies still apply inside guest windows."},
+
+            {"name": "Prevent Deleting History", "key": "AllowDeletingBrowserHistory", "value": False, "desc": "Stops anyone deleting browsing and download history in History, Downloads or Clear browsing data; Brave's clear-on-exit keeps them too. Brave's Local history retention setting (brave://settings/privacy) can still expire history after as little as a day, and SlimBrave cannot lock it."},
 
             {"name": "Block All Extensions", "key": "ExtensionInstallBlocklist", "value": ["*"], "desc": "Blocks installation of every extension and disables ones already installed. For lockdown/parental setups - a proxy or VPN extension would bypass DNS filtering."},
 
             {"name": "Block Sideloaded (External) Extensions", "key": "BlockExternalExtensions", "value": True, "desc": "Blocks extensions other programs install through the Windows registry or a drop-in file (how bundleware gets in) and removes any added that way at the next launch, even ones you approved. Extensions you install yourself keep working."},
 
+            {"name": "Block Command-Line Extensions (--load-extension)", "key": "ExtensionInstallTypeBlocklist", "value": ["command_line"], "desc": "Ignores extensions passed with --load-extension, which malware adds to Brave's shortcuts to slip one in. Google Chrome ignores that switch; Brave honours it unless this is set. --disable-extensions-except can still load one. Breaks shortcuts and test tools that use the switch. Restart needed."},
+
             {"name": "Disable Incognito Mode", "key": "IncognitoModeAvailability", "value": 1, "group": "incognito", "desc": "Removes private browsing entirely - no incognito windows can be opened. Mutually exclusive with Force Incognito Mode."},
 
-            {"name": "Force Incognito Mode", "key": "IncognitoModeAvailability", "value": 2, "group": "incognito", "desc": "Every window opens in incognito: no history, and logins and most extensions stop persisting. Mutually exclusive with Disable Incognito Mode."},
+            {"name": "Force Incognito Mode", "key": "IncognitoModeAvailability", "value": 2, "group": "incognito", "desc": "Every window opens in incognito: no history, and logins and most extensions stop persisting. Tor windows go too, and so do Leo and Brave Rewards, plus Brave Wallet unless it is allowed in private windows. Mutually exclusive with Disable Incognito Mode."},
 
         ],
     },
@@ -755,13 +829,13 @@ CATEGORIES = [
 
             {"name": "Disable Brave VPN", "key": "BraveVPNDisabled", "value": True, "desc": "Removes the Brave VPN feature and its upsell prompts."},
 
-            {"name": "Disable Brave AI Chat", "key": "BraveAIChatEnabled", "value": False, "desc": "Disables Leo, Brave's built-in AI assistant, and removes it from the sidebar and address bar."},
+            {"name": "Disable Brave AI Chat", "key": "BraveAIChatEnabled", "value": False, "desc": "Disables Leo, Brave's built-in AI assistant, and removes it from the sidebar and address bar. Brave still downloads Leo's WebMCP tool-scripts component, though nothing uses it while Leo is off."},
 
-            {"name": "Disable Local AI (On-Device Models, Brave 1.94+, off by default on Release)", "key": "BraveLocalAIEnabled", "value": False, "desc": "Stops Brave from downloading and running on-device AI models and from building an AI index of your browsing history. Separate from Brave AI Chat - disabling Leo does not cover this. Off by default on Release (on in Nightly and half of Beta); this keeps it off if Brave or you turn it on. Needs Brave 1.94 or newer; older versions ignore the key. Takes effect after a browser restart."},
+            {"name": "Disable Local AI (On-Device Models, Brave 1.94+, off by default on Release)", "key": "BraveLocalAIEnabled", "value": False, "desc": "Stops Brave from downloading and running on-device AI models and from building an AI index of your browsing history; disabling Leo does not cover this. Off by default on Release (on in Nightly and half of Beta); this keeps it off if Brave or you turn it on. Takes effect after a restart."},
 
-            {"name": "Disable Brave Shields", "key": "BraveShieldsDisabledForUrls", "value": ["https://*", "http://*"], "group": "shields", "desc": "Turns Shields OFF for every site: no ad blocking, no tracker blocking. Every Shields & Content Protection row, Strip Tracking URL Parameters and Reduce Language Fingerprinting then do nothing; De-AMP, Debouncing and Global Privacy Control keep working. Almost nobody wants this - it exists for kiosk/testing setups. Mutually exclusive with Force Shields On."},
+            {"name": "Disable Brave Shields", "key": "BraveShieldsDisabledForUrls", "value": ["https://*", "http://*"], "group": "shields", "desc": "Kiosk/testing only. Shields OFF for every site: no ad or tracker blocking; Shields & Content Protection rows, Strip Tracking URL Parameters and Reduce Language Fingerprinting do nothing. De-AMP, Debouncing, GPC and third-party cookie blocking still work. Mutually exclusive with Force Shields On."},
 
-            {"name": "Force Shields On (All Sites)", "key": "BraveShieldsEnabledForUrls", "value": ["https://*", "http://*"], "group": "shields", "desc": "Locks Shields ON for every site; the per-site Shields toggle stops working. Mutually exclusive with Disable Brave Shields."},
+            {"name": "Force Shields On (All Sites)", "key": "BraveShieldsEnabledForUrls", "value": ["https://*", "http://*"], "group": "shields", "desc": "Locks Shields ON for every site: the per-site toggle can no longer drop ad, tracker or fingerprinting protection, but switching it off still unblocks third-party cookies and storage for that site. Mutually exclusive with Disable Brave Shields."},
 
             {"name": "Disable Brave News", "key": "BraveNewsDisabled", "value": True, "desc": "Removes the Brave News feed from the new tab page."},
 
@@ -794,7 +868,7 @@ CATEGORIES = [
 
             {"name": "Force HTTPS Upgrades (Strict; not enforced on Brave's HTTPS-First rollout)", "key": "DefaultBraveHttpsUpgradeSetting", "value": 2, "desc": "Always upgrades connections to HTTPS; sites that can't serve it show a warning instead of falling back to HTTP. Not enforced where Brave moved to Chromium's HTTPS-First mode (Beta, Nightly, part of Release), which it only presets once; Limit or Disable Variations keeps it enforced."},
 
-            {"name": "Cap Referrers (Strict Origin)", "key": "DefaultBraveReferrersSetting", "value": 2, "group": "referrers", "desc": "Caps the Referer header at the origin for cross-origin requests, locked as managed policy. Mutually exclusive with Allow Permissive Referrers."},
+            {"name": "Cap Referrers (Strict Origin)", "key": "DefaultBraveReferrersSetting", "value": 2, "group": "referrers", "desc": "Caps the Referer header at the origin for cross-origin requests, as Brave already does by default, and locks it: per-site exceptions stop applying, including any Brave's compatibility list adds to fix sites. Mutually exclusive with Allow Permissive Referrers."},
 
             {"name": "Allow Permissive Referrers (unsafe-url)", "key": "DefaultBraveReferrersSetting", "value": 1, "group": "referrers", "desc": "Sends your full referring URL cross-origin when a site requests it. Compatibility escape hatch only - this weakens privacy and is excluded from every preset. Mutually exclusive with Cap Referrers."},
 
@@ -812,16 +886,13 @@ CATEGORIES = [
         "features": [
             {"name": "Enable Memory Saver", "key": "HighEfficiencyModeEnabled", "value": True, "desc": "Forces Memory Saver on: inactive tabs are discarded to free RAM and reload when you return to them."},
 
-            {"name": "Force Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": True, "group": "hwaccel", "desc": "Pins GPU hardware acceleration on so rendering and video decode stay off the CPU. Takes effect after a browser restart."},
+            {"name": "Force Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": True, "group": "hwaccel", "desc": "Brave already has 'Use graphics acceleration when available' on; this locks it on, so it can't be turned off in Settings to work around GPU glitches. The GPU blocklist or repeated GPU crashes can still force software rendering. Takes effect after a browser restart."},
 
-            {"name": "Disable Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": False, "group": "hwaccel", "desc": "Forces GPU acceleration off. This is a departure from Brave's default and costs rendering performance and battery, so use it only when the GPU path is itself the problem: flickering or artifacts from a faulty driver, a VM or RDP session with no usable GPU, or corruption while screen sharing. Takes effect after a browser restart."},
+            {"name": "Disable Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": False, "group": "hwaccel", "desc": "Forces GPU acceleration off, unlike Brave's default, costing rendering speed and battery. Use it only when the GPU path is the problem: flicker or artifacts from a faulty driver, a VM or RDP session with no usable GPU, or corruption while screen sharing. Takes effect after a browser restart."},
 
-            {"name": "Disable Media Router (Cast)", "key": "EnableMediaRouter", "value": False, "desc": "Disables the Google Cast media router and its background device discovery on the local network. Takes effect after a browser restart. On a profile first opened under this policy, Cast stays off after it is removed until the Media Router toggle in brave://settings/extensions is turned back on and Brave restarted."},
+            {"name": "Disable Media Router (Cast)", "key": "EnableMediaRouter", "value": False, "desc": "Disables Google Cast and its background device discovery on the local network. Takes effect after a browser restart. A profile first opened under this policy keeps Cast off after it is lifted, until the Media Router toggle in brave://settings/extensions is back on and Brave restarted."},
 
-
-            {"name": "Disable Shopping List (no effect in Brave)", "key": "ShoppingListEnabled", "value": False, "desc": "Locks the price-tracking shopping list off. No effect in Brave: the feature is switched off and needs a Google sign-in Brave does not have. Kept as a lock in case that changes."},
-
-            {"name": "Always Open PDF Externally", "key": "AlwaysOpenPdfExternally", "value": True, "desc": "Downloads PDF files and opens them in your system PDF viewer instead of the built-in viewer."},
+            {"name": "Always Open PDF Externally", "key": "AlwaysOpenPdfExternally", "value": True, "desc": "Downloads PDF files instead of showing them in Brave's built-in viewer; nothing opens them until you do. Sites can tell the viewer is off, and fingerprinting protection does not hide it, which makes you easier to fingerprint."},
 
             {"name": "Disable Translate", "key": "TranslateEnabled", "value": False, "desc": "Disables the built-in page translation feature and its popup prompts."},
 
@@ -829,13 +900,13 @@ CATEGORIES = [
 
             {"name": "Disable Search Suggestions", "key": "SearchSuggestEnabled", "value": False, "desc": "Stops sending what you type in the address bar to your search engine for live suggestions."},
 
-            {"name": "Disable Printing", "key": "PrintingEnabled", "value": False, "desc": "Disables printing from the browser entirely (including Ctrl+P)."},
+            {"name": "Disable Printing", "key": "PrintingEnabled", "value": False, "desc": "Disables printing from the browser entirely (including Ctrl+P and Save as PDF). Brave features built on print preview break too: Leo reading Google Docs and scanned PDFs, and the Screenshot tool's Full page on PDFs and Google Docs."},
 
-            {"name": "Disable Default Browser Prompt", "key": "DefaultBrowserSettingEnabled", "value": False, "desc": "Stops Brave from asking to become your default browser. Brave's first-run welcome page still offers Set as default, and clicking it with this policy on crashes Brave: choose Skip there."},
+            {"name": "Disable Default Browser Prompt", "key": "DefaultBrowserSettingEnabled", "value": False, "desc": "Stops Brave from asking to become your default browser, and brave://settings loses its Make default button. Brave's first-run welcome page still offers Set as default, and clicking it with this policy on crashes Brave: choose Skip there."},
 
-            {"name": "Disable Developer Tools", "key": "DeveloperToolsAvailability", "value": 2, "desc": "Blocks DevTools (F12) and extension debugging everywhere, and turns extension Developer mode off (no Load unpacked). Don't enable this if you do web development."},
+            {"name": "Disable Developer Tools", "key": "DeveloperToolsAvailability", "value": 2, "desc": "Blocks DevTools (F12), extension debugging and the View page source shortcut and menu, and turns extension Developer mode off (no Load unpacked). Brave's Screenshot Full page then never finishes and greys out Screenshot in that window until it is closed. Not for web developers."},
 
-            {"name": "Disable Wayback Machine", "key": "BraveWaybackMachineEnabled", "value": False, "desc": "Stops Brave from offering an archive.org snapshot when a page returns 404."},
+            {"name": "Disable Wayback Machine", "key": "BraveWaybackMachineEnabled", "value": False, "desc": "Stops Brave from offering an archive.org snapshot when a page is missing or fails (404, 408, 410, 451 and some 5xx errors), including the offer Brave can pop up on its own."},
 
         ],
     },
@@ -853,7 +924,7 @@ if sys.platform.startswith("linux"):
         if _cat["name"] == "Performance & Bloat":
             _cat["features"].insert(0, {"name": "Disable Background Mode",
                                         "key": "BackgroundModeEnabled", "value": False,
-                                        "desc": "Stops Brave from keeping background processes running after the last window is closed."})
+                                        "desc": "Stops Brave from staying open in the background after its last window closes, which it does only while an installed extension asks to run in the background. Without one, the policy only locks off 'Continue running background apps when Brave is closed' (brave://settings/system)."})
         for _feat in _cat["features"]:
             if _feat["key"] == "BraveVPNDisabled":
                 _feat["name"] = "Disable Brave VPN (no effect on Linux builds)"
@@ -1021,41 +1092,85 @@ def activate_row(rows, row):
     return True
 
 
-def _enforce_groups(rows, features_map):
+def _value_fits_row(row, value):
+    """True when `value` has the JSON type of the policy a checkbox row writes.
+
+    Import and policy-sync take a value only in that type, the rule
+    SlimBrave.ps1's import applies too: an integer policy only a JSON
+    integer, a boolean policy true/false or an integer, a list policy an
+    array, the string policy a string.
+    """
+    want = row["value"]
+    if isinstance(want, bool):
+        return type(value) in (bool, int)  # Windows exports write 0/1
+    if isinstance(want, int):
+        return type(value) is int  # True == 1 must not pick an enum member
+    if isinstance(want, list):
+        return isinstance(value, list)
+    return isinstance(value, str)
+
+
+def _value_matches_row(row, value):
+    """True when `value` is exactly what a checkbox row writes."""
+    if not _value_fits_row(row, value):
+        return False
+    if isinstance(row["value"], list):
+        # Order means nothing to Chromium, as in SlimBrave.ps1's Compare-Object.
+        return sorted(value, key=str) == sorted(row["value"])
+    return value == row["value"]
+
+
+def _enforce_groups(rows):
     """Collapse every group down to at most one checked row.
 
     Import and policy-sync set `checked` per row with no group awareness,
     so a config naming both BraveShieldsDisabledForUrls and
-    BraveShieldsEnabledForUrls ticks both and _build_policy emits force-off
-    and force-on for the same wildcards. `features_map` supplies the source
-    order (the config's or the policy's key order) and the last key listed
-    wins, matching the PS1 CheckedChanged handler's behaviour.
+    BraveShieldsEnabledForUrls ticks both and _build_policy would emit
+    force-off and force-on for the same wildcards. The later row in table
+    order wins, whatever order the file or policy lists the keys in. Where
+    the members sit on different keys that is what Brave enforces when both
+    are set: BraveShieldsEnabledForUrls is applied after the Disabled list,
+    so it wins for the same patterns, and SpellCheckServiceEnabled does
+    nothing once SpellcheckEnabled is false. SlimBrave.ps1's
+    Enforce-ExclusionGroups applies the same rule.
+
+    Returns the keys of the rows it unchecked, for the import message.
     """
     # Choice rows never reach the bodies below: every test here is gated on
     # ROW_FEATURE, and a choice row carries neither "checked" nor a group.
-    order = list(features_map)
-    groups = {r.get("group") for r in rows
-              if r["type"] == ROW_FEATURE and r.get("group")}
+    dropped = []
+    groups = dict.fromkeys(r["group"] for r in rows
+                           if r["type"] == ROW_FEATURE and r.get("group"))
     for group in groups:
         members = [r for r in rows
                    if r["type"] == ROW_FEATURE
                    and r.get("group") == group and r["checked"]]
-        if len(members) < 2:
-            continue
-        keep = max(members, key=lambda r: order.index(r["key"]))
-        for r in members:
-            if r is not keep:
-                r["checked"] = False
+        for r in members[:-1]:
+            r["checked"] = False
+            dropped.append(r["key"])
+    return dropped
 
 # ---------------------------------------------------------------------------
 # BOM-aware JSON reader (handles PowerShell UTF-16 exports)
 # ---------------------------------------------------------------------------
 
 
+# Import reads the file you name as root, so it reads no more than a config
+# could ever need. A pipe such as /dev/stdin still works: nothing asks for a
+# regular file, the read just stops one byte past the cap.
+MAX_IMPORT_BYTES = 1024 * 1024
+
+
 def read_json_file(path):
-    """Read a JSON file, handling BOM and encoding from PS1 exports."""
+    """Read a JSON file, handling BOM and encoding from PS1 exports.
+
+    Raises OSError for a file over MAX_IMPORT_BYTES, which import_settings
+    reports as a read error.
+    """
     with open(path, "rb") as f:
-        data = f.read()
+        data = f.read(MAX_IMPORT_BYTES + 1)
+    if len(data) > MAX_IMPORT_BYTES:
+        raise OSError("file is larger than 1 MiB")
 
     # Detect BOM and decode accordingly
     if data[:2] == b"\xff\xfe":
@@ -1108,7 +1223,7 @@ def _pid_is_alive(pid):
 
 
 def _singleton_lock_pid(prefs_path):
-    """Return the pid holding a profile's Chromium SingletonLock, or None.
+    """Return (host, pid) from a profile's Chromium SingletonLock, or None.
 
     Chromium symlinks <user-data-dir>/SingletonLock to "<hostname>-<pid>"
     for as long as the profile is open. This is the only running-check that
@@ -1123,8 +1238,57 @@ def _singleton_lock_pid(prefs_path):
         target = os.readlink(os.path.join(user_data, "SingletonLock"))
     except OSError:
         return None
-    pid_part = target.rsplit("-", 1)[-1]
-    return int(pid_part) if pid_part.isdigit() else None
+    host, sep, pid_part = target.rpartition("-")
+    if not sep or not pid_part.isdigit():
+        return None
+    return host, int(pid_part)
+
+
+def _lock_holder_is_running(host, pid):
+    """True if a SingletonLock's holder still counts as a running Brave.
+
+    A lock taken on another host counts: the profile is in use there (a
+    shared home), and Chromium treats it the same way. On this host the
+    pid has to be alive, and on Linux it also has to be a Brave binary,
+    Chromium's own IsChromeProcess test: a lock a crash left behind can
+    name a pid some other program has since been given. Every Brave build
+    on Linux, Origin included, runs a binary named brave. macOS has no
+    procfs, so there a live pid is enough.
+    """
+    if host != socket.gethostname():
+        return True
+    if not _pid_is_alive(pid):
+        return False
+    if not os.path.isdir("/proc/self"):
+        return True
+    try:
+        exe = os.readlink(f"/proc/{pid}/exe")
+    except OSError:
+        return False
+    if exe.endswith(" (deleted)"):
+        exe = exe[:-len(" (deleted)")]
+    return os.path.basename(exe) == "brave"
+
+
+# pgrep by absolute path, never through PATH: sudo can pass the caller's
+# PATH through, and a script-only sudoers grant must not let it pick the
+# program root runs. macOS and procps install it in /usr/bin; /bin covers
+# Linux distributions that have not merged /usr.
+PGREP_PATHS = ("/usr/bin/pgrep", "/bin/pgrep")
+
+
+def _pgrep(name, uid=None):
+    """Return the exit status of `pgrep [-u uid] -x name`, or None with no pgrep."""
+    args = ["-x", name] if uid is None else ["-u", str(uid), "-x", name]
+    for exe in PGREP_PATHS:
+        try:
+            return subprocess.run(
+                [exe, *args],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            ).returncode
+        except FileNotFoundError:
+            continue
+    return None
 
 
 def _is_brave_running(installations=None):
@@ -1132,49 +1296,116 @@ def _is_brave_running(installations=None):
 
     When `installations` is None, falls back to the legacy single-channel
     process name (Stable on each platform), preserving old behaviour for
-    callers that haven't been updated.
+    callers that haven't been updated. The process search is limited to
+    the invoking user's processes (_invoking_user): theirs is the profile
+    the scrub rewrites, and another account's Brave cannot overwrite it.
     """
     if installations is None:
         names = ["Brave Browser"] if IS_MAC else ["brave"]
     else:
         for inst in installations:
-            pid = _singleton_lock_pid(inst.get("prefs_path"))
-            if pid is not None and _pid_is_alive(pid):
+            holder = _singleton_lock_pid(inst.get("prefs_path"))
+            if holder is not None and _lock_holder_is_running(*holder):
                 return True
         names = [i["process_name"] for i in installations if i.get("process_name")]
         if not names:
             names = ["Brave Browser"] if IS_MAC else ["brave"]
 
+    identity = _sudo_user_identity()
+    uid = identity[1] if identity else None
     for name in names:
         # A name longer than the kernel's accounting-name cap can only ever
         # be a false negative, so don't spend a process asking.
         if len(name) > 15:
             continue
-        try:
-            result = subprocess.run(
-                ["pgrep", "-x", name],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            if result.returncode == 0:
-                return True
-        except FileNotFoundError:
+        rc = _pgrep(name, uid)
+        if rc is None:
             return False
+        if rc == 0:
+            return True
     return False
 
 
 def _sudo_user_identity():
-    """Return (name, uid, gid) of the invoking user, or None if there is none."""
-    sudo_user = os.environ.get("SUDO_USER")
-    if not sudo_user:
-        return None
+    """Return (name, uid, gid) of the invoking user, or None (_invoking_user)."""
+    identity = _invoking_user()
+    return identity[:3] if identity else None
+
+
+def _run_as_invoking_user(fn, *args, default):
+    """Call fn(*args) with the invoking user's rights; return its result.
+
+    As root with an invoking user to drop to, fn runs in a forked child
+    that takes on that user's groups, gid and uid first, so it can read,
+    create and replace only what the user could; its JSON-encoded result
+    comes back over a pipe. A failed fork or drop, an exception in fn, or
+    a reply that does not decode gives `default`, never a second try as
+    root. Without root, without an invoking user or without fork (Windows),
+    fn runs inline.
+    """
+    identity = _sudo_user_identity()
+    if identity is None or not hasattr(os, "fork") or os.geteuid() != 0:
+        return fn(*args)
+
+    name, uid, gid = identity
+    read_fd, write_fd = os.pipe()
     try:
-        import pwd
-        info = pwd.getpwnam(sudo_user)
-    except (ImportError, KeyError):
-        return None
-    if info.pw_uid == 0:
-        return None
-    return (sudo_user, info.pw_uid, info.pw_gid)
+        pid = os.fork()
+    except OSError:
+        os.close(read_fd)
+        os.close(write_fd)
+        return default
+
+    if pid == 0:
+        try:
+            os.close(read_fd)
+            try:
+                os.initgroups(name, gid)
+            except (AttributeError, OSError):
+                # Never keep root's supplementary groups: fall back to the
+                # primary group alone, and if even that fails the drop
+                # fails and fn never runs.
+                os.setgroups([gid])
+            os.setgid(gid)
+            os.setuid(uid)
+            data = json.dumps(fn(*args)).encode("utf-8")
+            while data:
+                data = data[os.write(write_fd, data):]
+        except BaseException:
+            pass  # nothing more is sent; a cut-off reply fails to decode
+        finally:
+            os._exit(0)
+
+    os.close(write_fd)
+    chunks = []
+    try:
+        # Read to EOF before waiting: a reply larger than the pipe buffer
+        # would otherwise block the child, and the wait with it.
+        while True:
+            chunk = os.read(read_fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except OSError:
+        chunks = []
+    finally:
+        os.close(read_fd)
+    os.waitpid(pid, 0)
+    try:
+        return json.loads(b"".join(chunks))
+    except ValueError:
+        return default
+
+
+def _scrub_as_invoking_user(scrub, path, default):
+    """Run a prefs scrub as the invoking user; `default` when there is none.
+
+    As root with nobody to drop to (a root login, `su -`), nothing is
+    scrubbed: rewriting a home directory as root is what the drop avoids.
+    """
+    if getattr(os, "geteuid", lambda: -1)() == 0 and _sudo_user_identity() is None:
+        return default
+    return _run_as_invoking_user(scrub, path, default=default)
 
 
 def _repair_one_prefs(pref_path):
@@ -1184,64 +1415,45 @@ def _repair_one_prefs(pref_path):
     doing the read-modify-write as root would follow a symlinked
     `Default`/`Profile *` into a file root owns and then hand it over.
     Fork and drop to the invoking user's uid/gid instead — the child can
-    only reach what that user could already reach. Returns the number of
-    entries removed (0 on any failure, so a broken drop repairs nothing
-    rather than repairing as root).
+    only reach what that user could already reach. Returns what
+    _scrub_one_prefs does (0 when the drop fails, so a broken drop repairs
+    nothing rather than repairing as root).
     """
-    identity = _sudo_user_identity()
-    if identity is None or not hasattr(os, "fork") or os.geteuid() != 0:
-        return _scrub_one_prefs(pref_path)
+    return _scrub_as_invoking_user(_scrub_one_prefs, pref_path, 0)
 
-    name, uid, gid = identity
-    read_fd, write_fd = os.pipe()
-    try:
-        pid = os.fork()
-    except OSError:
-        os.close(read_fd)
-        os.close(write_fd)
-        return 0
 
-    if pid == 0:
-        removed = 0
-        try:
-            os.close(read_fd)
-            try:
-                os.initgroups(name, gid)
-            except (AttributeError, OSError):
-                pass  # supplementary groups are best-effort
-            os.setgid(gid)
-            os.setuid(uid)
-            removed = _scrub_one_prefs(pref_path)
-        except BaseException:
-            removed = 0
-        finally:
-            try:
-                # Decimal, not a raw byte: a single byte wraps at 256 and
-                # would report a large scrub as 0. Well under PIPE_BUF, so
-                # the write is atomic and one read gets all of it.
-                os.write(write_fd, str(removed).encode("ascii"))
-            except OSError:
-                pass
-            os._exit(0)
+def _repair_user_data_dir(default_prefs_path):
+    """Scrub every profile of one user-data dir in a single drop.
 
-    os.close(write_fd)
-    try:
-        reply = os.read(read_fd, 32)
-    except OSError:
-        reply = b""
-    os.close(read_fd)
-    os.waitpid(pid, 0)
-    try:
-        return int(reply)
-    except ValueError:
-        return 0
+    The child lists the profiles as well, so root never reads a directory
+    inside the user's home. Returns [removed, failed] (_scrub_user_data_dir).
+    """
+    return _scrub_as_invoking_user(_scrub_user_data_dir, default_prefs_path, [0, 0])
+
+
+def _scrub_user_data_dir(default_prefs_path):
+    """List a user-data dir's profiles and scrub each, as the caller.
+
+    Returns [removed, failed]: the entries removed, and the number of
+    profiles whose Preferences could not be read or rewritten. A list, so
+    the reply from the dropped child decodes to the same value.
+    """
+    removed = failed = 0
+    for path in _profile_prefs_paths(default_prefs_path):
+        count = _scrub_one_prefs(path)
+        if count < 0:
+            failed += 1
+        else:
+            removed += count
+    return [removed, failed]
 
 
 def _scrub_one_prefs(pref_path):
     """Remove SlimBrave's Shields-disabled exceptions from one Preferences file.
 
-    Returns the number of exception entries removed (0 if file missing or
-    no matching keys present).
+    Returns the number of exception entries removed: 0 if the file is
+    missing, is not JSON (or not UTF-8), or holds none of them; -1 if it
+    exists but cannot be read, or holds them and cannot be rewritten.
     """
     if not pref_path or not os.path.isfile(pref_path):
         return 0
@@ -1249,15 +1461,19 @@ def _scrub_one_prefs(pref_path):
     try:
         with open(pref_path, "r", encoding="utf-8") as f:
             prefs = json.load(f)
-    except (OSError, json.JSONDecodeError):
+    except ValueError:
+        # JSONDecodeError and UnicodeDecodeError: not a file Brave could
+        # load either, so there is nothing of ours to remove.
         return 0
+    except OSError:
+        return -1
 
-    bs = (
-        prefs.get("profile", {})
-             .get("content_settings", {})
-             .get("exceptions", {})
-             .get("braveShields")
-    )
+    # Walk with type checks: valid JSON can still hold a null or a list
+    # where Brave keeps an object.
+    node = prefs
+    for key in ("profile", "content_settings", "exceptions"):
+        node = node.get(key) if isinstance(node, dict) else None
+    bs = node.get("braveShields") if isinstance(node, dict) else None
     if not isinstance(bs, dict) or not bs:
         return 0
 
@@ -1285,11 +1501,7 @@ def _scrub_one_prefs(pref_path):
             mode=original_mode,
         )
     except OSError:
-        return 0
-
-    # Normally a no-op: _repair_one_prefs' fork already dropped to this
-    # user, so the file never changed hands. Kept for the inline path.
-    _chown_to_sudo_user(pref_path)
+        return -1
 
     return removed
 
@@ -1297,7 +1509,9 @@ def _scrub_one_prefs(pref_path):
 def repair_brave_prefs(installations=None):
     """Remove the leaked Shields exceptions across all given channels.
 
-    Returns (removed_count, brave_was_running). When `installations` is None,
+    Returns (removed_count, failed, brave_was_running), where `failed` maps
+    each user-data dir to the number of its profiles that could not be
+    cleaned (_scrub_failure_note words it). When `installations` is None,
     repairs only the legacy stable-channel prefs path (back-compat).
     """
     if installations is None:
@@ -1307,14 +1521,31 @@ def repair_brave_prefs(installations=None):
 
     running = _is_brave_running(installations)
     total = 0
+    failed = {}
     seen = set()
     for inst in installations:
-        for path in _profile_prefs_paths(inst.get("prefs_path")):
-            if path in seen:
-                continue
-            seen.add(path)
-            total += _repair_one_prefs(path)
-    return (total, running)
+        prefs_path = inst.get("prefs_path")
+        if not prefs_path:
+            continue
+        # One drop per user-data dir, which holds every profile's folder.
+        user_data = os.path.dirname(os.path.dirname(prefs_path))
+        if user_data in seen:
+            continue
+        seen.add(user_data)
+        removed, not_cleaned = _repair_user_data_dir(prefs_path)
+        total += removed
+        if not_cleaned:
+            failed[user_data] = not_cleaned
+    return (total, failed, running)
+
+
+def _scrub_failure_note(failed):
+    """The sentence naming profiles the scrub could not clean, or ''."""
+    if not failed:
+        return ""
+    n = sum(failed.values())
+    return (f"Failed to clean {n} profile{'s' if n != 1 else ''}; "
+            f"check ownership of {', '.join(failed)}.")
 
 
 # ---------------------------------------------------------------------------
@@ -1339,15 +1570,18 @@ def _is_profile_installed():
 
     Reads `profiles list -output stdout-xml` (a plist mapping a domain
     label to an array of profile dicts) and scans for our identifier.
-    Returns False on any error so callers treat "unknown" the same as
-    "not installed" — the worst case is we redundantly remove a missing
-    profile, which is silent.
+    Any error (no `profiles`, a timeout, a non-zero exit, output that does
+    not parse) reads as not installed. An omitted --persist then resolves
+    to off, so a profile can be removed without being re-staged, and the
+    scope guard (_scope_conflict) stays out of the way. Telling "no
+    profiles" from "the command failed" needs its output and exit status
+    recorded on a real Mac first (AUDIT.md, What's next).
     """
     if not IS_MAC:
         return False
     try:
         result = subprocess.run(
-            ["profiles", "list", "-output", "stdout-xml",
+            ["/usr/bin/profiles", "list", "-output", "stdout-xml",
              "-type", "configuration"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             timeout=10, check=False,
@@ -1415,12 +1649,15 @@ def _remove_profile():
 
     `profiles remove -identifier ... -forced` is the root-only path that
     still works without a GUI on macOS 11+. Silent when nothing to remove.
+    Returns True when `profiles remove` exits 0; a non-zero exit can also
+    mean there was nothing to remove, so callers that must know ask
+    _is_profile_installed afterwards.
     """
     if not IS_MAC:
-        return
+        return False
     try:
-        subprocess.run(
-            ["profiles", "remove",
+        result = subprocess.run(
+            ["/usr/bin/profiles", "remove",
              "-identifier", PERSIST_PROFILE_IDENTIFIER,
              "-type", "configuration",
              "-forced"],
@@ -1428,7 +1665,8 @@ def _remove_profile():
             timeout=15, check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        pass
+        return False
+    return result.returncode == 0
 
 
 def _sweep_stale_stage_dirs(keep=None):
@@ -1475,22 +1713,32 @@ def _install_profile_from_policy(policy_by_bundle):
     `man profiles`), so the only path is `open <file.mobileconfig>`
     which lets macOS route the file to System Settings > General >
     Device Management for user approval. The caller (apply_policy) has
-    already torn down any prior version via _clear_persistence_artifacts,
-    so the user sees a single fresh entry.
+    already removed any installed version via _clear_persistence_artifacts,
+    so until the user approves this one no Configuration Profile carries
+    a SlimBrave policy.
 
-    `open` is run as the invoking user (SUDO_USER) so LaunchServices
-    targets that user's GUI session — running it as root produces
-    inconsistent behaviour when the console user differs.
+    `open` is run as the invoking user (_invoking_user: SUDO_USER, else
+    USER) so LaunchServices targets that user's GUI session — running it
+    as root produces inconsistent behaviour when the console user differs.
+
+    Returns (True, profile_path) once `open` has taken the file, or
+    (False, message) if the file cannot be written or `open` fails, times
+    out or exits non-zero (over SSH with no desktop session for the user,
+    say). The staged file is kept then and the message names it, so the
+    user can double-click it from a desktop session.
     """
     mc = _build_mobileconfig(policy_by_bundle)
     # mkdtemp, not a fixed /tmp name: any local user can pre-create that
-    # path, and a *directory* there makes os.replace fail for good. The
-    # 0o700 dir is handed to SUDO_USER because their `open` — and System
-    # Settings, whenever they actually approve the profile — has to read
-    # the file. The contents aren't secret; they're the same key/values
-    # otherwise written to a world-readable system plist.
+    # path, and a directory there makes os.replace fail for good. The dir
+    # stays root-owned and 0755, so the invoking user's `open`, and System
+    # Settings whenever they approve the profile, can read the file, but
+    # nobody else can rename or swap entries in it. The contents aren't
+    # secret; they're the same key/values otherwise written to a
+    # world-readable system plist.
     stage_dir = tempfile.mkdtemp(prefix=STAGE_DIR_PREFIX)
-    _chown_to_sudo_user(stage_dir)
+    # By path, and still safe: sudo drops TMPDIR, so the parent is the
+    # sticky /tmp, where only root can rename this root-owned entry.
+    os.chmod(stage_dir, 0o755)
     # Drop every earlier run's copy now that this one exists.
     _sweep_stale_stage_dirs(keep=stage_dir)
     profile_path = os.path.join(stage_dir, PERSIST_PROFILE_NAME)
@@ -1499,25 +1747,40 @@ def _install_profile_from_policy(policy_by_bundle):
             profile_path, plistlib.dumps(mc),
             binary=True, mode=0o644,
         )
-        _chown_to_sudo_user(profile_path)
     except OSError as e:
         shutil.rmtree(stage_dir, ignore_errors=True)
         return False, f"Failed to write mobileconfig: {e}"
 
-    sudo_user = os.environ.get("SUDO_USER")
-    if sudo_user and sudo_user != "root":
-        open_cmd = ["sudo", "-u", sudo_user, "open"]
+    identity = _invoking_user()
+    if identity is not None:
+        open_cmd = ["/usr/bin/sudo", "-u", identity[0], "/usr/bin/open"]
     else:
-        open_cmd = ["open"]
+        open_cmd = ["/usr/bin/open"]
     try:
-        subprocess.run(
+        result = subprocess.run(
             open_cmd + [profile_path],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=15, check=False,
         )
+        reason = f"exit status {result.returncode}" if result.returncode else ""
+    except subprocess.TimeoutExpired:
+        reason = "timed out"
+    except (OSError, subprocess.SubprocessError) as e:
+        reason = str(e) or type(e).__name__
+    if reason:
+        # The .mobileconfig stays on disk: double-clicking it from a
+        # desktop session finishes the same install.
+        return False, (
+            f"Could not hand the profile to System Settings ({reason}). "
+            f"It is staged at {profile_path}; double-click it while logged "
+            "in to the desktop. Until it is installed, no Configuration "
+            "Profile carries these settings."
+        )
+    try:
         # Also jump System Settings to the Device Management pane — the
         # `open` of the .mobileconfig only queues the download on
-        # macOS 13+ and doesn't surface the install UI on its own.
+        # macOS 13+ and doesn't surface the install UI on its own. Only a
+        # convenience, so its result is not checked.
         subprocess.run(
             open_cmd + [
                 "x-apple.systempreferences:com.apple.Profiles-Settings.extension"
@@ -1526,10 +1789,8 @@ def _install_profile_from_policy(policy_by_bundle):
             timeout=15, check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        # The .mobileconfig is on disk regardless; user can double-click
-        # it from Finder if the auto-open path fails.
         pass
-    return True, ""
+    return True, profile_path
 
 
 def _flush_cfprefsd():
@@ -1555,40 +1816,90 @@ def _flush_cfprefsd():
 def _clear_persistence_artifacts():
     """Remove any installed Configuration Profile.
 
-    Called by reset and by apply when switching modes (so an `off` Apply
-    after a previous `on` Apply cleanly tears the profile down). Plist
-    file deletion is the caller's responsibility — apply/reset already
-    iterate over plist_path targets.
+    Called by every Apply and Reset except a --policy-file run (so an
+    `off` Apply after a previous `on` Apply cleanly tears the profile
+    down). Clearing SlimBrave's keys from the plists is the caller's job
+    (_strip_managed): apply/reset already iterate over plist_path targets.
 
     The staged mobileconfig outlives the run that wrote it on purpose:
     approving a profile is an asynchronous, user-driven step in System
     Settings. But tearing the profile down means no approval is pending,
-    so the staged copies go too.
+    so the staged copies go too. Returns what _remove_profile does.
     """
     if not IS_MAC:
-        return
-    _remove_profile()
+        return False
+    removed = _remove_profile()
     _sweep_stale_stage_dirs()
+    return removed
 
 
 # ---------------------------------------------------------------------------
 # Policy I/O
 # ---------------------------------------------------------------------------
 
+# Keys earlier versions wrote and this one no longer offers, with the value
+# they wrote (AUDIT.md, Considered and rejected). A macOS plist is shared
+# with anything else that manages Brave, so Apply and Reset no longer
+# rewrite it whole; they delete each of these only while it still holds
+# exactly that value, type included (plistlib reads <false/> as a bool, and
+# 0 == False in Python). Kept equal to SlimBrave.ps1's
+# $script:retiredPolicies by a test. On Linux the policy file is
+# SlimBrave's own and is rewritten whole, so these never come up there.
+RETIRED_POLICIES = {
+    "AlternateErrorPagesEnabled": False,
+    "DNSInterceptionChecksEnabled": False,
+    "EnableDoNotTrack": True,
+    "FeedbackSurveysEnabled": False,
+    "IPFSEnabled": False,
+    "MediaRecommendationsEnabled": False,
+    "PromotionsEnabled": False,
+    "SafeBrowsingExtendedReportingEnabled": False,
+    "SafeSitesFilterBehavior": 1,
+    "ShoppingListEnabled": False,
+}
+# v1.1.0 to v1.5.0 also wrote this on macOS, where Chromium never reads it.
+# It is not retired on Windows or Linux, where a row still writes it.
+MAC_ONLY_RETIRED_POLICIES = {"BackgroundModeEnabled": False}
+
+
+def _managed_keys():
+    """Every key a row writes on this platform, plus the two DNS keys."""
+    keys = {feat["key"] for cat in CATEGORIES for feat in cat["features"]}
+    return keys | {"DnsOverHttpsMode", "DnsOverHttpsTemplates"}
+
+
+def _holds_managed_key(policy):
+    """True if a policy dict holds at least one key SlimBrave manages."""
+    managed = _managed_keys()
+    return any(k in managed for k in policy)
+
+
+def _is_retired(key, value):
+    """True if `value` is exactly what an earlier version wrote for `key`."""
+    retired = {**RETIRED_POLICIES, **MAC_ONLY_RETIRED_POLICIES}
+    if key not in retired:
+        return False
+    expected = retired[key]
+    return type(value) is type(expected) and value == expected
+
 
 def _read_one_policy(plist_path):
-    """Read a single policy file (plist on macOS, JSON on Linux)."""
+    """Read a single policy file (plist on macOS, JSON on Linux).
+
+    Anything that is not a readable dict reads as empty.
+    """
     try:
         if IS_MAC:
             with open(plist_path, "rb") as f:
-                return plistlib.load(f)
+                data = plistlib.load(f)
         else:
             with open(plist_path, "r") as f:
-                return json.load(f)
+                data = json.load(f)
     except (FileNotFoundError, PermissionError):
         return {}
     except Exception:
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def load_existing_policy(installations=None):
@@ -1597,10 +1908,13 @@ def load_existing_policy(installations=None):
     With multi-channel installations, returns the first non-empty policy
     found (so the TUI's pre-check reflects an existing state when one
     exists). Falls back to legacy POLICY_FILE when no installations are
-    supplied.
+    supplied. On macOS a plist counts only if it holds a key SlimBrave
+    manages: the plist is shared, and keys another tool wrote are not an
+    existing SlimBrave policy (and give --export nothing to save).
     """
     if installations is None:
-        return _read_one_policy(POLICY_FILE)
+        data = _read_one_policy(POLICY_FILE)
+        return data if not IS_MAC or _holds_managed_key(data) else {}
 
     # On Linux all channels share POLICY_FILE; dedupe to avoid reading the
     # same file repeatedly.
@@ -1611,7 +1925,7 @@ def load_existing_policy(installations=None):
             continue
         seen.add(p)
         data = _read_one_policy(p)
-        if data:
+        if data and (not IS_MAC or _holds_managed_key(data)):
             return data
     return {}
 
@@ -1645,8 +1959,9 @@ def _build_policy(rows):
     if dns_mode in ("custom", "secure") and not dns_template:
         return None, "Secure/custom DNS requires a DoH template URL."
 
-    # "unmanaged" writes no DNS keys at all; since Apply fully overwrites
-    # the policy file, any previously-managed DNS policy is removed.
+    # "unmanaged" writes no DNS keys at all; since Apply replaces every key
+    # SlimBrave manages (_write_one_policy), any previously-managed DNS
+    # policy is removed.
     if dns_mode and dns_mode != "unmanaged":
         # "custom" maps to "secure" in the actual Chromium policy
         if dns_mode == "custom":
@@ -1662,18 +1977,165 @@ def _build_policy(rows):
 
 
 def _write_one_policy(plist_path, policy):
-    """Write a single policy file and return (ok, error_msg)."""
+    """Write a single policy file and return (ok, error_msg).
+
+    On macOS a channel's plist is shared with anything else that manages
+    Brave, so only SlimBrave's own keys are replaced: every key it does not
+    manage stays, except a retired one still holding the value an earlier
+    version wrote (_is_retired). The Linux slimbrave.json is SlimBrave's
+    own and is rewritten whole. Any directory created on the way is 0755
+    whatever the caller's umask: under sudo's union with a strict one (027)
+    a 0750 root directory would hide every policy from Brave, which runs
+    as the user.
+    """
     try:
-        os.makedirs(os.path.dirname(plist_path), exist_ok=True)
+        old_umask = os.umask(0o022)
+        try:
+            os.makedirs(os.path.dirname(plist_path), exist_ok=True)
+        finally:
+            os.umask(old_umask)
         if IS_MAC:
-            _atomic_write(plist_path, plistlib.dumps(policy), binary=True)
+            managed = _managed_keys()
+            merged = {k: v for k, v in _read_one_policy(plist_path).items()
+                      if k not in managed and not _is_retired(k, v)}
+            merged.update(policy)
+            _atomic_write(plist_path, plistlib.dumps(merged), binary=True)
         else:
             _atomic_write(plist_path, json.dumps(policy, indent=4))
     except PermissionError:
         return False, "Permission denied. Run as root."
     except OSError as e:
         return False, f"Failed to write policy: {e}"
+    except (TypeError, OverflowError) as e:
+        # A value another tool put in the plist that plistlib cannot write
+        # back (a binary-only type, an integer past 64 bits).
+        return False, f"Failed to write policy: {e}"
     return True, ""
+
+
+def _strip_managed(plist_path):
+    """Remove SlimBrave's keys from a shared macOS plist.
+
+    Drops every key SlimBrave manages and every retired key still holding
+    the value an earlier version wrote; whatever else is there is written
+    back, and a plist left with nothing in it is deleted. Returns
+    (changed, kept): whether the file changed, and how many keys it still
+    holds. A missing plist is (False, 0). Raises OSError when it cannot be
+    rewritten or deleted.
+    """
+    if not os.path.exists(plist_path):
+        return False, 0
+    data = _read_one_policy(plist_path)
+    managed = _managed_keys()
+    kept = {k: v for k, v in data.items() if k not in managed and not _is_retired(k, v)}
+    if not kept:
+        os.remove(plist_path)
+        return True, 0
+    if len(kept) == len(data):
+        return False, len(kept)
+    try:
+        payload = plistlib.dumps(kept)
+    except (TypeError, OverflowError) as e:
+        raise OSError(f"cannot rewrite {plist_path}: {e}") from e
+    _atomic_write(plist_path, payload, binary=True)
+    return True, len(kept)
+
+
+def _strip_uninstalled_channels(targets):
+    """On a full macOS Reset, also clear the channels that were not targeted.
+
+    A channel uninstalled since an earlier Apply keeps its plist in
+    /Library/Managed Preferences, and reinstalling it would bring the old
+    policy back. Returns [(path, label)] for each plist that changed.
+    """
+    targeted = {path for path, _label in targets}
+    touched = []
+    for ch in MAC_CHANNELS:
+        path = os.path.join(POLICY_DIR, f"{ch['bundle_id']}.plist")
+        if path in targeted:
+            continue
+        changed, _kept = _strip_managed(path)
+        if changed:
+            touched.append((path, ch["label"]))
+    return touched
+
+
+def _is_override(installations):
+    """True for the single synthetic target --policy-file builds."""
+    return bool(installations) and all(
+        i.get("channel") == "override" for i in installations)
+
+
+def _scope_conflict(installations, selected_ids):
+    """Labels of channels a scoped Apply or Reset would strip unasked.
+
+    While the SlimBrave Configuration Profile is installed, every Apply and
+    Reset removes the whole profile (_clear_persistence_artifacts), and the
+    profile covers every channel it was staged for. A channel left out of
+    the scope that still holds a SlimBrave policy (a managed key in its
+    plist) would lose it, so the caller refuses instead. Empty off macOS,
+    for a full scope, for the --policy-file override, and whenever
+    `profiles list` does not report the profile, which fails open to the
+    old behaviour.
+    """
+    if (not IS_MAC or selected_ids is None or not installations
+            or _is_override(installations)):
+        return []
+    managed = detect_managed_channel_ids(installations)
+    outside = [i["label"] for i in installations
+               if i["channel"] not in selected_ids and i["channel"] in managed]
+    if not outside or not _is_profile_installed():
+        return []
+    return outside
+
+
+def _scope_conflict_message(labels):
+    """The refusal Apply and Reset give for _scope_conflict's labels."""
+    if len(labels) == 1:
+        return f"{labels[0]} also has a SlimBrave policy; select it too, or Reset first."
+    return (f"{', '.join(labels)} also have a SlimBrave policy; "
+            "select them too, or Reset first.")
+
+
+def _unreadable_policy_dir(directory, stop="/etc"):
+    """Return (dir, mode) of a policy directory Brave cannot read, or None.
+
+    Brave reads its policy directory as the user, so on Linux every
+    directory below `stop` down to `directory` needs o+x, and `directory`
+    itself o+r to be listed. A version older than the umask fix, run under
+    a strict umask (027), created them 0750 as root. Returns the topmost
+    offender; None off POSIX, or for a directory not under `stop`.
+    """
+    if os.name != "posix":
+        return None
+    stop = os.path.abspath(stop)
+    d = os.path.abspath(directory)
+    chain = []
+    while d != stop:
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        chain.append(d)
+        d = parent
+    leaf = os.path.abspath(directory)
+    for d in reversed(chain):
+        try:
+            mode = stat.S_IMODE(os.stat(d).st_mode)
+        except OSError:
+            continue
+        need = stat.S_IXOTH | (stat.S_IROTH if d == leaf else 0)
+        if mode & need != need:
+            return d, mode
+    return None
+
+
+def _unreadable_dir_note(plist_path):
+    """The Apply-message sentence for _unreadable_policy_dir, or ''."""
+    found = _unreadable_policy_dir(os.path.dirname(plist_path))
+    if found is None:
+        return ""
+    d, mode = found
+    return f"Brave cannot read {d} (mode {mode:o}); run 'sudo chmod 755 {d}'"
 
 
 def _selected_channel_targets(installations, selected_ids=None):
@@ -1709,6 +2171,11 @@ def _bundle_id_for_plist(plist_path):
     return base[:-6] if base.endswith(".plist") else base
 
 
+# The profile the last persist-`on` Apply staged, for cli_import to print in
+# full (the TUI status line has no room for a temp path).
+_last_staged_profile = None
+
+
 def apply_policy(rows, installations=None, persist_mode=PERSIST_DEFAULT,
                  selected_channel_ids=None):
     """Write the policy with or without durable persistence.
@@ -1720,15 +2187,27 @@ def apply_policy(rows, installations=None, persist_mode=PERSIST_DEFAULT,
         on   Install an Apple Configuration Profile via System Settings
              so policies survive reboots. Requires a one-time GUI step.
 
-    Switching `on` ↔ `off` implicitly clears the previous artifact so
-    the on-disk state always matches the new mode.
+    On macOS every Apply except a --policy-file run first removes the
+    whole installed SlimBrave profile, whichever mode was used before, so
+    the on-disk state always matches the new mode. While that profile is
+    installed, a scope that leaves out a channel still holding a SlimBrave
+    policy is refused (_scope_conflict) before anything is touched. The
+    --policy-file override never touches the profile and takes only `off`.
     """
+    global _last_staged_profile
+    _last_staged_profile = None
     if not IS_MAC and persist_mode != "off":
         persist_mode = "off"
     if persist_mode not in PERSIST_MODES:
         return False, (
             f"Unknown persist mode '{persist_mode}'. "
             f"Valid: {', '.join(PERSIST_MODES)}."
+        )
+    override = _is_override(installations)
+    if override and persist_mode == "on":
+        return False, (
+            "Persist on cannot be used with --policy-file: a Configuration "
+            "Profile targets each channel's bundle, not a file."
         )
 
     policy, err = _build_policy(rows)
@@ -1743,13 +2222,19 @@ def apply_policy(rows, installations=None, persist_mode=PERSIST_DEFAULT,
     if not targets:
         return False, "No Brave channel selected. Check at least one channel."
 
+    conflict = _scope_conflict(installations, selected_channel_ids)
+    if conflict:
+        return False, _scope_conflict_message(conflict)
+
     # On macOS, drop any previously-installed profile so switching modes
     # is never additive — e.g. an `off` Apply after a previous `on` Apply
-    # should leave only the plist, not both.
-    if IS_MAC:
+    # should leave only the plist, not both. A --policy-file run writes
+    # one file and leaves the profile alone.
+    if IS_MAC and not override:
         _clear_persistence_artifacts()
 
     written_labels = []
+    unreadable = ""
 
     if persist_mode == "on":
         policy_by_bundle = {}
@@ -1761,20 +2246,20 @@ def apply_policy(rows, installations=None, persist_mode=PERSIST_DEFAULT,
                 written_labels.append(label)
         if not policy_by_bundle:
             return False, "No valid Brave channel bundle id found."
-        # Stage the profile *before* removing anything: _clear_persistence_
-        # artifacts above already dropped the installed profile, so a
-        # failure after the plists are gone would leave the machine with no
-        # policy at all.
-        ok, err = _install_profile_from_policy(policy_by_bundle)
+        # The installed profile is already gone (_clear_persistence_
+        # artifacts above). Staging before the plists are cleared only
+        # keeps them in force if staging fails.
+        ok, staged = _install_profile_from_policy(policy_by_bundle)
         if not ok:
-            return False, err
-        # Configuration Profile is cfprefsd's only forced source. Wipe
-        # any plist a prior `off` Apply left under /Library/Managed
-        # Preferences/ so cfprefsd doesn't see two competing sources
-        # for the same bundle.
+            return False, staged
+        _last_staged_profile = staged
+        # Configuration Profile is cfprefsd's only forced source. Clear
+        # SlimBrave's keys from any plist a prior `off` Apply left under
+        # /Library/Managed Preferences/ so cfprefsd doesn't see two
+        # competing sources for the same bundle; other keys stay.
         for plist_path, _label in targets:
             try:
-                os.remove(plist_path)
+                _strip_managed(plist_path)
             except OSError:
                 pass
     else:
@@ -1788,6 +2273,8 @@ def apply_policy(rows, installations=None, persist_mode=PERSIST_DEFAULT,
                 return False, f"{err}{scope}"
             if label:
                 written_labels.append(label)
+            if not IS_MAC and not unreadable:
+                unreadable = _unreadable_dir_note(plist_path)
         if IS_MAC:
             _flush_cfprefsd()
 
@@ -1795,20 +2282,24 @@ def apply_policy(rows, installations=None, persist_mode=PERSIST_DEFAULT,
         _selected_channel_targets(installations, selected_channel_ids)
         if installations else None
     )
-    return True, _post_apply_message(
+    msg = _post_apply_message(
         *repair_brave_prefs(repair_targets),
         labels=written_labels, persist_mode=persist_mode,
     )
+    # First, so the TUI's one status line shows it.
+    return True, f"{unreadable}. {msg}" if unreadable else msg
 
 
-def _post_apply_message(repaired, brave_running, labels=None,
+def _post_apply_message(repaired, failed, brave_running, labels=None,
                         persist_mode=PERSIST_DEFAULT):
     """Build the status message after a successful Apply."""
     scope = f" to {', '.join(labels)}" if labels else ""
     if persist_mode == "on":
+        # The state first: the TUI status line truncates near 76 columns.
         base = (
-            f"Profile generated{scope}. Finish in "
-            "System Settings > General > Device Management."
+            f"Profile staged{scope}. Those channels have no SlimBrave policy "
+            "until you install it in System Settings > General > Device "
+            "Management."
         )
     elif IS_MAC:
         base = (
@@ -1824,6 +2315,8 @@ def _post_apply_message(repaired, brave_running, labels=None,
     if repaired > 0 and not brave_running:
         prefs = f"pref{'s' if repaired != 1 else ''}"
         base += f" Cleaned {repaired} leaked profile {prefs}."
+    if failed:
+        base += " " + _scrub_failure_note(failed)
     if brave_running:
         base += (
             " Brave is running: any leaked profile prefs cleaned now will be "
@@ -1833,12 +2326,30 @@ def _post_apply_message(repaired, brave_running, labels=None,
     return base
 
 
-def reset_policy(rows, installations=None, selected_channel_ids=None):
+# What a Reset reports when `profiles remove` left the profile in place.
+PROFILE_STILL_INSTALLED = (
+    "Reset, but the Configuration Profile is still installed: remove it in "
+    "System Settings > General > Device Management."
+)
+# Appended to a --policy-file Apply on macOS while the profile is installed.
+PROFILE_STILL_APPLIES = (
+    " The SlimBrave Configuration Profile is still installed and still applies."
+)
+
+
+def reset_policy(rows, installations=None, selected_channel_ids=None,
+                 all_channels=False):
     """Reset all SlimBrave state: plists, profile, prefs leak.
 
-    Unconditionally tears down the Configuration Profile (if installed)
-    and every plist file, regardless of which mode was last used, so
-    --reset is always a clean slate.
+    Tears down the Configuration Profile (if installed) and SlimBrave's
+    keys in every targeted plist, regardless of which mode was last used,
+    so a Reset is always a clean slate; on macOS a plist is deleted only
+    when nothing else is left in it. While the profile is installed, a
+    scope that leaves out a channel still holding a SlimBrave policy is
+    refused first (_scope_conflict). `all_channels` (a full Reset) also
+    clears the plists of macOS channels that are no longer installed. A
+    --policy-file run leaves the profile alone. Returns False when the
+    profile is still installed afterwards.
     """
     if installations is None:
         targets = [(POLICY_FILE, "")]
@@ -1848,13 +2359,23 @@ def reset_policy(rows, installations=None, selected_channel_ids=None):
     if not targets:
         return False, "No Brave channel selected. Check at least one channel."
 
+    conflict = _scope_conflict(installations, selected_channel_ids)
+    if conflict:
+        return False, _scope_conflict_message(conflict)
+    override = _is_override(installations)
+
     cleared_labels = []
     try:
         for plist_path, label in targets:
-            if os.path.exists(plist_path):
+            if IS_MAC:
+                _strip_managed(plist_path)
+            elif os.path.exists(plist_path):
                 os.remove(plist_path)
             if label:
                 cleared_labels.append(label)
+        if IS_MAC and all_channels and not override:
+            for _path, label in _strip_uninstalled_channels(targets):
+                cleared_labels.append(f"{label} (not installed)")
         for row in rows:
             if row["type"] == ROW_FEATURE:
                 row["checked"] = False
@@ -1869,15 +2390,22 @@ def reset_policy(rows, installations=None, selected_channel_ids=None):
     except OSError as e:
         return False, f"Failed to reset: {e}"
 
+    still_installed = False
     if IS_MAC:
-        _clear_persistence_artifacts()
+        if not override:
+            _clear_persistence_artifacts()
         _flush_cfprefsd()
+        # Asked again rather than trusting the exit status: a non-zero one
+        # can also mean there was nothing to remove.
+        still_installed = not override and _is_profile_installed()
 
     repair_targets = (
         _selected_channel_targets(installations, selected_channel_ids)
         if installations else None
     )
-    repaired, running = repair_brave_prefs(repair_targets)
+    repaired, failed, running = repair_brave_prefs(repair_targets)
+    if still_installed:
+        return False, PROFILE_STILL_INSTALLED
     scope = f" for {', '.join(cleared_labels)}" if cleared_labels else ""
     msg = f"All settings reset{scope}. Restart Brave to see changes."
     if repaired > 0 and not running:
@@ -1885,6 +2413,8 @@ def reset_policy(rows, installations=None, selected_channel_ids=None):
             f"Reset{scope}; cleaned {repaired} leaked profile "
             f"pref{'s' if repaired != 1 else ''}. Restart Brave."
         )
+    if failed:
+        msg += " " + _scrub_failure_note(failed)
     if running:
         msg += (
             " Brave is running: any leaked profile prefs cleaned now will be "
@@ -1895,18 +2425,20 @@ def reset_policy(rows, installations=None, selected_channel_ids=None):
 
 
 def detect_managed_channel_ids(installations):
-    """Return the set of channel ids whose plist already holds a policy.
+    """Return the set of channel ids whose plist holds a SlimBrave policy.
 
     Used as the sticky default for the Apply-time channel prompt — so a
     user who previously managed Stable + Beta sees those two pre-ticked
-    and can press Enter to keep the same scope.
+    and can press Enter to keep the same scope — and by _scope_conflict.
+    A plist counts only if it holds a key SlimBrave manages: keys another
+    tool wrote neither pre-tick a channel nor block a scope.
     """
     if not installations:
         return set()
     managed = set()
     for inst in installations:
         existing = _read_one_policy(inst.get("plist_path") or "")
-        if existing:
+        if _holds_managed_key(existing):
             managed.add(inst["channel"])
     return managed
 
@@ -1915,13 +2447,20 @@ def sync_rows_with_policy(rows, policy):
     """Pre-check rows that match an existing policy on disk."""
     if not policy:
         return
+    # A template that is not a string (a hand-edited file) reads as none
+    # instead of crashing the TUI at launch.
+    dns_tmpl = policy.get("DnsOverHttpsTemplates", "")
+    if not isinstance(dns_tmpl, str):
+        dns_tmpl = ""
     for row in rows:
         if row["type"] == ROW_FEATURE:
             # An inert row stays unticked whatever the file says, so the
             # next Apply drops the dead key rather than carrying it.
             if row.get("inert"):
                 continue
-            if row["key"] in policy and policy[row["key"]] == row["value"]:
+            # The value must be in its policy's JSON type, as on import, so
+            # a true on disk does not tick an integer row.
+            if row["key"] in policy and _value_matches_row(row, policy[row["key"]]):
                 row["checked"] = True
         elif row["type"] == ROW_CHOICE:
             # A value that is not a legal member of this key's enum leaves
@@ -1933,7 +2472,6 @@ def sync_rows_with_policy(rows, policy):
                     row["selected"] = idx
         elif row["type"] == ROW_DNS:
             dns_val = policy.get("DnsOverHttpsMode")
-            dns_tmpl = policy.get("DnsOverHttpsTemplates", "")
             # If mode is "secure" and a template is set, show as "custom"
             if dns_val == "secure" and dns_tmpl:
                 if "custom" in row["options"]:
@@ -1941,12 +2479,11 @@ def sync_rows_with_policy(rows, policy):
             elif dns_val in row["options"]:
                 row["selected"] = row["options"].index(dns_val)
         elif row["type"] == ROW_DNS_TEMPLATE:
-            tmpl = policy.get("DnsOverHttpsTemplates", "")
-            if tmpl:
-                row["value"] = tmpl
-                row["cursor"] = len(tmpl)
+            if dns_tmpl:
+                row["value"] = dns_tmpl
+                row["cursor"] = len(dns_tmpl)
                 row["scroll"] = 0
-    _enforce_groups(rows, policy)
+    _enforce_groups(rows)
 
 
 def detect_persist_mode():
@@ -1999,17 +2536,39 @@ def export_settings(rows, path):
         if dns_template and dns_mode in ("custom", "secure", "automatic"):
             settings["DnsTemplates"] = dns_template
 
+    # Written as the invoking user, not as root: the file and any folders
+    # it needs are theirs from the start, and a path they could not write
+    # themselves fails instead of being created with root's rights.
+    text = json.dumps(settings, indent=4)
+    ok, msg = _run_as_invoking_user(
+        _write_export, path, text,
+        default=[False, "Export failed: could not write as the invoking user"])
+    return ok, msg
+
+
+def _write_export(path, text):
+    """Create the export file and its folders; returns [ok, message]."""
     try:
         out_dir = os.path.dirname(path)
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
-        _atomic_write(path, json.dumps(settings, indent=4))
-        # Running as root: hand the export back to the invoking user so it
-        # isn't a root-owned file stranded in their home directory.
-        _chown_to_sudo_user(path)
-        return True, f"Exported to {path}"
+        _atomic_write(path, text)
+    except PermissionError as e:
+        home = _user_home_for_brave()
+        if hasattr(os, "geteuid") and os.geteuid() != 0 and home:
+            # The hint spells the home out in full, so it works the same
+            # pasted into a shell as typed at the TUI prompt.
+            import pwd
+            try:
+                who = pwd.getpwuid(os.getuid()).pw_name
+            except KeyError:
+                who = f"uid {os.getuid()}"
+            suggestion = os.path.join(home, "SlimBraveNeoSettings.json")
+            return [False, f"Export failed: {who} cannot write {path}; try {suggestion}"]
+        return [False, f"Export failed: {e}"]
     except OSError as e:
-        return False, f"Export failed: {e}"
+        return [False, f"Export failed: {e}"]
+    return [True, f"Exported to {path}"]
 
 
 def _parse_imported_features(features_obj):
@@ -2031,12 +2590,20 @@ def _parse_imported_features(features_obj):
 
 
 def import_settings(rows, path):
-    """Import a SlimBrave Neo JSON config and update TUI row states."""
+    """Import a SlimBrave Neo JSON config and update TUI row states.
+
+    Every refusal returns before any row is touched, so a failed import
+    leaves the selections as they were. The order matches SlimBrave.ps1's
+    Import: the file, a JSON object, a Features block, the DNS fields, each
+    value against its policy's type, then the exclusion groups.
+    """
     try:
         config = read_json_file(path)
     except FileNotFoundError:
         return False, f"File not found: {path}"
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+    except (ValueError, RecursionError) as e:
+        # JSONDecodeError, UnicodeDecodeError and the 4300-digit integer
+        # limit are all ValueErrors; a deeply nested file is RecursionError.
         return False, f"Invalid JSON: {e}"
     except OSError as e:
         return False, f"Read error: {e}"
@@ -2048,13 +2615,46 @@ def import_settings(rows, path):
             f"Invalid config: expected a JSON object, got {type(config).__name__}"
         )
 
-    features_map, is_legacy = _parse_imported_features(config.get("Features"))
-    dns_mode = config.get("DnsMode", "")
-    dns_template = config.get("DnsTemplates", "") or ""
-    if not dns_mode:
-        # No DnsMode in the file means DNS is unmanaged (a bare
-        # DnsTemplates is treated as custom for legacy exports).
+    # A file without a Features object or array (the policy file, a
+    # Bookmarks dump, a DNS-only file, a lowercase `features`) is not a
+    # SlimBrave config. Taking it used to clear every row and report
+    # success, and --import then wrote an empty policy.
+    features = config.get("Features")
+    if not isinstance(features, (dict, list)):
+        return False, "Invalid config: no Features block (not a SlimBrave Neo config)"
+    features_map, is_legacy = _parse_imported_features(features)
+
+    # Values left unmanaged and named in the result message: a choice
+    # key's value that is not a legal member of its enum, a value outside
+    # its policy's JSON type, and an unknown DnsMode. Written out, such a
+    # value is one Brave would ignore or misapply (a 1 on local fonts,
+    # window management or clipboard becomes a managed Allow).
+    skipped_choices = []
+
+    # A list of strings is joined with spaces, as SlimBrave.ps1's [string]
+    # cast joins an array; anything falsy is no template, as there. No
+    # strip: SlimBrave.ps1 does not trim either.
+    raw_tmpl = config.get("DnsTemplates")
+    if isinstance(raw_tmpl, list) and all(isinstance(t, str) for t in raw_tmpl):
+        raw_tmpl = " ".join(raw_tmpl)
+    if not raw_tmpl:
+        dns_template = ""
+    elif isinstance(raw_tmpl, str):
+        dns_template = raw_tmpl
+    else:
+        return False, "Invalid config: DnsTemplates must be a string"
+    # No DnsMode in the file means DNS is unmanaged (a bare DnsTemplates is
+    # treated as custom for legacy exports). The mode is matched in any
+    # letter case, as SlimBrave.ps1 matches it; an unknown one leaves DNS
+    # unmanaged and is named.
+    raw_mode = config.get("DnsMode")
+    if not raw_mode:
         dns_mode = "custom" if dns_template else "unmanaged"
+    elif isinstance(raw_mode, str) and raw_mode.lower() in DNS_MODES:
+        dns_mode = raw_mode.lower()
+    else:
+        dns_mode = "unmanaged"
+        skipped_choices.append(f"DnsMode={raw_mode}")
 
     # Legacy array format can't distinguish value-1 vs value-2 for keys
     # with multiple rows (IncognitoModeAvailability). To avoid silently
@@ -2062,10 +2662,6 @@ def import_settings(rows, path):
     # who imported the Parental Controls preset — only the first matching
     # row per key is checked in legacy mode.
     legacy_handled = set()
-    # Choice keys whose value is not a legal member of that key's enum.
-    # They stay unmanaged and are named in the result message rather than
-    # being written out as a value Brave would reject.
-    skipped_choices = []
     # Keys the config names that are built into Brave Origin on this
     # machine: left unmanaged, and counted in the result message.
     skipped_inert = []
@@ -2088,8 +2684,13 @@ def import_settings(rows, path):
                 else:
                     row["checked"] = True
                     legacy_handled.add(key)
+            elif not _value_fits_row(row, expected):
+                row["checked"] = False
+                # Two rows can share a key; it is named once.
+                if key not in skipped_choices:
+                    skipped_choices.append(key)
             else:
-                row["checked"] = (expected == row["value"])
+                row["checked"] = _value_matches_row(row, expected)
         elif row["type"] == ROW_CHOICE:
             # Import is authoritative: a key the config does not name goes
             # back to "Not managed", matching the old unticked checkbox.
@@ -2106,14 +2707,14 @@ def import_settings(rows, path):
                 else:
                     row["selected"] = idx
         elif row["type"] == ROW_DNS:
-            if dns_mode in row["options"]:
-                row["selected"] = row["options"].index(dns_mode)
+            # Always set, so the TUI never keeps its pre-import mode.
+            row["selected"] = row["options"].index(dns_mode)
         elif row["type"] == ROW_DNS_TEMPLATE:
             row["value"] = dns_template
             row["cursor"] = len(dns_template)
             row["scroll"] = 0
 
-    _enforce_groups(rows, features_map)
+    dropped = _enforce_groups(rows)
     msg = f"Imported from {path}"
     if skipped_choices:
         msg += ("; left unmanaged because the value is not one this policy "
@@ -2122,6 +2723,9 @@ def import_settings(rows, path):
         n = len(skipped_inert)
         msg += (f"; {n} key{'s' if n != 1 else ''} built into Brave Origin "
                 "left unmanaged")
+    if dropped:
+        msg += ("; left unmanaged because it is mutually exclusive with "
+                "another imported row: " + ", ".join(dropped))
     return True, msg
 
 # ---------------------------------------------------------------------------
@@ -2234,10 +2838,9 @@ def desc_pane_lines(max_x):
     """Text lines the pane needs at this width.
 
     What the longest description wraps to at this width, up to
-    DESC_PANE_MAX_LINES: four lines at 80 columns, where five of the
-    descriptions still end in an ellipsis; three from about 140, where none
-    does. Sized by the content rather than by a constant so a wider
-    terminal gives the list its rows back.
+    DESC_PANE_MAX_LINES: four lines at 80 columns, where every description
+    fits whole; three from about 110. Sized by the content rather than by a
+    constant so a wider terminal gives the list its rows back.
     """
     if max_x not in _desc_pane_lines:
         width = max(1, (max_x - 1) - 4)
@@ -2329,7 +2932,8 @@ BUTTON_DESC = {
     "Import": "Load a settings file - a preset from Presets/ or an earlier "
               "export - into the list. Nothing is written until Apply.",
     "Export": "Save the current selections as JSON that Import, and the "
-              "other platforms' scripts, read back.",
+              "other platforms' scripts, read back. Under sudo the file is "
+              "written as you, not root, so pick a folder you can write to.",
     "Apply": "Asks whether to persist - and which channels, when more than "
              "one is installed - then writes the policy where Brave reads "
              "it at startup. Persisting hands a Configuration Profile to "
@@ -3026,6 +3630,24 @@ def prompt_persist_mode(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
             return True, "off"
 
 
+def _expand_prompt_path(path):
+    """Expand a leading ~ in a path typed at the TUI's Import/Export prompt.
+
+    `~` and `~/...` mean the invoking user's home (_invoking_user), not
+    root's, falling back to os.path.expanduser when there is none;
+    `~name/...` goes through os.path.expanduser. Anything else is
+    returned unchanged.
+    """
+    if path == "~" or path.startswith("~/"):
+        home = _user_home_for_brave()
+        if home is None:
+            return os.path.expanduser(path)
+        return home if path == "~" else os.path.join(home, path[2:])
+    if path.startswith("~"):
+        return os.path.expanduser(path)
+    return path
+
+
 def main(stdscr, override_installations=None):
     """Main TUI event loop.
 
@@ -3354,7 +3976,9 @@ def main(stdscr, override_installations=None):
                         # channels) first, mechanism (persist on/off)
                         # second. Each prompt has a sticky default so a
                         # one-keystroke Enter-Enter Apply re-uses prior
-                        # state.
+                        # state. A --policy-file target is one file, which
+                        # a profile cannot stand in for: it is always off.
+                        override = _is_override(installations)
                         selected_ids = None
                         if installations and len(installations) > 1:
                             default_ids = (
@@ -3371,12 +3995,15 @@ def main(stdscr, override_installations=None):
                                 status_msg = "Apply cancelled."
                                 status_ok = True
                                 continue
-                        current = detect_persist_mode()
-                        ok, persist_mode = prompt_persist_mode(
-                            stdscr, rows, cursor_idx, scroll_offset, btn_idx,
-                            install_method, current, filter_text=filter_text,
-                            show_desc=show_desc,
-                        )
+                        if override:
+                            ok, persist_mode = True, "off"
+                        else:
+                            current = detect_persist_mode()
+                            ok, persist_mode = prompt_persist_mode(
+                                stdscr, rows, cursor_idx, scroll_offset, btn_idx,
+                                install_method, current, filter_text=filter_text,
+                                show_desc=show_desc,
+                            )
                         if not ok:
                             status_msg = "Apply cancelled."
                             status_ok = True
@@ -3386,6 +4013,8 @@ def main(stdscr, override_installations=None):
                                 persist_mode=persist_mode,
                                 selected_channel_ids=selected_ids,
                             )
+                            if override and status_ok and _is_profile_installed():
+                                status_msg += PROFILE_STILL_APPLIES
                     else:
                         status_ok, status_msg = apply_policy(rows, installations)
 
@@ -3399,7 +4028,11 @@ def main(stdscr, override_installations=None):
                          show_desc=show_desc)
                     confirm = stdscr.getch()
                     if confirm in (curses.KEY_ENTER, 10, 13):
-                        status_ok, status_msg = reset_policy(rows, installations)
+                        # The TUI's Reset covers every channel, so it also
+                        # clears the plists of uninstalled ones (macOS).
+                        status_ok, status_msg = reset_policy(
+                            rows, installations,
+                            all_channels=override_installations is None)
                     else:
                         status_msg = "Reset cancelled."
                         status_ok = True
@@ -3411,7 +4044,8 @@ def main(stdscr, override_installations=None):
                         "Import path (Esc=cancel)",
                         default="./Presets/", show_desc=show_desc)
                     if ok and path:
-                        status_ok, status_msg = import_settings(rows, path)
+                        status_ok, status_msg = import_settings(
+                            rows, _expand_prompt_path(path))
                     else:
                         status_msg = "Import cancelled."
                         status_ok = True
@@ -3423,7 +4057,8 @@ def main(stdscr, override_installations=None):
                         "Export path (Esc=cancel)",
                         default="./SlimBraveNeoSettings.json", show_desc=show_desc)
                     if ok and path:
-                        status_ok, status_msg = export_settings(rows, path)
+                        status_ok, status_msg = export_settings(
+                            rows, _expand_prompt_path(path))
                     else:
                         status_msg = "Export cancelled."
                         status_ok = True
@@ -3501,8 +4136,14 @@ def cli_import(path, installations, doh_templates="",
     if not ok:
         print(f"Error: {msg}", file=sys.stderr)
         return 1
+    if IS_MAC and _is_override(installations) and _is_profile_installed():
+        msg += PROFILE_STILL_APPLIES
     print(msg)
     if IS_MAC and persist_mode == "on":
+        # The status text has no room for it; the CLI prints the path in
+        # full, so the file can be found again if the hand-off is missed.
+        if _last_staged_profile:
+            print(f"Profile file: {_last_staged_profile}")
         # macOS 11+ disallows CLI-driven profile installs (see `man
         # profiles`); finish the step in System Settings.
         print(
@@ -3540,63 +4181,140 @@ def cli_export(path, installations):
     return 0
 
 
-def cli_reset(installations):
+def cli_reset(installations, all_channels=False):
     """Non-interactive: tear down every SlimBrave artifact and repair leaks.
 
-    Removes plist files, the Configuration Profile (if installed), and
-    repairs leaked Brave-profile prefs. Unconditional so a single
-    --reset always leaves a clean slate.
+    Clears SlimBrave's keys from each targeted policy file (on macOS a
+    plist is deleted only when nothing else is left in it; the Linux file
+    is SlimBrave's own and is deleted), removes the Configuration Profile
+    (if installed) and repairs leaked Brave-profile prefs, whichever mode
+    was used before, so a single --reset always leaves a clean slate.
+    `all_channels` (--channels auto) also clears the plists of macOS
+    channels that are no longer installed. A --policy-file run leaves the
+    profile alone. Returns 1 if the profile is still installed afterwards.
     """
     targets = _dedupe_plist_targets(installations)
     if not targets:
         print(f"No policy file found at {POLICY_FILE}")
         return 0
+    override = _is_override(installations)
     try:
         for plist_path, label in targets:
-            if os.path.exists(plist_path):
+            scope = f" ({label})" if label else ""
+            if not os.path.exists(plist_path):
+                print(f"No policy file found at {plist_path}{scope}")
+            elif not IS_MAC:
                 os.remove(plist_path)
-                print(
-                    f"Removed {plist_path}"
-                    + (f" ({label})" if label else "")
-                )
+                print(f"Removed {plist_path}{scope}")
             else:
-                print(
-                    f"No policy file found at {plist_path}"
-                    + (f" ({label})" if label else "")
-                )
+                changed, kept = _strip_managed(plist_path)
+                if not changed:
+                    print(f"No SlimBrave keys in {plist_path}{scope}")
+                elif kept:
+                    print(f"Removed SlimBrave keys from {plist_path}{scope}; "
+                          f"kept {kept} other key{'s' if kept != 1 else ''}")
+                else:
+                    print(f"Removed {plist_path}{scope}")
+        if IS_MAC and all_channels and not override:
+            for path, label in _strip_uninstalled_channels(targets):
+                print(f"Removed SlimBrave keys from {path} ({label}, not installed)")
     except OSError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
+    rc = 0
     if IS_MAC:
-        profile_was_installed = _is_profile_installed()
-        _clear_persistence_artifacts()
-        _flush_cfprefsd()
-        if profile_was_installed:
-            print(f"Removed Configuration Profile "
-                  f"({PERSIST_PROFILE_IDENTIFIER})")
+        if override:
+            _flush_cfprefsd()
+        else:
+            profile_was_installed = _is_profile_installed()
+            _clear_persistence_artifacts()
+            _flush_cfprefsd()
+            # Asked again rather than trusting the exit status: a non-zero
+            # one can also mean there was nothing to remove.
+            if _is_profile_installed():
+                print(f"Error: {PROFILE_STILL_INSTALLED}", file=sys.stderr)
+                rc = 1
+            elif profile_was_installed:
+                print(f"Removed Configuration Profile "
+                      f"({PERSIST_PROFILE_IDENTIFIER})")
 
-    repaired, running = repair_brave_prefs(installations)
+    repaired, failed, running = repair_brave_prefs(installations)
     if repaired > 0 and not running:
         print(
             f"Cleaned {repaired} leaked profile "
             f"pref{'s' if repaired != 1 else ''} from Brave's user profile."
         )
+    if failed:
+        print(f"Warning: {_scrub_failure_note(failed)}", file=sys.stderr)
     if running:
         print(
             "Note: Brave is running — any leaked profile prefs cleaned now "
             "will be overwritten when Brave next saves. Fully close Brave "
             "and run --reset again to make it stick."
         )
-    return 0
+    return rc
 
 
-def parse_args():
-    """Parse command-line arguments."""
+def _cli_scope_error(args, detected, selected):
+    """The CLI's refusal for a --channels scope _scope_conflict would block.
+
+    `detected` is every channel found, `selected` what --channels kept.
+    Returns the message __main__ prints before exiting 2, or None.
+    """
+    if args.policy_file is not None or (args.import_path is None and not args.reset):
+        return None
+    outside = _scope_conflict(detected, {i["channel"] for i in selected})
+    if not outside:
+        return None
+    one = len(outside) == 1
+    return (
+        f"Error: {', '.join(outside)} also hold{'s' if one else ''} a SlimBrave "
+        "policy, and with the Configuration Profile installed every Apply or "
+        f"Reset removes the whole profile. Add {'it' if one else 'them'} to "
+        "--channels, or run --reset first and then apply to "
+        f"{', '.join(i['label'] for i in selected)}."
+    )
+
+
+def _check_args(args):
+    """Return the error for a command line that cannot run, or None.
+
+    Checked before the root check, so a bad command line is refused
+    without sudo; __main__ exits 2 on any of them.
+    """
+    for flag, value in (("--import", args.import_path),
+                        ("--export", args.export_path),
+                        ("--policy-file", args.policy_file)):
+        if value == "":
+            return f"Error: {flag} needs a path."
+    # --doh-templates is only ever read by cli_import; --reset, --export and
+    # the TUI would drop it without a word.
+    if args.doh_templates and args.import_path is None:
+        return "Error: --doh-templates requires --import"
+    # --reset runs first, so an export after it would save nothing; and a
+    # failed export would not stop the reset that loses the policy.
+    if args.reset and args.export_path is not None:
+        return ("Error: --export cannot be combined with --reset. "
+                "Run --export first, then --reset.")
+    acting = (args.import_path is not None or args.export_path is not None
+              or args.reset)
+    if args.channels != "auto" and (args.policy_file is not None or not acting):
+        return ("Error: --channels applies only to --import, --export or "
+                "--reset, and not with --policy-file.")
+    if args.persist == "on" and args.policy_file is not None:
+        return ("Error: --persist on cannot be combined with --policy-file: "
+                "a Configuration Profile targets each channel's bundle, not a file.")
+    return None
+
+
+def parse_args(argv=None):
+    """Parse command-line arguments (sys.argv[1:] when argv is None)."""
     parser = argparse.ArgumentParser(
         prog="slimbrave",
         description="SlimBrave Neo - Brave Browser debloater for Linux and macOS",
-        epilog="Run without arguments to launch the interactive TUI.",
+        epilog=("Run without arguments to launch the interactive TUI. "
+                "--reset runs before --import; --export runs last."),
     )
     parser.add_argument(
         "--import", dest="import_path", metavar="PATH",
@@ -3636,10 +4354,10 @@ def parse_args():
             "on macOS 13+) or 'on' (install a Configuration Profile via "
             "System Settings; durable, Apple-recommended). When omitted, "
             "reuse whatever's currently installed; falls back to 'off' "
-            "if nothing is. Linux accepts only 'off'."
+            "if nothing is, or with --policy-file. Linux accepts only 'off'."
         ),
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -3649,20 +4367,23 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-    # --doh-templates is only ever read by cli_import; --reset, --export and
-    # the TUI would drop it without a word.
-    if args.doh_templates and not args.import_path:
-        print("Error: --doh-templates requires --import", file=sys.stderr)
+    error = _check_args(args)
+    if error:
+        print(error, file=sys.stderr)
         sys.exit(2)
 
     # Override policy file path if requested. This is a single-target
     # override that bypasses channel detection — useful for tests and for
     # legacy callers that always wrote to one file.
     override_installations = None
-    if args.policy_file:
-        if not _is_within_allowed_policy_dir(args.policy_file):
+    if args.policy_file is not None:
+        if not _is_allowed_policy_file(args.policy_file):
+            if IS_MAC:
+                rule = "com.brave.Browser[.beta|.nightly].plist"
+            else:
+                rule = "a slimbrave*.json file"
             print(
-                "--policy-file must resolve to a path inside one of: "
+                f"--policy-file must be {rule} directly inside one of: "
                 + ", ".join(ALLOWED_POLICY_DIRS)
             )
             sys.exit(2)
@@ -3680,7 +4401,8 @@ if __name__ == "__main__":
             prefs_path=_channel_prefs_path(default_channel["user_data_dir"]),
         )]
 
-    is_cli = args.import_path or args.export_path or args.reset
+    is_cli = (args.import_path is not None or args.export_path is not None
+              or args.reset)
 
     if os.geteuid() != 0:
         print("SlimBrave Neo must be run as root.")
@@ -3706,24 +4428,37 @@ if __name__ == "__main__":
                 print(f"Warning: {w}", file=sys.stderr)
             for n in brave_info.get("notes", []):
                 print(f"Note: {n}", file=sys.stderr)
+            # Before any action: with the profile installed, an Apply or
+            # Reset scoped away from a channel that holds a SlimBrave
+            # policy would strip that channel too.
+            error = _cli_scope_error(args, brave_info["installations"], installations)
+            if error:
+                print(error, file=sys.stderr)
+                sys.exit(2)
 
         # Resolve --persist: when omitted, reuse whichever mode is
         # currently installed (matches TUI's sticky default) so a
         # re-run never silently demotes a profile back to plist-only.
+        # A --policy-file target is one file, so it is always off.
         persist_mode = args.persist
         if persist_mode is None:
-            persist_mode = detect_persist_mode() if IS_MAC else PERSIST_DEFAULT
+            if args.policy_file is not None:
+                persist_mode = "off"
+            else:
+                persist_mode = detect_persist_mode() if IS_MAC else PERSIST_DEFAULT
 
         # Accumulate so a later success cannot mask an earlier failure
         # (e.g. --reset failing followed by a clean --import).
         rc = 0
         if args.reset:
-            rc = max(rc, cli_reset(installations))
-        if args.import_path:
+            rc = max(rc, cli_reset(
+                installations,
+                all_channels=override_installations is None and args.channels == "auto"))
+        if args.import_path is not None:
             rc = max(rc, cli_import(args.import_path, installations,
                                     doh_templates=args.doh_templates or "",
                                     persist_mode=persist_mode))
-        if args.export_path:
+        if args.export_path is not None:
             rc = max(rc, cli_export(args.export_path, installations))
         sys.exit(rc)
 

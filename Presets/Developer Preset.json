@@ -2,9 +2,9 @@
     "Features": {
         "MetricsReportingEnabled": false,
         "UrlKeyedAnonymizedDataCollectionEnabled": false,
+        "AccessibilityImageLabelsEnabled": false,
         "BraveP3AEnabled": false,
         "BraveStatsPingEnabled": false,
-        "AlternateErrorPagesEnabled": false,
         "BraveRewardsDisabled": true,
         "BraveWalletDisabled": true,
         "BraveVPNDisabled": true,
@@ -12,11 +12,8 @@
         "BraveNewsDisabled": true,
         "BraveTalkDisabled": true,
         "BackgroundModeEnabled": false,
-        "ShoppingListEnabled": false,
         "DefaultBrowserSettingEnabled": false,
         "BraveLocalAIEnabled": false,
-        "DNSInterceptionChecksEnabled": false,
-        "ChromeVariations": 1,
         "SpellCheckServiceEnabled": false
     },
     "DnsMode": "automatic"

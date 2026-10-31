@@ -29,6 +29,17 @@ $isAdmin = (New-Object Security.Principal.WindowsPrincipal(
     [Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
+    # $OriginalSid is set only by the relaunch below. Seeing it here means
+    # the relaunched copy is still not elevated (UAC off and a standard
+    # account, for one), and relaunching again would loop without end.
+    if (-not [string]::IsNullOrWhiteSpace($OriginalSid)) {
+        [void][System.Windows.Forms.MessageBox]::Show(
+            'SlimBrave relaunched itself to get Administrator rights, but the new window is still not elevated, so it stopped instead of relaunching again. Run it from an administrator account.',
+            'Not elevated',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error)
+        exit 1
+    }
     if ([string]::IsNullOrWhiteSpace($script:selfPath)) {
         [void][System.Windows.Forms.MessageBox]::Show(
             "Run this from a saved .ps1 file so it can relaunch itself as Administrator.",
@@ -151,7 +162,21 @@ function Test-ListPolicyIsExactly {
     # disk exactly the one SlimBrave writes? An admin's own blocklist is a
     # superset (or a different set entirely) and must not be deleted just
     # because the matching box is unchecked. Absent means nothing to
-    # protect, so removal is safe.
+    # protect, so removal is safe. Chromium reads a list in either form (see
+    # List-policy helpers), and every form present must be exactly ours.
+    # First the REG_SZ holding a JSON array, the form SlimBrave wrote before
+    # 0f14e74; ConvertFrom-Json is assigned, never wrapped in @(), because
+    # Windows PowerShell 5.1 emits a JSON array as one object.
+    $item = Get-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue
+    if ($null -ne $item) {
+        $raw = $item.$Name
+        if (-not ($raw -is [string])) { return $false }
+        try { $parsed = ConvertFrom-Json -InputObject $raw -ErrorAction Stop } catch { return $false }
+        $vals = @()
+        foreach ($x in $parsed) { $vals += [string]$x }
+        if (-not (($vals.Count -eq $Expected.Count) -and -not (Compare-Object $vals $Expected))) { return $false }
+    }
+    # Then the numbered values in the subkey.
     $listKey = Join-Path $RegistryPath $Name
     if (-not (Test-Path $listKey)) { return $true }
     $props = Get-ItemProperty -Path $listKey -ErrorAction SilentlyContinue
@@ -167,24 +192,26 @@ function Test-ListPolicyIsExactly {
 
 $telemetryFeatures = @(
     @{ Name = "Disable Metrics Reporting"; Key = "MetricsReportingEnabled"; Value = 0; Type = "DWord"
-       Tip = "Stops Brave from sending anonymous usage statistics and crash reports to Brave's servers." },
+       Tip = "Stops Brave from uploading crash reports: locks 'Automatically send diagnostic reports' off, hides the prompt after a crash and blocks Send now on brave://crashes. Beta and Nightly turn it on by default; on Release the welcome page pre-ticks it. P3A and the usage ping have their own rows." },
     @{ Name = "Disable URL Data Collection"; Key = "UrlKeyedAnonymizedDataCollectionEnabled"; Value = 0; Type = "DWord"
-       Tip = "Stops URL-keyed anonymized data collection, which reports the URLs you visit to improve suggestion and safety features." },
+       Tip = "Locks 'Make searches and browsing better' (URL-keyed anonymized data collection) off. Brave already ships it off; its only switch, the hidden Privacy Guide at brave://settings/privacy/guide, goes away once any policy is set. This also overrides an opt-in made there earlier." },
+    @{ Name = "Disable Google Image Descriptions"; Key = "AccessibilityImageLabelsEnabled"; Value = 0; Type = "DWord"
+       Tip = "Brave already keeps Google's image descriptions off and no longer offers the opt-in. A profile that accepted it in an older version still sends unlabeled images to Google whenever a screen reader runs; this turns that off and locks it." },
     @{ Name = "Disable P3A Analytics"; Key = "BraveP3AEnabled"; Value = 0; Type = "DWord"
        Tip = "Disables P3A (Privacy-Preserving Product Analytics), Brave's anonymized product usage telemetry." },
     @{ Name = "Disable Stats Ping"; Key = "BraveStatsPingEnabled"; Value = 0; Type = "DWord"
        Tip = "Stops the daily usage ping that counts this install in Brave's active-user statistics, plus the search-engine usage counts it carries and the referral-code check. P3A Analytics sends its own copy of the search counts until it is disabled too." },
     @{ Name = "Limit Variations to Critical Fixes"; Key = "ChromeVariations"; Value = 1; Type = "DWord"; Group = "variations"
-       Tip = "Restricts Brave's remote experiment seed (Griffin) to studies Brave marks critical. None applies to current Brave, so this acts like Disable Variations but would let through any it marks later. Takes effect after a restart. Mutually exclusive with Disable Variations." },
+       Tip = "Restricts Brave's remote seed (Griffin) to studies Brave marks critical, so features Brave turns on only that way stay off, such as WebGL/WebGPU fingerprint masking (brave://flags restores it) and a Google sign-in fix. Takes effect after a restart. Mutually exclusive with Disable Variations." },
     @{ Name = "Disable Variations / Griffin Experiments"; Key = "ChromeVariations"; Value = 2; Type = "DWord"; Group = "variations"
-       Tip = "Refuses every study in Brave's remote experiment seed (Griffin), so Brave can't flip features in your browser from its servers; the seed is still downloaded. Unlike Limit Variations, it also refuses fixes marked critical. Takes effect after a restart. Mutually exclusive with Limit Variations." },
+       Tip = "Refuses every study in Brave's remote seed (Griffin), critical fixes too, so features Brave turns on only that way stay off, such as WebGL/WebGPU fingerprint masking and a Google sign-in fix. The seed is still downloaded. Takes effect after a restart. Mutually exclusive with Limit Variations." },
     @{ Name = "Disable Enhanced Spell Check"; Key = "SpellCheckServiceEnabled"; Value = 0; Type = "DWord"; Group = "spellcheck"
        Tip = "Locks off enhanced spell check, which sends what you type in web forms to Google. Brave already ships it off with no setting to turn it on; offline spell checking keeps working. Mutually exclusive with Disable Spellcheck, which turns spell checking off altogether and makes this row do nothing." }
 )
 
 $privacyFeatures = @(
-    @{ Name = "Disable Safe Browsing (security downgrade)"; Key = "SafeBrowsingProtectionLevel"; Value = 0; Type = "DWord"
-       Tip = "Turns Safe Browsing fully off. Brave already routes these lookups through its own servers, so Google never sees the sites you visit even with Safe Browsing on - turning it off buys almost no privacy and costs you the phishing and malware warning pages. Excluded from every preset for that reason." },
+    @{ Name = "Disable Safe Browsing (security downgrade)"; Key = "SafeBrowsingProtectionLevel"; Value = 0; Type = "DWord"; Group = "safebrowsing"
+       Tip = "Turns Safe Browsing fully off. Brave routes these lookups through its own servers, so Google never learns who made them; turning it off buys almost no privacy and costs you the phishing and malware warning pages. Excluded from every preset. Mutually exclusive with Lock Safe Browsing On." },
     @{ Name = "Disable Autofill (Addresses)"; Key = "AutofillAddressEnabled"; Value = 0; Type = "DWord"
        Tip = "Stops Brave from saving and auto-filling addresses and other contact details in web forms. Chromium has deprecated this policy, so brave://policy lists it as Deprecated, but Brave still applies it; its replacement (AutofillSettings) does not work in Brave yet." },
     @{ Name = "Disable Autofill (Credit Cards)"; Key = "AutofillCreditCardEnabled"; Value = 0; Type = "DWord"
@@ -194,42 +221,52 @@ $privacyFeatures = @(
     @{ Name = "Disable Password Leak Detection"; Key = "PasswordLeakDetectionEnabled"; Value = 0; Type = "DWord"
        Tip = "Locks off the online check of your credentials against known breach lists, which runs after you sign in to a site and when you edit a saved login. Brave already ships it off; this keeps it off." },
     @{ Name = "Disable Browser Sign-in"; Key = "BrowserSignin"; Value = 0; Type = "DWord"
-       Tip = "Brave has no Google sign-in for the browser itself; in Brave this locks off 'Allow Google login for extensions' (brave://settings/extensions), which Brave already ships off. Brave Account sign-in is not affected. Takes effect after a restart." },
+       Tip = "Brave has no Google browser sign-in; this locks 'Allow Google login for extensions' (brave://settings/extensions) off, as Brave already ships it. Extensions can still open Google's sign-in popup via chrome.identity. Brave Account is not affected. Takes effect after a restart." },
     @{ Name = "Enable Global Privacy Control"; Key = "BraveGlobalPrivacyControlEnabled"; Value = 1; Type = "DWord"
-       Tip = "Sends the GPC signal with every request, telling sites not to sell or share your data. Legally binding in some regions (e.g. under CCPA)." },
+       Tip = "Brave already sends the Global Privacy Control signal (asking sites not to sell or share your data) on every request and has no setting for it; this keeps it on if Adblock-Only mode (English UI only) is turned on. Works even where Shields are down." },
     @{ Name = "Enable De-AMP"; Key = "BraveDeAmpEnabled"; Value = 1; Type = "DWord"
-       Tip = "Skips Google AMP pages and loads the publisher's original page instead." },
+       Tip = "Keeps De-AMP on: Google AMP pages are skipped for the publisher's original page. Brave already does this by default; this locks the Settings toggle and stops Adblock-Only mode from turning it off." },
     @{ Name = "Enable Debouncing"; Key = "BraveDebouncingEnabled"; Value = 1; Type = "DWord"
-       Tip = "Skips known tracking redirects and navigates straight to the final destination URL." },
+       Tip = "Keeps debouncing on: known tracking redirects are skipped and you go straight to the final URL. Brave already does this by default; this locks the Settings toggle and stops Adblock-Only mode from turning it off." },
     @{ Name = "Strip Tracking URL Parameters"; Key = "BraveTrackingQueryParametersFilteringEnabled"; Value = 1; Type = "DWord"
-       Tip = "Removes known tracking parameters (fbclid, gclid, mc_eid, ...) from URLs before they load." },
+       Tip = "Brave already strips known tracking parameters (fbclid, gclid, mc_eid, ...) from URLs and has no setting for it; this keeps stripping on if Adblock-Only mode (English UI only) is turned on. Needs Shields up." },
     @{ Name = "Reduce Language Fingerprinting"; Key = "BraveReduceLanguageEnabled"; Value = 1; Type = "DWord"
-       Tip = "Reports a generic language configuration to sites, making your browser harder to fingerprint." },
+       Tip = "Brave already does this by default; this locks its Settings toggle on. Sites get only your first language in the Accept-Language header and, on Windows, macOS and a few Linux distros, only a standard font list. Needs Shields up and fingerprinting protection on." },
     @{ Name = "Disable WebRTC IP Leak"; Key = "WebRtcIPHandling"; Value = "disable_non_proxied_udp"; Type = "String"
        Tip = "Restricts WebRTC to proxied connections so video/voice calls can't expose your real IP address behind a VPN or proxy." },
     @{ Name = "Disable QUIC Protocol"; Key = "QuicAllowed"; Value = 0; Type = "DWord"
        Tip = "Disables QUIC (HTTP/3) for web requests so they use TCP (HTTP/2 or HTTP/1.1). Useful when a firewall or filter can't inspect QUIC; may slightly slow some Google sites. WebRTC calls and WebTransport still use UDP." },
     @{ Name = "Disable Network Prediction (Prefetch)"; Key = "NetworkPredictionOptions"; Value = 2; Type = "DWord"
-       Tip = "Stops Brave from fetching pages ahead of your click when a site's speculation rules or prerender hints ask for it, and from pre-connecting to your search engine. Brave already defaults to this; the policy locks it." },
+       Tip = "Stops Brave from fetching pages ahead of your click when a site's speculation rules or prerender hints ask for it, and from pre-connecting to your search engine. Brave already defaults to this; the policy locks it against Sync and extensions." },
     @{ Name = "Block Third Party Cookies"; Key = "BlockThirdPartyCookies"; Value = 1; Type = "DWord"
-       Tip = "Blocks cookies set by domains other than the site you are visiting. Can break some embedded logins." },
+       Tip = "Brave already blocks third-party cookies by default; this locks that, so the global 'Allow all cookies' choice in Shields settings, extensions, Sync and Adblock-Only mode can't turn it off. Per-site Shields exceptions still work, e.g. for an embedded login that breaks." },
     @{ Name = "Block Payment Method Probing"; Key = "PaymentMethodQueryEnabled"; Value = 0; Type = "DWord"
        Tip = "Stops sites from learning whether you have payment methods saved: canMakePayment() always answers yes and hasEnrolledInstrument() always answers no, so neither reveals anything." },
-    @{ Name = "Disable Alternate Error Pages (no effect in Brave)"; Key = "AlternateErrorPagesEnabled"; Value = 0; Type = "DWord"
-       Tip = "No effect in Brave: Brave never runs the web-service helper for navigation errors that this setting controls, and keeps captive-portal (Wi-Fi sign-in page) detection on either way. Kept as a lock; Brave already ships it off." },
     @{ Name = "Block Remote Debugging"; Key = "RemoteDebuggingAllowed"; Value = 0; Type = "DWord"
        Tip = "Blocks the remote debugging port and pipe, the interface automation tools use to drive the browser and read your cookies and logged-in sessions. Disable Developer Tools does not cover this. Breaks Puppeteer, Playwright and the brave://inspect remote-debugging toggle. No restart needed." },
-    @{ Name = "Disable DNS Interception Probes (no effect in Brave)"; Key = "DNSInterceptionChecksEnabled"; Value = 0; Type = "DWord"
-       Tip = "No effect in Brave: Chromium has not made these three random-hostname lookups by default since version 97. They run only when the IntranetRedirectBehavior policy is set to 3, which SlimBrave never writes. Kept as a lock in case that changes." },
     @{ Name = "Require HTTPS for Basic Auth"; Key = "BasicAuthOverHttpEnabled"; Value = 0; Type = "DWord"
-       Tip = "Refuses HTTP Basic authentication over plain HTTP so your username and password are never sent in the clear. Breaks logins on legacy routers, printers and other appliances that only serve HTTP, and plain-HTTP proxies that use Basic authentication." }
+       Tip = "Refuses HTTP Basic authentication over plain HTTP so your username and password are never sent in the clear. Breaks logins on legacy routers, printers and other appliances that only serve HTTP, and plain-HTTP proxies that use Basic authentication." },
+    @{ Name = "Block Local Network Access"; Key = "LocalNetworkAccessBlockedForUrls"; Value = @("*"); Type = "List"
+       Tip = "Stops public websites from reaching devices on your local network (router, NAS, printers, smart-home hubs) or apps on this computer, with no prompt or per-site exception; Brave otherwise asks. Pages opened from a local address still work. Breaks web apps that pair with local devices or helper apps." },
+    @{ Name = "Disable XSLT"; Key = "XSLTEnabled"; Value = 0; Type = "DWord"
+       Tip = "Turns off XSLT, the legacy XML transform engine behind XSLTProcessor and xml-stylesheet pages, an attack surface Chromium is removing; this keeps it off, even for sites that opt back in. XML styled with it (some RSS feeds and sitemaps) shows unstyled. Takes full effect after a restart." },
+    @{ Name = "Disable JavaScript Optimization (hardening)"; Key = "DefaultJavaScriptOptimizerSetting"; Value = 2; Type = "DWord"
+       Tip = "Turns off V8's optimizing compilers (TurboFan, Maglev) on websites; Brave says this makes it more resistant to attacks. Sites keep working, WebAssembly included, but script-heavy pages and web apps run slower, with no per-site exception. Applies to tabs opened after the change." },
+    @{ Name = "Remove 'Always Allow' from App-Launch Prompts"; Key = "ExternalProtocolDialogShowAlwaysOpenCheckbox"; Value = 0; Type = "DWord"
+       Tip = "Removes the 'Always allow' checkbox from the prompt Brave shows before a site opens an external app, so every launch (mailto:, Zoom, Teams, Steam, ms-* links) needs a click. Apps you already set to always open from a site still open without asking." },
+    @{ Name = "Force Site Isolation for Every Site"; Key = "SitePerProcess"; Value = 1; Type = "DWord"
+       Tip = "Keeps every site in its own process, as Brave already does on desktop, and stops brave://flags#site-isolation-trial-opt-out or --disable-site-isolation-trials from turning it off. Takes effect after a restart." },
+    @{ Name = "Isolate Subdomains in Separate Processes"; Key = "OriginKeyedProcessesEnabled"; Value = 1; Type = "DWord"
+       Tip = "Puts each origin (for example mail.example.com and docs.example.com) in its own process rather than one per site, for stronger protection against Spectre-style leaks between subdomains. Uses more processes and memory. Takes effect after a restart. A brave://flags setting overrides it." },
+    @{ Name = "Block Dynamic Code in the Browser Process"; Key = "DynamicCodeSettings"; Value = 1; Type = "DWord"
+       Tip = "Stops Brave's main process from creating or changing executable memory (Arbitrary Code Guard), which blocks injected shellcode and code-patching hooks there. Some antivirus, printer-driver or input-method software that loads into Brave may fail or crash it; untick this if so." }
 )
 
 # Site permissions and access lockdowns: content-setting defaults plus the
 # escape hatches (guest, incognito, extensions) that would otherwise bypass
 # the rest of the policy set.
 #
-# The first eight rows are tri-state content settings: a row carrying
+# The first nine rows are tri-state content settings: a row carrying
 # `Choices` is drawn as a dropdown instead of a checkbox, because Chromium
 # accepts more than "block or leave alone" for these keys. Choices is an
 # ordered list of Label/Value pairs; Value $null means "not managed", i.e.
@@ -238,35 +275,39 @@ $privacyFeatures = @(
 # exactly like the old unchecked checkbox.
 #
 # The legal values differ per key and are NOT uniform - Allow (1) is not a
-# member of the *GuardSetting / LocalFonts / WindowManagement enums, so
-# those rows only offer Ask (3) and Block (2). Do not "tidy" them into a
-# shared list.
+# member of the *GuardSetting / LocalFonts / WindowManagement / Clipboard
+# enums, so those rows only offer Ask (3) and Block (2). Do not "tidy" them
+# into a shared list. Web Notifications offers no Ask either: a managed Ask
+# lets no notification through (AUDIT.md, DefaultNotificationsSetting row).
 #
 # `Value` stays on a choice row as the value its pre-tri-state checkbox
 # wrote (always Block). It is never written directly; it is what a bare key
 # in a legacy array-format export means on import.
+#
+# The last two rows (microphone, camera) carry no Choices and are plain
+# checkboxes: AudioCaptureAllowed / VideoCaptureAllowed are booleans whose
+# true equals unset, so false is the only managed state.
 $sitePermissionFeatures = @(
     @{ Name = "Web Notifications"; Key = "DefaultNotificationsSetting"; Value = 2; Type = "DWord"
        Choices = @(
            @{ Label = "Not managed"; Value = $null },
            @{ Label = "Allow"; Value = 1 },
-           @{ Label = "Ask";   Value = 3 },
            @{ Label = "Block"; Value = 2 })
-       Tip = "Sets the default for desktop notifications. Block stops every site from asking or showing them, Ask keeps the permission prompt, Allow grants it to every site." },
+       Tip = "Sets the default for desktop notifications. Block stops every site from asking or showing them; Allow lets every site show them. Either overrides your per-site settings. Not managed keeps Brave's normal prompt (a managed Ask would let no notification through)." },
     @{ Name = "Location Access"; Key = "DefaultGeolocationSetting"; Value = 2; Type = "DWord"
        Choices = @(
            @{ Label = "Not managed"; Value = $null },
            @{ Label = "Allow"; Value = 1 },
            @{ Label = "Ask";   Value = 3 },
            @{ Label = "Block"; Value = 2 })
-       Tip = "Sets the default for reading your physical location. Block removes the prompt entirely, so maps and delivery sites will need the location typed manually; Ask keeps the prompt." },
+       Tip = "Sets the default for reading your physical location. Block removes the prompt entirely, so maps and delivery sites will need the location typed manually; Ask prompts every time a site asks and remembers no answer. Any choice overrides your per-site settings." },
     @{ Name = "Motion Sensors"; Key = "DefaultSensorsSetting"; Value = 2; Type = "DWord"
        Choices = @(
            @{ Label = "Not managed"; Value = $null },
            @{ Label = "Allow"; Value = 1 },
            @{ Label = "Ask";   Value = 3 },
            @{ Label = "Block"; Value = 2 })
-       Tip = "Sets the default for motion and orientation sensors, a known fingerprinting vector. Blocking rarely breaks anything on desktop." },
+       Tip = "Motion and orientation sensors are a fingerprinting vector, and Brave already blocks them by default. Block locks that: neither the settings page nor a per-site exception, even one made earlier, can allow them. Ask and Allow loosen Brave's default." },
     @{ Name = "WebUSB Access"; Key = "DefaultWebUsbGuardSetting"; Value = 2; Type = "DWord"
        Choices = @(
            @{ Label = "Not managed"; Value = $null },
@@ -296,7 +337,17 @@ $sitePermissionFeatures = @(
            @{ Label = "Not managed"; Value = $null },
            @{ Label = "Ask";   Value = 3 },
            @{ Label = "Block"; Value = 2 })
-       Tip = "Sets the default for sites reading your monitor layout and placing windows on a chosen screen. Blocking breaks the full-screen presentation mode in some web apps. Chromium has no Allow state for this key." }
+       Tip = "Sets the default for sites reading your monitor layout and placing windows on a chosen screen. Blocking breaks the full-screen presentation mode in some web apps. Chromium has no Allow state for this key." },
+    @{ Name = "Clipboard Read Access"; Key = "DefaultClipboardSetting"; Value = 2; Type = "DWord"
+       Choices = @(
+           @{ Label = "Not managed"; Value = $null },
+           @{ Label = "Ask";   Value = 3 },
+           @{ Label = "Block"; Value = 2 })
+       Tip = "Sets the default for sites reading your clipboard without you pasting. Block removes the prompt and breaks Paste buttons inside web apps; Ask keeps the prompt. Either one overrides sites you allowed before. Ctrl+V and copy buttons still work. Chromium has no Allow state for this key." },
+    @{ Name = "Block Microphone Access"; Key = "AudioCaptureAllowed"; Value = 0; Type = "DWord"
+       Tip = "Stops every site and extension from using the microphone or any other audio input, with no prompt; per-site Allow exceptions stop working too. Breaks web calls and meetings (Meet, Zoom or Teams on the web, Discord, Brave Talk), voice messages and dictation on websites." },
+    @{ Name = "Block Camera Access"; Key = "VideoCaptureAllowed"; Value = 0; Type = "DWord"
+       Tip = "Stops every site and extension from using the camera or any other video input, with no prompt; per-site Allow exceptions stop working too. Breaks web video calls (Meet, Zoom or Teams on the web, Discord, Brave Talk), webcam ID checks and in-browser QR scanners." }
 )
 
 # Lockdowns and the escape hatches (guest, incognito, extensions) that
@@ -304,16 +355,28 @@ $sitePermissionFeatures = @(
 $accessControlFeatures = @(
     @{ Name = "Force Google SafeSearch"; Key = "ForceGoogleSafeSearch"; Value = 1; Type = "DWord"
        Tip = "Forces SafeSearch on for all Google searches. Mainly useful for parental controls." },
+    @{ Name = "Force YouTube Restricted Mode (Strict)"; Key = "ForceYouTubeRestrict"; Value = 2; Type = "DWord"
+       Tip = "Forces YouTube's Strict Restricted Mode on youtube.com and its country domains, including videos other sites embed from them; the user cannot turn it off. Many videos become unavailable and comments are hidden. Videos embedded from youtube-nocookie.com are not restricted." },
+    @{ Name = "Lock Safe Browsing On (Standard)"; Key = "SafeBrowsingProtectionLevel"; Value = 1; Type = "DWord"; Group = "safebrowsing"
+       Tip = "Locks Safe Browsing at Standard protection so it cannot be switched to No protection in brave://settings/security. Lookups go through Brave's proxy, as they do by default. Mutually exclusive with Disable Safe Browsing." },
+    @{ Name = "Block Bypassing Safe Browsing Warnings"; Key = "DisableSafeBrowsingProceedAnyway"; Value = 1; Type = "DWord"
+       Tip = "Removes the option to continue past Safe Browsing's malware and phishing warnings, so a flagged site cannot be opened, even one flagged by mistake. Does not cover certificate or download warnings. Does nothing while Safe Browsing is off; Lock Safe Browsing On keeps it on." },
+    @{ Name = "Block Bypassing Certificate Warnings"; Key = "SSLErrorOverrideAllowed"; Value = 0; Type = "DWord"
+       Tip = "Removes the Proceed link, and the typed bypass, from certificate-error pages, so a site whose certificate is invalid, expired or self-signed cannot be opened at all. Breaks router, NAS and printer admin pages and local dev servers that use self-signed certificates." },
     @{ Name = "Disable Guest Mode"; Key = "BrowserGuestModeEnabled"; Value = 0; Type = "DWord"
        Tip = "Removes guest browsing sessions: off-the-record windows that keep no history and run without your profile's extensions. Disable Incognito Mode does not remove them. These policies still apply inside guest windows." },
+    @{ Name = "Prevent Deleting History"; Key = "AllowDeletingBrowserHistory"; Value = 0; Type = "DWord"
+       Tip = "Stops anyone deleting browsing and download history in History, Downloads or Clear browsing data; Brave's clear-on-exit keeps them too. Brave's Local history retention setting (brave://settings/privacy) can still expire history after as little as a day, and SlimBrave cannot lock it." },
     @{ Name = "Block All Extensions"; Key = "ExtensionInstallBlocklist"; Value = @("*"); Type = "List"
        Tip = "Blocks installation of every extension and disables ones already installed. For lockdown/parental setups - a proxy or VPN extension would bypass DNS filtering." },
     @{ Name = "Block Sideloaded (External) Extensions"; Key = "BlockExternalExtensions"; Value = 1; Type = "DWord"
        Tip = "Blocks extensions other programs install through the Windows registry or a drop-in file (how bundleware gets in) and removes any added that way at the next launch, even ones you approved. Extensions you install yourself keep working." },
+    @{ Name = "Block Command-Line Extensions (--load-extension)"; Key = "ExtensionInstallTypeBlocklist"; Value = @("command_line"); Type = "List"
+       Tip = "Ignores extensions passed with --load-extension, which malware adds to Brave's shortcuts to slip one in. Google Chrome ignores that switch; Brave honours it unless this is set. --disable-extensions-except can still load one. Breaks shortcuts and test tools that use the switch. Restart needed." },
     @{ Name = "Disable Incognito Mode"; Key = "IncognitoModeAvailability"; Value = 1; Type = "DWord"; Group = "incognito"
        Tip = "Removes private browsing entirely - no incognito windows can be opened. Mutually exclusive with Force Incognito Mode." },
     @{ Name = "Force Incognito Mode"; Key = "IncognitoModeAvailability"; Value = 2; Type = "DWord"; Group = "incognito"
-       Tip = "Every window opens in incognito: no history, and logins and most extensions stop persisting. Mutually exclusive with Disable Incognito Mode." }
+       Tip = "Every window opens in incognito: no history, and logins and most extensions stop persisting. Tor windows go too, and so do Leo and Brave Rewards, plus Brave Wallet unless it is allowed in private windows. Mutually exclusive with Disable Incognito Mode." }
 )
 
 # Brave 1.86+ content-protection enforcers (fingerprinting protection also
@@ -327,7 +390,7 @@ $shieldsContentFeatures = @(
     @{ Name = "Force HTTPS Upgrades (Strict; not enforced on Brave's HTTPS-First rollout)"; Key = "DefaultBraveHttpsUpgradeSetting"; Value = 2; Type = "DWord"
        Tip = "Always upgrades connections to HTTPS; sites that can't serve it show a warning instead of falling back to HTTP. Not enforced where Brave moved to Chromium's HTTPS-First mode (Beta, Nightly, part of Release), which it only presets once; Limit or Disable Variations keeps it enforced." },
     @{ Name = "Cap Referrers (Strict Origin)"; Key = "DefaultBraveReferrersSetting"; Value = 2; Type = "DWord"; Group = "referrers"
-       Tip = "Caps the Referer header at the origin for cross-origin requests, locked as managed policy. Mutually exclusive with Allow Permissive Referrers." },
+       Tip = "Caps the Referer header at the origin for cross-origin requests, as Brave already does by default, and locks it: per-site exceptions stop applying, including any Brave's compatibility list adds to fix sites. Mutually exclusive with Allow Permissive Referrers." },
     @{ Name = "Allow Permissive Referrers (unsafe-url)"; Key = "DefaultBraveReferrersSetting"; Value = 1; Type = "DWord"; Group = "referrers"
        Tip = "Sends your full referring URL cross-origin when a site requests it. Compatibility escape hatch only - this weakens privacy and is excluded from every preset. Mutually exclusive with Cap Referrers." },
     @{ Name = "Forget First-Party Storage on Close"; Key = "DefaultBraveRemember1PStorageSetting"; Value = 2; Type = "DWord"
@@ -342,13 +405,13 @@ $braveFeatures = @(
     @{ Name = "Disable Brave VPN"; Key = "BraveVPNDisabled"; Value = 1; Type = "DWord"
        Tip = "Removes the Brave VPN feature and its upsell prompts." },
     @{ Name = "Disable Brave AI Chat"; Key = "BraveAIChatEnabled"; Value = 0; Type = "DWord"
-       Tip = "Disables Leo, Brave's built-in AI assistant, and removes it from the sidebar and address bar." },
+       Tip = "Disables Leo, Brave's built-in AI assistant, and removes it from the sidebar and address bar. Brave still downloads Leo's WebMCP tool-scripts component, though nothing uses it while Leo is off." },
     @{ Name = "Disable Local AI (On-Device Models, Brave 1.94+, off by default on Release)"; Key = "BraveLocalAIEnabled"; Value = 0; Type = "DWord"
-       Tip = "Stops Brave from downloading and running on-device AI models and from building an AI index of your browsing history. Separate from Brave AI Chat - disabling Leo does not cover this. Off by default on Release (on in Nightly and half of Beta); this keeps it off if Brave or you turn it on. Needs Brave 1.94 or newer; older versions ignore the key. Takes effect after a browser restart." },
+       Tip = "Stops Brave from downloading and running on-device AI models and from building an AI index of your browsing history; disabling Leo does not cover this. Off by default on Release (on in Nightly and half of Beta); this keeps it off if Brave or you turn it on. Takes effect after a restart." },
     @{ Name = "Disable Brave Shields"; Key = "BraveShieldsDisabledForUrls"; Value = @("https://*", "http://*"); Type = "List"; Group = "shields"
-       Tip = "Turns Shields OFF for every site: no ad blocking, no tracker blocking. Every Shields & Content Protection row, Strip Tracking URL Parameters and Reduce Language Fingerprinting then do nothing; De-AMP, Debouncing and Global Privacy Control keep working. Almost nobody wants this - it exists for kiosk/testing setups. Mutually exclusive with Force Shields On." },
+       Tip = "Kiosk/testing only. Shields OFF for every site: no ad or tracker blocking; Shields & Content Protection rows, Strip Tracking URL Parameters and Reduce Language Fingerprinting do nothing. De-AMP, Debouncing, GPC and third-party cookie blocking still work. Mutually exclusive with Force Shields On." },
     @{ Name = "Force Shields On (All Sites)"; Key = "BraveShieldsEnabledForUrls"; Value = @("https://*", "http://*"); Type = "List"; Group = "shields"
-       Tip = "Locks Shields ON for every site; the per-site Shields toggle stops working. Mutually exclusive with Disable Brave Shields." },
+       Tip = "Locks Shields ON for every site: the per-site toggle can no longer drop ad, tracker or fingerprinting protection, but switching it off still unblocks third-party cookies and storage for that site. Mutually exclusive with Disable Brave Shields." },
     @{ Name = "Disable Brave News"; Key = "BraveNewsDisabled"; Value = 1; Type = "DWord"
        Tip = "Removes the Brave News feed from the new tab page." },
     @{ Name = "Disable Brave Talk"; Key = "BraveTalkDisabled"; Value = 1; Type = "DWord"
@@ -369,19 +432,17 @@ $braveFeatures = @(
 
 $perfFeatures = @(
     @{ Name = "Disable Background Mode"; Key = "BackgroundModeEnabled"; Value = 0; Type = "DWord"
-       Tip = "Stops Brave from keeping background processes running after the last window is closed." },
+       Tip = "Stops Brave from staying open in the background after its last window closes, which it does only while an installed extension asks to run in the background. Without one, the policy only locks off 'Continue running background apps when Brave is closed' (brave://settings/system)." },
     @{ Name = "Enable Memory Saver"; Key = "HighEfficiencyModeEnabled"; Value = 1; Type = "DWord"
        Tip = "Forces Memory Saver on: inactive tabs are discarded to free RAM and reload when you return to them." },
     @{ Name = "Force Hardware Acceleration"; Key = "HardwareAccelerationModeEnabled"; Value = 1; Type = "DWord"; Group = "hwaccel"
-       Tip = "Pins GPU hardware acceleration on so rendering and video decode stay off the CPU. Takes effect after a browser restart." },
+       Tip = "Brave already has 'Use graphics acceleration when available' on; this locks it on, so it can't be turned off in Settings to work around GPU glitches. The GPU blocklist or repeated GPU crashes can still force software rendering. Takes effect after a browser restart." },
     @{ Name = "Disable Hardware Acceleration"; Key = "HardwareAccelerationModeEnabled"; Value = 0; Type = "DWord"; Group = "hwaccel"
-       Tip = "Forces GPU acceleration off. This is a departure from Brave's default and costs rendering performance and battery, so use it only when the GPU path is itself the problem: flickering or artifacts from a faulty driver, a VM or RDP session with no usable GPU, or corruption while screen sharing. Takes effect after a browser restart." },
+       Tip = "Forces GPU acceleration off, unlike Brave's default, costing rendering speed and battery. Use it only when the GPU path is the problem: flicker or artifacts from a faulty driver, a VM or RDP session with no usable GPU, or corruption while screen sharing. Takes effect after a browser restart." },
     @{ Name = "Disable Media Router (Cast)"; Key = "EnableMediaRouter"; Value = 0; Type = "DWord"
-       Tip = "Disables the Google Cast media router and its background device discovery on the local network. Takes effect after a browser restart. On a profile first opened under this policy, Cast stays off after it is removed until the Media Router toggle in brave://settings/extensions is turned back on and Brave restarted." },
-    @{ Name = "Disable Shopping List (no effect in Brave)"; Key = "ShoppingListEnabled"; Value = 0; Type = "DWord"
-       Tip = "Locks the price-tracking shopping list off. No effect in Brave: the feature is switched off and needs a Google sign-in Brave does not have. Kept as a lock in case that changes." },
+       Tip = "Disables Google Cast and its background device discovery on the local network. Takes effect after a browser restart. A profile first opened under this policy keeps Cast off after it is lifted, until the Media Router toggle in brave://settings/extensions is back on and Brave restarted." },
     @{ Name = "Always Open PDF Externally"; Key = "AlwaysOpenPdfExternally"; Value = 1; Type = "DWord"
-       Tip = "Downloads PDF files and opens them in your system PDF viewer instead of the built-in viewer." },
+       Tip = "Downloads PDF files instead of showing them in Brave's built-in viewer; nothing opens them until you do. Sites can tell the viewer is off, and fingerprinting protection does not hide it, which makes you easier to fingerprint." },
     @{ Name = "Disable Translate"; Key = "TranslateEnabled"; Value = 0; Type = "DWord"
        Tip = "Disables the built-in page translation feature and its popup prompts." },
     @{ Name = "Disable Spellcheck"; Key = "SpellcheckEnabled"; Value = 0; Type = "DWord"; Group = "spellcheck"
@@ -389,13 +450,13 @@ $perfFeatures = @(
     @{ Name = "Disable Search Suggestions"; Key = "SearchSuggestEnabled"; Value = 0; Type = "DWord"
        Tip = "Stops sending what you type in the address bar to your search engine for live suggestions." },
     @{ Name = "Disable Printing"; Key = "PrintingEnabled"; Value = 0; Type = "DWord"
-       Tip = "Disables printing from the browser entirely (including Ctrl+P)." },
+       Tip = "Disables printing from the browser entirely (including Ctrl+P and Save as PDF). Brave features built on print preview break too: Leo reading Google Docs and scanned PDFs, and the Screenshot tool's Full page on PDFs and Google Docs." },
     @{ Name = "Disable Default Browser Prompt"; Key = "DefaultBrowserSettingEnabled"; Value = 0; Type = "DWord"
-       Tip = "Stops Brave from asking to become your default browser. Brave's first-run welcome page still offers Set as default, and clicking it with this policy on crashes Brave: choose Skip there." },
+       Tip = "Stops Brave from asking to become your default browser, and brave://settings loses its Make default button. Brave's first-run welcome page still offers Set as default, and clicking it with this policy on crashes Brave: choose Skip there." },
     @{ Name = "Disable Developer Tools"; Key = "DeveloperToolsAvailability"; Value = 2; Type = "DWord"
-       Tip = "Blocks DevTools (F12) and extension debugging everywhere, and turns extension Developer mode off (no Load unpacked). Don't enable this if you do web development." },
+       Tip = "Blocks DevTools (F12), extension debugging and the View page source shortcut and menu, and turns extension Developer mode off (no Load unpacked). Brave's Screenshot Full page then never finishes and greys out Screenshot in that window until it is closed. Not for web developers." },
     @{ Name = "Disable Wayback Machine"; Key = "BraveWaybackMachineEnabled"; Value = 0; Type = "DWord"
-       Tip = "Stops Brave from offering an archive.org snapshot when a page returns 404." }
+       Tip = "Stops Brave from offering an archive.org snapshot when a page is missing or fails (404, 408, 410, 451 and some 5xx errors), including the offer Brave can pop up on its own." }
 )
 
 # ---------------------------------------------------------------------------
@@ -422,6 +483,7 @@ $script:embeddedPresets = [ordered]@{
     "Features": {
         "MetricsReportingEnabled": false,
         "UrlKeyedAnonymizedDataCollectionEnabled": false,
+        "AccessibilityImageLabelsEnabled": false,
         "BraveP3AEnabled": false,
         "BraveStatsPingEnabled": false,
         "AutofillAddressEnabled": false,
@@ -439,7 +501,6 @@ $script:embeddedPresets = [ordered]@{
         "NetworkPredictionOptions": 2,
         "BlockThirdPartyCookies": true,
         "PaymentMethodQueryEnabled": false,
-        "AlternateErrorPagesEnabled": false,
         "DefaultNotificationsSetting": 2,
         "DefaultGeolocationSetting": 2,
         "DefaultSensorsSetting": 2,
@@ -462,8 +523,6 @@ $script:embeddedPresets = [ordered]@{
         "DefaultBraveRemember1PStorageSetting": 2,
         "BackgroundModeEnabled": false,
         "EnableMediaRouter": false,
-        "ShoppingListEnabled": false,
-        "AlwaysOpenPdfExternally": true,
         "TranslateEnabled": false,
         "SpellcheckEnabled": false,
         "SearchSuggestEnabled": false,
@@ -472,11 +531,17 @@ $script:embeddedPresets = [ordered]@{
         "DeveloperToolsAvailability": 2,
         "BraveWaybackMachineEnabled": false,
         "BraveLocalAIEnabled": false,
-        "DNSInterceptionChecksEnabled": false,
         "RemoteDebuggingAllowed": false,
         "BasicAuthOverHttpEnabled": false,
         "BlockExternalExtensions": true,
-        "ChromeVariations": 1
+        "ExtensionInstallTypeBlocklist": [
+            "command_line"
+        ],
+        "ChromeVariations": 1,
+        "XSLTEnabled": false,
+        "DefaultJavaScriptOptimizerSetting": 2,
+        "SitePerProcess": true,
+        "OriginKeyedProcessesEnabled": true
     }
 }
 '@
@@ -485,6 +550,7 @@ $script:embeddedPresets = [ordered]@{
     "Features": {
         "MetricsReportingEnabled": false,
         "UrlKeyedAnonymizedDataCollectionEnabled": false,
+        "AccessibilityImageLabelsEnabled": false,
         "BraveP3AEnabled": false,
         "BraveStatsPingEnabled": false,
         "AutofillCreditCardEnabled": false,
@@ -499,7 +565,6 @@ $script:embeddedPresets = [ordered]@{
         "NetworkPredictionOptions": 2,
         "BlockThirdPartyCookies": true,
         "PaymentMethodQueryEnabled": false,
-        "AlternateErrorPagesEnabled": false,
         "BraveRewardsDisabled": true,
         "BraveWalletDisabled": true,
         "BraveVPNDisabled": true,
@@ -510,14 +575,14 @@ $script:embeddedPresets = [ordered]@{
         "TorDisabled": true,
         "SyncDisabled": true,
         "BackgroundModeEnabled": false,
-        "ShoppingListEnabled": false,
         "DefaultBrowserSettingEnabled": false,
         "BraveLocalAIEnabled": false,
-        "DNSInterceptionChecksEnabled": false,
         "RemoteDebuggingAllowed": false,
         "BasicAuthOverHttpEnabled": false,
         "BlockExternalExtensions": true,
-        "ChromeVariations": 1,
+        "ExtensionInstallTypeBlocklist": [
+            "command_line"
+        ],
         "SpellCheckServiceEnabled": false
     },
     "DnsMode": "automatic"
@@ -543,9 +608,7 @@ $script:embeddedPresets = [ordered]@{
         "BraveSpeedreaderEnabled": false,
         "BackgroundModeEnabled": false,
         "HighEfficiencyModeEnabled": true,
-        "HardwareAccelerationModeEnabled": true,
         "EnableMediaRouter": false,
-        "ShoppingListEnabled": false,
         "DefaultBrowserSettingEnabled": false,
         "BraveWaybackMachineEnabled": false,
         "BraveLocalAIEnabled": false
@@ -558,9 +621,9 @@ $script:embeddedPresets = [ordered]@{
     "Features": {
         "MetricsReportingEnabled": false,
         "UrlKeyedAnonymizedDataCollectionEnabled": false,
+        "AccessibilityImageLabelsEnabled": false,
         "BraveP3AEnabled": false,
         "BraveStatsPingEnabled": false,
-        "AlternateErrorPagesEnabled": false,
         "BraveRewardsDisabled": true,
         "BraveWalletDisabled": true,
         "BraveVPNDisabled": true,
@@ -568,11 +631,8 @@ $script:embeddedPresets = [ordered]@{
         "BraveNewsDisabled": true,
         "BraveTalkDisabled": true,
         "BackgroundModeEnabled": false,
-        "ShoppingListEnabled": false,
         "DefaultBrowserSettingEnabled": false,
         "BraveLocalAIEnabled": false,
-        "DNSInterceptionChecksEnabled": false,
-        "ChromeVariations": 1,
         "SpellCheckServiceEnabled": false
     },
     "DnsMode": "automatic"
@@ -585,10 +645,15 @@ $script:embeddedPresets = [ordered]@{
         "BraveStatsPingEnabled": false,
         "IncognitoModeAvailability": 1,
         "BrowserGuestModeEnabled": false,
+        "AllowDeletingBrowserHistory": false,
         "ExtensionInstallBlocklist": [
             "*"
         ],
         "ForceGoogleSafeSearch": true,
+        "ForceYouTubeRestrict": 2,
+        "SafeBrowsingProtectionLevel": 1,
+        "DisableSafeBrowsingProceedAnyway": true,
+        "SSLErrorOverrideAllowed": false,
         "BrowserSignin": 0,
         "BraveDeAmpEnabled": true,
         "BraveDebouncingEnabled": true,
@@ -657,7 +722,7 @@ $categories = @(
 # The interface wants a lowercase row shape with a description and an ordered
 # choices list. The tables above are the single source of truth and stay in the
 # form the test suite parses, so the translation happens here at startup rather
-# than by maintaining a second copy of all 76 policies.
+# than by maintaining a second copy of all 90 policies.
 #
 # Ids are index-based because a few policy keys legitimately appear on two rows
 # (incognito, referrers). State is keyed by id, never by key.
@@ -731,6 +796,9 @@ foreach ($name in $script:embeddedPresets.Keys) {
 # semantics as v2.0.x main: scoped Reset, and DNS "secure" requiring a template.
 
 $script:dnsState = @{ Mode = 0; Tmpl = "" }
+# Keys of the rows Enforce-ExclusionGroups unticked, for the Import status.
+# An array from the start: += onto $null concatenates strings instead.
+$script:importConflicts = @()
 
 # ---------------------------------------------------------------------------
 # REGISTRY
@@ -816,21 +884,23 @@ function ConvertTo-RegValue($value) {
 # ---------------------------------------------------------------------------
 # List-policy helpers
 #
-# Chromium list policies on Windows live in a subkey with numbered REG_SZ
-# values (e.g. ...\BraveShieldsDisabledForUrls\1 = "https://*"). Writing the
-# list as a single REG_SZ holding a JSON array has no effect - Chromium
-# won't parse it, and the corresponding policy silently stays at its
-# default.
+# Chromium takes a list policy on Windows in either of two forms: numbered
+# REG_SZ values in a subkey (e.g. ...\BraveShieldsDisabledForUrls\1 =
+# "https://*"), the ADMX form, which Set-ListPolicy writes; or one REG_SZ
+# value holding a JSON array (registry_dict.cc:128), the form SlimBrave
+# wrote before 0f14e74. When both exist it reads the subkey.
+# Each write here stops on failure (-ErrorAction Stop), so Apply's catch
+# names the key instead of counting it as written.
 # ---------------------------------------------------------------------------
 function Set-ListPolicy([string]$RegistryPath, [string]$Name, [string[]]$Values) {
     $listKey = Join-Path $RegistryPath $Name
-    if (Test-Path $listKey) { Remove-Item -Path $listKey -Recurse -Force }
+    if (Test-Path $listKey) { Remove-Item -Path $listKey -Recurse -Force -ErrorAction Stop }
     if (Get-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue) {
         Remove-ItemProperty -Path $RegistryPath -Name $Name -ErrorAction SilentlyContinue
     }
-    New-Item -Path $listKey -Force | Out-Null
+    New-Item -Path $listKey -Force -ErrorAction Stop | Out-Null
     for ($i = 0; $i -lt $Values.Count; $i++) {
-        Set-ItemProperty -Path $listKey -Name ($i + 1) -Value $Values[$i] -Type String -Force
+        Set-ItemProperty -Path $listKey -Name ($i + 1) -Value $Values[$i] -Type String -Force -ErrorAction Stop
     }
 }
 
@@ -846,11 +916,20 @@ function Remove-ListPolicy([string]$RegistryPath, [string]$Name) {
 # Considered and rejected). Get-AllRows no longer names them, so Apply and
 # Reset would leave an upgraded machine's value in force. Each is removed
 # from both scopes only while it still holds the DWORD SlimBrave wrote, so a
-# value an admin set for their own reasons is left alone.
+# value an admin set for their own reasons is left alone. slimbrave-mac.py
+# keeps the same names and values (RETIRED_POLICIES); a test holds the two
+# equal.
 $script:retiredPolicies = [ordered]@{
+    "AlternateErrorPagesEnabled"           = 0
+    "DNSInterceptionChecksEnabled"         = 0
+    "EnableDoNotTrack"                     = 1
+    "FeedbackSurveysEnabled"               = 0
+    "IPFSEnabled"                          = 0
     "MediaRecommendationsEnabled"          = 0
+    "PromotionsEnabled"                    = 0
     "SafeBrowsingExtendedReportingEnabled" = 0
     "SafeSitesFilterBehavior"              = 1
+    "ShoppingListEnabled"                  = 0
 }
 
 function Remove-RetiredPolicy {
@@ -885,15 +964,30 @@ function Test-DohTemplate([string]$Raw) {
     if ($v.Length -gt 2048) {
         return @{ Ok = $false; Value = $v; Reason = "The template is unreasonably long (over 2048 characters)." }
     }
-    $uri = $null
-    if (-not [System.Uri]::TryCreate($v, [System.UriKind]::Absolute, [ref]$uri)) {
-        return @{ Ok = $false; Value = $v; Reason = "That is not a complete URL. A DoH template looks like https://cloudflare-dns.com/dns-query." }
-    }
-    if ($uri.Scheme -ne "https") {
-        return @{ Ok = $false; Value = $v; Reason = "DoH templates must use https. Chromium rejects '$($uri.Scheme)', which would leave secure DNS with no working resolver." }
-    }
-    if ([string]::IsNullOrWhiteSpace($uri.Host)) {
-        return @{ Ok = $false; Value = $v; Reason = "The URL has no hostname." }
+    # Chromium's own rule, per whitespace-separated template (IsValidDohTemplate,
+    # net/dns/public/dns_over_https_server_config.cc): balanced, non-nested
+    # {...} sections; once they are expanded, an https URL with a host; and
+    # the dns variable outside the host. A template it rejects still reaches
+    # the pref, so secure mode would be left with no resolver at all. Each
+    # {...} section is swapped for a probe word before the URL checks.
+    foreach ($piece in @($v -split '\s+' | Where-Object { $_ })) {
+        if ($piece -notmatch '^[^{}]*(\{[^{}]*\}[^{}]*)*$') {
+            return @{ Ok = $false; Value = $v; Reason = 'A { or } in the template is unmatched or nested. Chromium would reject it and leave secure DNS with no working resolver.' }
+        }
+        $probe = $piece -replace '\{[^{}]*\}', 'slimbraveprobe'
+        $uri = $null
+        if (-not [System.Uri]::TryCreate($probe, [System.UriKind]::Absolute, [ref]$uri)) {
+            return @{ Ok = $false; Value = $v; Reason = "That is not a complete URL. A DoH template looks like https://cloudflare-dns.com/dns-query." }
+        }
+        if ($uri.Scheme -ne "https") {
+            return @{ Ok = $false; Value = $v; Reason = "DoH templates must use https. Chromium rejects '$($uri.Scheme)', which would leave secure DNS with no working resolver." }
+        }
+        if ([string]::IsNullOrWhiteSpace($uri.Host)) {
+            return @{ Ok = $false; Value = $v; Reason = "The URL has no hostname." }
+        }
+        if ($uri.Host -like '*slimbraveprobe*') {
+            return @{ Ok = $false; Value = $v; Reason = 'The {dns} variable cannot be part of the hostname.' }
+        }
     }
     return @{ Ok = $true; Value = $v; Reason = "" }
 }
@@ -907,11 +1001,40 @@ function Test-DohTemplate([string]$Raw) {
 # Preferences (policy content settings stay in memory), and no writer of these
 # entries has been identified, so this is a guard for profiles that carry
 # them, not a fix for a known cause. Every profile of every installed channel
-# is checked.
+# is checked, in the invoking account only.
 # ---------------------------------------------------------------------------
-function Repair-OneBravePrefs([string]$pref) {
-    if (-not (Test-Path $pref)) { return 0 }
-    try { $j = Get-Content $pref -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return 0 }
+function Test-NoReparsePoint([string]$root, [string]$path) {
+    # True when nothing from $path up to and including $root is a junction,
+    # symbolic link or other reparse point. Everything below the root is the
+    # user's to replace, and this runs elevated, so a link there could aim the
+    # rewrite at a file the user cannot touch. A component whose attributes
+    # cannot be read counts as a link.
+    $p = $path
+    while (-not [string]::IsNullOrEmpty($p)) {
+        if (Test-Path -LiteralPath $p) {
+            try {
+                if ([System.IO.File]::GetAttributes($p) -band [System.IO.FileAttributes]::ReparsePoint) { return $false }
+            } catch {
+                return $false
+            }
+        }
+        if ($p.TrimEnd('\') -ieq $root.TrimEnd('\')) { return $true }
+        $p = [System.IO.Path]::GetDirectoryName($p)
+    }
+    return $true
+}
+
+function Repair-OneBravePrefs([string]$pref, [string]$root) {
+    # Returns the number of entries removed, or -1 when an existing file
+    # cannot be read, or holds the entries and cannot be rewritten: the
+    # contract of _scrub_one_prefs in the Python scripts, so all three report
+    # a failed scrub the same way (Get-RepairNote). A missing file, one that
+    # is not JSON and a profile reached through a link are nothing to do.
+    if (-not (Test-NoReparsePoint $root $pref)) { return 0 }
+    if (-not (Test-Path -LiteralPath $pref -PathType Leaf)) { return 0 }
+    try { $text = Get-Content -LiteralPath $pref -Raw -Encoding UTF8 -ErrorAction Stop } catch { return -1 }
+    if ([string]::IsNullOrWhiteSpace($text)) { return 0 }
+    try { $j = $text | ConvertFrom-Json -ErrorAction Stop } catch { return 0 }
     $bs = $null
     if ($j.profile -and $j.profile.content_settings -and $j.profile.content_settings.exceptions) {
         $bs = $j.profile.content_settings.exceptions.braveShields
@@ -928,30 +1051,38 @@ function Repair-OneBravePrefs([string]$pref) {
     # Brave reads Preferences as compact UTF-8 without BOM. Out-File would
     # write UTF-16 with a BOM and break Brave on next launch.
     $json = $j | ConvertTo-Json -Depth 100 -Compress
-    $tmp = "$pref.slimbrave-tmp"
+    # A random name opened with CreateNew, never a fixed one: CreateNew fails
+    # rather than reuse a file or link someone left at the path.
+    $tmp = $pref + '.slimbrave-' + [guid]::NewGuid().ToString('N')
+    $stream = $null
     try {
-        [System.IO.File]::WriteAllText($tmp, $json, (New-Object System.Text.UTF8Encoding $false))
-        Move-Item -Force $tmp $pref
+        $bytes = (New-Object System.Text.UTF8Encoding $false).GetBytes($json)
+        $stream = New-Object System.IO.FileStream($tmp, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Close()
+        $stream = $null
+        # Checked again just before the rename, for a link swapped in since.
+        # The entries are still there, so this profile counts as not cleaned.
+        if (-not (Test-NoReparsePoint $root $pref)) {
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+            return -1
+        }
+        Move-Item -LiteralPath $tmp -Destination $pref -Force -ErrorAction Stop
     } catch {
-        if (Test-Path $tmp) { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
-        return 0
+        if ($null -ne $stream) { $stream.Close() }
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+        return -1
     }
     return $removed
 }
 
 function Get-UserAppDataRoots {
     <#
-      Which LOCALAPPDATA roots hold a Brave profile worth scrubbing.
-
-      The single-user case is the fast path and comes first: the invoking
-      user's own root. But the policy this tool writes lives in HKLM and
-      applies to every account on the machine, so the scrub covers every
-      account's profiles too - not just the one running this.
-
-      Other users' roots come from the ProfileList registry key rather than by
-      globbing C:\Users, because that key is the authoritative mapping and it
-      lets us filter to real interactive accounts (S-1-5-21-*), skipping
-      SYSTEM, service accounts, Default and Public.
+      The LOCALAPPDATA root whose Brave profiles get scrubbed: the invoking
+      account's own, which the elevated relaunch forwards, just as the Linux
+      and macOS scripts scrub only the invoking user's home. Other accounts
+      are never touched: any of them could plant a junction in its own
+      profile tree and aim this elevated rewrite at a file it cannot reach.
     #>
     $roots = New-Object System.Collections.ArrayList
     $primary = $env:LOCALAPPDATA
@@ -961,66 +1092,52 @@ function Get-UserAppDataRoots {
     if (-not [string]::IsNullOrWhiteSpace($primary)) {
         [void]$roots.Add(@{ Path = $primary; Label = "this user" })
     }
-
-    $profileList = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
-    if (Test-Path $profileList) {
-        foreach ($sk in (Get-ChildItem $profileList -ErrorAction SilentlyContinue)) {
-            $sid = $sk.PSChildName
-            if ($sid -notlike "S-1-5-21-*") { continue }
-            $img = (Get-ItemProperty $sk.PSPath -ErrorAction SilentlyContinue).ProfileImagePath
-            if ([string]::IsNullOrWhiteSpace($img)) { continue }
-            $local = Join-Path $img "AppData\Local"
-            # Another user's profile is unreadable when this is running
-            # unelevated, and Test-Path surfaces that as a visible error even
-            # though the miss is handled. Silence it: an unreadable root is
-            # simply one we cannot repair.
-            if (-not (Test-Path $local -ErrorAction SilentlyContinue)) { continue }
-            $already = $false
-            foreach ($r in $roots) {
-                if ($r.Path -and ($r.Path.TrimEnd('\') -ieq $local.TrimEnd('\'))) { $already = $true; break }
-            }
-            if ($already) { continue }
-            # only bother with accounts that actually have Brave data
-            if (-not (Test-Path (Join-Path $local "BraveSoftware") -ErrorAction SilentlyContinue)) { continue }
-            [void]$roots.Add(@{ Path = $local; Label = (Split-Path $img -Leaf) })
-        }
-    }
     return $roots
 }
 
 function Repair-OneUserRoot([string]$localAppData) {
-    # One unreadable or locked profile must not abort the sweep - the other
-    # users on the machine still deserve their repair.
+    # One unreadable or locked profile must not abort the sweep; the other
+    # profiles still get their repair. A profile that could not be cleaned
+    # is counted under its User Data folder, which the status names. Brave
+    # Origin keeps its profiles beside Brave's (Brave-Origin*).
     $removed = 0
-    foreach ($channelDir in @('Brave-Browser', 'Brave-Browser-Beta', 'Brave-Browser-Nightly', 'Brave-Browser-Dev')) {
+    $failed = [ordered]@{}
+    foreach ($channelDir in @('Brave-Browser', 'Brave-Browser-Beta', 'Brave-Browser-Nightly', 'Brave-Browser-Dev', 'Brave-Origin', 'Brave-Origin-Beta', 'Brave-Origin-Nightly', 'Brave-Origin-Dev')) {
         $userData = Join-Path $localAppData "BraveSoftware\$channelDir\User Data"
         if (-not (Test-Path $userData)) { continue }
         $profileDirs = Get-ChildItem -Path $userData -Directory -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' }
         foreach ($dir in $profileDirs) {
-            try { $removed += Repair-OneBravePrefs (Join-Path $dir.FullName 'Preferences') } catch { }
+            try { $n = Repair-OneBravePrefs (Join-Path $dir.FullName 'Preferences') $localAppData } catch { $n = -1 }
+            if ($n -ge 0) {
+                $removed += $n
+            } elseif ($failed.Contains($userData)) {
+                $failed[$userData] = $failed[$userData] + 1
+            } else {
+                $failed[$userData] = 1
+            }
         }
     }
-    return $removed
+    return @{ Removed = $removed; Failed = $failed }
 }
 
 function Repair-BravePrefs {
-    # Every Brave channel runs as brave.exe on Windows.
+    # Every Brave channel, Origin's included, runs as brave.exe on Windows.
     $running = ($null -ne (Get-Process brave -ErrorAction SilentlyContinue))
     # Chromium serves prefs from an in-memory PrefService and rewrites the file
     # on shutdown, so a scrub done now is discarded the moment the user closes
     # Brave - which is exactly what we tell them to do next. Report it instead
     # of claiming a clean that will not survive.
-    if ($running) { return @{ Removed = 0; Running = $true; Skipped = $true; Users = 0 } }
+    if ($running) { return @{ Removed = 0; Failed = @{}; Running = $true; Skipped = $true } }
 
     $removed = 0
-    $users = 0
+    $failed = [ordered]@{}
     foreach ($root in Get-UserAppDataRoots) {
-        $n = Repair-OneUserRoot $root.Path
-        if ($n -gt 0) { $users++ }
-        $removed += $n
+        $r = Repair-OneUserRoot $root.Path
+        $removed += $r.Removed
+        foreach ($dir in @($r.Failed.Keys)) { $failed[$dir] = $r.Failed[$dir] }
     }
-    return @{ Removed = $removed; Running = $false; Skipped = $false; Users = $users }
+    return @{ Removed = $removed; Failed = $failed; Running = $false; Skipped = $false }
 }
 
 function Join-Status([string]$lead, $repair) {
@@ -1052,17 +1169,21 @@ function Get-RepairNote($repair) {
         # something about, so it goes first (see Join-Status) and says so.
         return " Close Brave fully and run this again to clear leaked profile prefs - Brave is running, and it would overwrite the fix on its next save."
     }
+    $note = ""
     if ($repair.Removed -gt 0) {
         $plural = ""
         if ($repair.Removed -ne 1) { $plural = "s" }
-        # Machine policy applies to every account, so say when the repair
-        # reached beyond the person sitting here.
-        if ($repair.Users -gt 1) {
-            return " Also cleaned $($repair.Removed) leaked profile pref$plural across $($repair.Users) user profiles on this PC."
-        }
-        return " Also cleaned $($repair.Removed) leaked profile pref$plural from your Brave profile."
+        $note = " Also cleaned $($repair.Removed) leaked profile pref$plural from your Brave profile."
     }
-    return ""
+    # The same words as the Python scripts' _scrub_failure_note.
+    if (($null -ne $repair.Failed) -and ($repair.Failed.Count -gt 0)) {
+        $n = 0
+        foreach ($c in $repair.Failed.Values) { $n += $c }
+        $plural = ""
+        if ($n -ne 1) { $plural = "s" }
+        $note += " Failed to clean $n profile$plural; check ownership of " + (@($repair.Failed.Keys) -join ", ") + "."
+    }
+    return $note
 }
 
 function Invoke-ApplyPolicy {
@@ -1111,25 +1232,37 @@ function Invoke-ApplyPolicy {
     $skippedLists = @{}
     $uniqueKeys = (Get-AllRows | ForEach-Object { $_.key } | Select-Object -Unique)
     $written = 0
+    # Registry provider errors do not stop a script on their own, so every
+    # write below carries -ErrorAction Stop (never $ErrorActionPreference,
+    # which Repair-BravePrefs would inherit); a key whose write fails is
+    # named here instead of being counted as written.
+    $failed = @()
     foreach ($key in $uniqueKeys) {
         if ($selected.ContainsKey($key)) {
             $f = $selected[$key]
             try {
                 if ($f.Type -eq "List") {
                     Set-ListPolicy $script:machineReg $f.Key ([string[]]$f.Value)
-                    Remove-ListPolicy $script:userReg $f.Key
+                    # The user-scope copy goes under the same ownership test
+                    # as every other list removal: one that is not exactly
+                    # SlimBrave's stays (the machine value outranks it).
+                    [void](Remove-OwnedListPolicy $script:userReg $f.Key $declaredLists)
                 } else {
                     Set-ItemProperty -Path $script:machineReg -Name $f.Key `
-                        -Value (ConvertTo-RegValue $f.Value) -Type $f.Type -Force
+                        -Value (ConvertTo-RegValue $f.Value) -Type $f.Type -Force -ErrorAction Stop
                     if ((Test-Path $script:userReg) -and
                         (Get-ItemProperty -Path $script:userReg -Name $key -ErrorAction SilentlyContinue)) {
                         Remove-ItemProperty -Path $script:userReg -Name $key -ErrorAction SilentlyContinue
                     }
                 }
                 $written++
-            } catch { }
+            } catch { $failed += $key }
         } else {
+            # A scope that does not exist holds nothing to remove. Nothing
+            # creates the user-scope key, so without this skip a Shields row
+            # reported 'Left alone' on nearly every Apply; Reset skips it too.
             foreach ($scope in @($script:machineReg, $script:userReg)) {
+                if (-not (Test-Path $scope)) { continue }
                 if (-not (Remove-OwnedListPolicy $scope $key $declaredLists)) {
                     if ($declaredLists.ContainsKey($key)) { $skippedLists[$key] = $true }
                 }
@@ -1157,23 +1290,31 @@ function Invoke-ApplyPolicy {
         # apart so the template field can be required for one and not the other.
         $writeMode = $mode
         if ($mode -eq "custom") { $writeMode = "secure" }
-        Set-ItemProperty -Path $script:machineReg -Name "DnsOverHttpsMode" -Value $writeMode -Type String -Force
-        # Chromium does honour a template in "automatic" mode, but this UI
-        # greys the template box out there and captions it "Only used by the
-        # custom and secure modes". Writing it anyway pinned a resolver the
-        # interface said was inactive, with the box disabled so it could not be
-        # cleared. Match what the user is shown; "custom" is the way to pair a
-        # template with a mode here.
-        $wantsTemplate = ($mode -eq "custom" -or $mode -eq "secure")
-        if ($wantsTemplate -and -not [string]::IsNullOrWhiteSpace($script:dnsState.Tmpl)) {
-            Set-ItemProperty -Path $script:machineReg -Name "DnsOverHttpsTemplates" `
-                -Value $script:dnsState.Tmpl -Type String -Force
-        } else {
-            Remove-ItemProperty -Path $script:machineReg -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
-        }
-        $written++
+        try {
+            Set-ItemProperty -Path $script:machineReg -Name "DnsOverHttpsMode" -Value $writeMode -Type String -Force -ErrorAction Stop
+            # Chromium does honour a template in "automatic" mode, but this UI
+            # greys the template box out there and captions it "Only used by the
+            # custom and secure modes". Writing it anyway pinned a resolver the
+            # interface said was inactive, with the box disabled so it could not be
+            # cleared. Match what the user is shown; "custom" is the way to pair a
+            # template with a mode here.
+            $wantsTemplate = ($mode -eq "custom" -or $mode -eq "secure")
+            if ($wantsTemplate -and -not [string]::IsNullOrWhiteSpace($script:dnsState.Tmpl)) {
+                Set-ItemProperty -Path $script:machineReg -Name "DnsOverHttpsTemplates" `
+                    -Value $script:dnsState.Tmpl -Type String -Force -ErrorAction Stop
+            } else {
+                Remove-ItemProperty -Path $script:machineReg -Name "DnsOverHttpsTemplates" -ErrorAction SilentlyContinue
+            }
+            $written++
+        } catch { $failed += 'DnsOverHttpsMode' }
     }
     $repair = Repair-BravePrefs
+    # A failed write leaves the staged state unapplied (Apply returns false,
+    # so the Apply handler does not take a new snapshot) and says which keys.
+    if ($failed.Count -gt 0) {
+        Set-Status (Join-Status ("Failed to write: " + (($failed | Sort-Object) -join ", ") + ". Applied $written policies.") $repair)
+        return $false
+    }
     $lead = "Applied $written policies. Restart Brave, then check brave://policy."
     if ($skippedLists.Count -gt 0) {
         $lead += " Left alone because the list on disk is not the one SlimBrave writes: " +
@@ -1225,7 +1366,9 @@ function Read-LivePolicy {
     $live = @{}
     if (Test-Path $script:machineReg) {
         foreach ($pr in (Get-ItemProperty $script:machineReg).PSObject.Properties) {
-            if ($pr.Name -notlike "PS*") { $live[$pr.Name] = $pr.Value }
+            # Only the provider's own note properties are skipped, by exact
+            # name: a policy whose name starts with 'Ps' is still a policy.
+            if (@('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') -cnotcontains $pr.Name) { $live[$pr.Name] = $pr.Value }
         }
         foreach ($sk in (Get-ChildItem $script:machineReg -ErrorAction SilentlyContinue)) {
             $vals = @()
@@ -1249,7 +1392,12 @@ function Sync-FromRegistry {
                 if ([string]$row.choices[$i][1] -eq [string]$lv) { $script:state[$row.Id].Sel = $i; break }
             }
         } elseif ($row.value -is [array]) {
-            if (($lv -is [array]) -and ((($lv) -join ",") -eq (($row.value) -join ","))) {
+            # Order means nothing to Chromium. Compared as Import and the
+            # ownership test compare, so a reordered copy of SlimBrave's list
+            # shows ticked instead of being removed by the next Apply; the
+            # Python scripts' sync compares the same way.
+            $mine = @(); foreach ($x in $row.value) { $mine += [string]$x }
+            if (($lv -is [array]) -and ($lv.Count -eq $mine.Count) -and -not (Compare-Object $lv $mine)) {
                 $script:state[$row.Id].On = $true
             }
         } else {
@@ -1276,19 +1424,52 @@ function Enforce-ExclusionGroups {
     # The toggle handler collapses a group as you click, but Import and
     # Re-sync write $script:state directly and never ran that rule - so two
     # members of one group could be staged together and Apply wrote both.
-    # main collapsed groups through CheckedChanged; the Python ports do it in
-    # _enforce_groups. First row of a group wins, deterministically.
+    # The later row in table order wins, as Brave does when both keys are
+    # set (BraveShieldsEnabledForUrls is applied after the Disabled list;
+    # SpellCheckServiceEnabled does nothing once SpellcheckEnabled is false);
+    # same rule as _enforce_groups in the Python scripts. The rows are walked
+    # in reverse, so the first ticked member met is the one kept. Each row
+    # unticked here is recorded for the Import status; Re-sync ignores it.
+    $rows = @(Get-AllRows)
+    [array]::Reverse($rows)
     $seen = @{}
-    foreach ($row in Get-AllRows) {
+    foreach ($row in $rows) {
         if (-not $row.group) { continue }
         if (-not $script:state[$row.Id].On) { continue }
-        if ($seen.ContainsKey($row.group)) { $script:state[$row.Id].On = $false; continue }
+        if ($seen.ContainsKey($row.group)) {
+            $script:state[$row.Id].On = $false
+            $script:importConflicts += $row.key
+            continue
+        }
         $seen[$row.group] = $true
     }
 }
 
+# Checkbox rows whose policy is an integer enum. The tables above hold
+# booleans and enums alike as DWord, so import needs this list to take only a
+# JSON integer for these keys, as the Python scripts' _value_fits_row does. A
+# test holds it equal to the Python rows whose value is an int (not a bool),
+# plus DynamicCodeSettings, which only this script offers.
+$script:intEnumKeys = @(
+    'BrowserSignin',
+    'ChromeVariations',
+    'DefaultBraveAdblockSetting',
+    'DefaultBraveFingerprintingV2Setting',
+    'DefaultBraveHttpsUpgradeSetting',
+    'DefaultBraveReferrersSetting',
+    'DefaultBraveRemember1PStorageSetting',
+    'DefaultJavaScriptOptimizerSetting',
+    'DeveloperToolsAvailability',
+    'DynamicCodeSettings',
+    'ForceYouTubeRestrict',
+    'IncognitoModeAvailability',
+    'NetworkPredictionOptions',
+    'SafeBrowsingProtectionLevel'
+)
+
 function Import-PresetIntoState($preset) {
     $script:importNotes = @()
+    $script:importConflicts = @()
     foreach ($id in @($script:state.Keys)) { $script:state[$id].On = $false; $script:state[$id].Sel = 0 }
     $feat = $preset.features
     if ($feat -is [array]) {
@@ -1329,13 +1510,15 @@ function Import-PresetIntoState($preset) {
         if ($null -eq $feat.PSObject.Properties[$row.key]) { continue }
         $want = $feat.$($row.key)
         if (Test-IsChoiceRow $row) {
-            # Type-strict, as main and both Python ports are: a quoted "1" is
-            # not a member of the enum, and neither is $true.
-            $ok = ($want -is [int] -or $want -is [long] -or $want -is [byte] -or $want -is [double])
+            # Type-strict, as both Python ports are: only a JSON integer is a
+            # member of the enum, and nothing is cast, so nothing can throw. A
+            # quoted "1", a $true, a [long] past Int32 or a fraction or
+            # exponent (2.0, 2e0) matches no choice and is named.
+            $ok = ($want -is [int] -or $want -is [long])
             $matched = $false
             if ($ok) {
                 for ($i = 1; $i -lt $row.choices.Count; $i++) {
-                    if ([string]$row.choices[$i][1] -eq [string][int]$want) {
+                    if ([string]$row.choices[$i][1] -eq [string]$want) {
                         $script:state[$row.Id].Sel = $i; $matched = $true; break
                     }
                 }
@@ -1346,15 +1529,30 @@ function Import-PresetIntoState($preset) {
             # means an imported single-site exception such as
             # BraveShieldsDisabledForUrls = ["https://intranet.example"] stages
             # this row, and Apply then writes SlimBrave's own wildcard - turning
-            # one site into the whole web.
+            # one site into the whole web. Only a JSON array is a list: a bare
+            # "*" is named, not taken for ["*"].
+            $fits = ($want -is [array])
             $wantList = @(); foreach ($x in @($want)) { $wantList += [string]$x }
             $mine = @();     foreach ($x in $row.value) { $mine += [string]$x }
-            if ($wantList.Count -eq $mine.Count -and
+            if ($fits -and $wantList.Count -eq $mine.Count -and
                 -not (Compare-Object $wantList $mine)) {
                 $script:state[$row.Id].On = $true
             } else { $script:importNotes += $row.key }
         } else {
-            if ([string](ConvertTo-RegValue $want) -eq [string](ConvertTo-RegValue $row.value)) {
+            # A value only in its policy's JSON type, as the Python scripts'
+            # _value_fits_row takes it: the string row a string; an integer
+            # enum a JSON integer, so a $true cannot pick value 1; a boolean
+            # $true / $false or an integer (Windows exports write 0/1).
+            if ($row.value -is [string]) {
+                $fits = ($want -is [string])
+            } elseif ($script:intEnumKeys -contains $row.key) {
+                $fits = (($want -is [int]) -or ($want -is [long]))
+            } else {
+                $fits = (($want -is [bool]) -or ($want -is [int]) -or ($want -is [long]))
+            }
+            if (-not $fits) {
+                $script:importNotes += "$($row.key)=$want"
+            } elseif ([string](ConvertTo-RegValue $want) -eq [string](ConvertTo-RegValue $row.value)) {
                 $script:state[$row.Id].On = $true
             }
         }
@@ -1945,28 +2143,50 @@ function New-BarButton([string]$label,[bool]$accent){
                 $dlg.InitialDirectory=Get-InvokerDocs
                 if($dlg.ShowDialog() -eq "OK"){
                     $ok=$false
+                    # Import-PresetIntoState clears every row before it reads the
+                    # file, so anything that throws part-way would leave the
+                    # selections wiped behind 'Import failed'. The catch puts this
+                    # copy back: 'Import failed' always means nothing changed.
+                    $snap=@{}
+                    foreach($id in @($script:state.Keys)){ $snap[$id]=@{On=$script:state[$id].On; Sel=$script:state[$id].Sel} }
+                    $dnsSnap=@{Mode=$script:dnsState.Mode; Tmpl=$script:dnsState.Tmpl}
                     try{
-                        $cfg=Get-Content $dlg.FileName -Raw | ConvertFrom-Json
+                        # ReadAllText reads UTF-8 by default and honours a UTF-8,
+                        # UTF-16 or UTF-32 BOM, so the BOM-less UTF-8 Export writes
+                        # and older UTF-16 exports both read back unchanged.
+                        $cfg=[System.IO.File]::ReadAllText($dlg.FileName) | ConvertFrom-Json
                         # ConvertFrom-Json only throws on malformed JSON. Any other
                         # .json - a bookmarks dump, "[]", a bare string - parses fine,
                         # and Import-PresetIntoState clears every staged row BEFORE it
                         # looks for Features, so without this guard a wrong file wiped
-                        # the selections and still reported "Imported". The throw lands
-                        # in the catch below, which is the honest message.
+                        # the selections and still reported "Imported". Features must
+                        # be an object or a legacy array; a scalar is refused too. The
+                        # full type name, never [pscustomobject], which matches almost
+                        # anything. The throw lands in the catch below, which is the
+                        # honest message.
                         if(-not ($cfg -is [System.Management.Automation.PSCustomObject]) -or
                            $null -eq $cfg.PSObject.Properties['Features'] -or
-                           $null -eq $cfg.Features){ throw "no Features block" }
+                           $null -eq $cfg.Features -or
+                           -not (($cfg.Features -is [System.Management.Automation.PSCustomObject]) -or ($cfg.Features -is [array]))){ throw "no Features block" }
                         Import-PresetIntoState @{features=$cfg.Features;dns=$cfg.DnsMode;tmpl=$cfg.DnsTemplates}
                         $ok=$true
-                    } catch { $ok=$false }
+                    } catch {
+                        foreach($id in @($snap.Keys)){ $script:state[$id].On=$snap[$id].On; $script:state[$id].Sel=$snap[$id].Sel }
+                        $script:dnsState.Mode=$dnsSnap.Mode; $script:dnsState.Tmpl=$dnsSnap.Tmpl
+                        $ok=$false
+                    }
                     # The rebuild and the status run OUTSIDE the try: a handler
                     # that fires while a try block is active anywhere up the
                     # chain turns its own errors into the .NET crash dialog.
                     if($ok){
                         Refresh-View
                         $msg="Imported from $([System.IO.Path]::GetFileName($dlg.FileName))"
+                        # Unique: two rows can share a key and name it twice.
                         if($script:importNotes.Count -gt 0){
-                            $msg+=" Left unmanaged, because the imported value is not one this policy accepts: "+(($script:importNotes | Sort-Object) -join ", ")+"."
+                            $msg+=" Left unmanaged, because the imported value is not one this policy accepts: "+(($script:importNotes | Sort-Object -Unique) -join ", ")+"."
+                        }
+                        if($script:importConflicts.Count -gt 0){
+                            $msg+=" Left unmanaged, because it is mutually exclusive with another imported row: "+(($script:importConflicts | Sort-Object -Unique) -join ", ")+"."
                         }
                         Set-Status $msg
                     } else { Set-Status "Import failed - not a SlimBrave config" }

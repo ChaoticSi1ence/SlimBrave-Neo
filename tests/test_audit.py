@@ -1,14 +1,16 @@
 """AUDIT.md is the project's schema for what may be written and why.
 
 These tests parse its tables and hold the three scripts to them, the same
-way test_slimbrave.py holds the three scripts to each other. A failure here
-means the document and the code disagree; the source they both cite decides
-which one is wrong.
+way test_slimbrave.py holds the three scripts to each other. "Written" means
+every key either Python module builds a row for plus every key in
+SlimBrave.ps1's feature table, so a row only the PS1 offers is held to the
+document too. A failure here means the document and the code disagree; the
+source they both cite decides which one is wrong.
 """
 
 import re
 
-from test_slimbrave import LINUX_MOD, MAC_MOD, ROOT
+from test_slimbrave import LINUX_MOD, MAC_DARWIN, MAC_MOD, ROOT, _ps1_feature_rows
 
 AUDIT = (ROOT / "AUDIT.md").read_text(encoding="utf-8")
 GLYPHS = ("✅", "⚠️", "⛔", "❌", "💀", "🕓")
@@ -79,7 +81,8 @@ def _written(mod):
     return keys | {"DnsOverHttpsMode", "DnsOverHttpsTemplates"}
 
 
-WRITTEN = _written(LINUX_MOD) | _written(MAC_MOD)
+PS1_ROWS = _ps1_feature_rows()
+WRITTEN = _written(LINUX_MOD) | _written(MAC_MOD) | {key for _, key in PS1_ROWS}
 
 
 def _rejected_match(key):
@@ -107,6 +110,14 @@ def test_nothing_rejected_is_written():
     assert dead_in_tables == []
 
 
+def test_every_rejected_row_names_a_key():
+    # A Key(s) cell the parser cannot read, such as `WebRtc*LogCollectionAllowed`
+    # (a mid-name `*`), would guard nothing.
+    unnamed = [row["Key(s)"] for _header, rows in REJECTED_TABLES for row in rows
+               if not _keys_in(row["Key(s)"])]
+    assert unnamed == [], unnamed
+
+
 def test_status_cells_use_the_vocabulary():
     for header, rows in BRAVE_TABLES + CHROMIUM_TABLES + REJECTED_TABLES:
         assert "Status" in header, header
@@ -127,11 +138,23 @@ def test_origin_builtin_keys_are_exactly_the_guarded_brave_rows():
     assert not unguarded_brave & set(LINUX_MOD.ORIGIN_BUILTIN_KEYS)
 
 
+def _setting_rows(mod):
+    return [r for r in mod.build_rows() if r["type"] in (mod.ROW_FEATURE, mod.ROW_CHOICE)]
+
+
 def test_inventory_counts_match_the_scripts():
     m = re.search(r"\*\*Inventory: (\d+) rows over (\d+) distinct keys\*\*", AUDIT)
     assert m, "inventory line missing"
-    rows = [r for r in LINUX_MOD.build_rows()
-            if r["type"] in (LINUX_MOD.ROW_FEATURE, LINUX_MOD.ROW_CHOICE)]
+    rows = _setting_rows(LINUX_MOD)
+    assert (int(m.group(1)), int(m.group(2))) == (len(rows), len({r["key"] for r in rows}))
+    # The machines that differ: the PS1 table, and slimbrave-mac.py on macOS.
+    m = re.search(r"`SlimBrave\.ps1`\s+has\s+(\d+)\s+rows\s+over\s+(\d+)\s+keys", AUDIT)
+    assert m, "SlimBrave.ps1 inventory sentence missing"
+    assert (int(m.group(1)), int(m.group(2))) == (len(PS1_ROWS), len({k for _, k in PS1_ROWS}))
+    m = re.search(r"`slimbrave-mac\.py`\s+on\s+macOS\s+has\s+(\d+)\s+rows\s+over\s+(\d+)\s+keys",
+                  AUDIT)
+    assert m, "macOS inventory sentence missing"
+    rows = _setting_rows(MAC_DARWIN)
     assert (int(m.group(1)), int(m.group(2))) == (len(rows), len({r["key"] for r in rows}))
 
 
@@ -148,3 +171,61 @@ def test_ledger_names_the_key_sections():
 
 def test_no_diary_markers():
     assert not re.search(r"Stale as of|^### 20\d\d|Read at:", AUDIT, re.MULTILINE)
+
+
+def test_ps1_retired_policies_are_rejected_and_unwritten():
+    """A key the scripts drop goes to Considered and rejected and into the
+    PS1's retired table, which deletes the value earlier versions wrote; the
+    row names that value, so the two cannot drift apart."""
+    ps1 = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    block = re.search(r"\$script:retiredPolicies = \[ordered\]@\{(.*?)\n\}", ps1, re.S)
+    assert block, "retired table missing"
+    retired = re.findall(r'"(\w+)"\s*=\s*(\d+)', block.group(1))
+    assert retired
+    for name, value in retired:
+        assert _rejected_match(name), f"{name} retired but not in Considered and rejected"
+        assert name not in WRITTEN, f"{name} retired but still written"
+        why = [row["Why not"] for _header, rows in REJECTED_TABLES for row in rows
+               if name in _keys_in(row["Key(s)"])]
+        assert any(f"delete a leftover `{value}` it wrote" in w for w in why), (
+            f"{name}: its Considered and rejected row does not name the {value} the table deletes")
+
+
+def test_mac_retired_keys_are_unwritten_rejected_and_documented():
+    """slimbrave-mac.py deletes leftovers from the shared macOS plist only by
+    value, so none may be a key any script writes; each is a Considered and
+    rejected row; and the project description and SECURITY.md name them with
+    the values that are deleted, the macOS-only one included."""
+    rejected = _section("Considered and rejected — do not add")
+    project = _section("What the project does")
+    security = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    for key, value in MAC_DARWIN.RETIRED_POLICIES.items():
+        assert key not in WRITTEN, f"{key} retired but still written"
+        assert f"`{key}`" in rejected, f"{key} not in Considered and rejected"
+        assert f"`{key}` {int(value)}" in project, f"{key} {int(value)} not in What the project does"
+        assert f"`{key}`" in security, f"{key} not named in SECURITY.md"
+    mac_rows = {r.get("key") for r in MAC_DARWIN.build_rows()}
+    for key, value in MAC_DARWIN.MAC_ONLY_RETIRED_POLICIES.items():
+        assert key not in mac_rows, f"{key} retired on macOS but written there"
+        assert f"`{key}` {str(value).lower()}" in project, key
+
+
+def test_no_script_offers_a_row_with_no_effect_in_brave():
+    """A key inert everywhere it is offered does not ship; platform caveats
+    such as '(no effect on Linux builds)' stay legal."""
+    for name in ("SlimBrave.ps1", "slimbrave-linux.py", "slimbrave-mac.py"):
+        assert "(no effect in Brave)" not in (ROOT / name).read_text(encoding="utf-8"), name
+
+
+def test_lock_only_rows_say_what_brave_already_does():
+    """A lock-only row's description names Brave's own default, so the UI
+    never claims the key starts something Brave already does."""
+    descs = {}
+    for cat in LINUX_MOD.CATEGORIES:
+        for feat in cat["features"]:
+            descs.setdefault(feat["key"], []).append(feat.get("desc", ""))
+    locks = sorted(k for k, row in KEY_ROWS.items()
+                   if k in WRITTEN and row.get("Notes", "").lower().startswith("lock only"))
+    assert locks, "no row is marked lock only"
+    missing = [k for k in locks if not any("Brave already" in d for d in descs.get(k, []))]
+    assert missing == [], missing
