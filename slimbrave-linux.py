@@ -480,8 +480,8 @@ def detect_brave():
 # Features with a `group` key are mutually exclusive within that group:
 # checking one silently unchecks the others. Used for policies where two
 # rows set conflicting values for the same key (IncognitoModeAvailability,
-# HardwareAccelerationModeEnabled,
-# DefaultBraveReferrersSetting, ChromeVariations), for the Shields URL
+# HardwareAccelerationModeEnabled, DefaultBraveReferrersSetting,
+# ChromeVariations, SafeBrowsingProtectionLevel), for the Shields URL
 # lists, and for the two spellcheck rows — upstream states the enhanced
 # spell check policy has no effect once SpellcheckEnabled is false.
 
@@ -515,6 +515,8 @@ CATEGORIES = [
 
             {"name": "Disable URL Data Collection", "key": "UrlKeyedAnonymizedDataCollectionEnabled", "value": False, "desc": "Locks 'Make searches and browsing better' (URL-keyed anonymized data collection) off. Brave already ships it off; its only switch, the hidden Privacy Guide at brave://settings/privacy/guide, goes away once any policy is set. This also overrides an opt-in made there earlier."},
 
+            {"name": "Disable Google Image Descriptions", "key": "AccessibilityImageLabelsEnabled", "value": False, "desc": "Brave already keeps Google's image descriptions off and no longer offers the opt-in. A profile that accepted it in an older version still sends unlabeled images to Google whenever a screen reader runs; this turns that off and locks it."},
+
             {"name": "Disable P3A Analytics", "key": "BraveP3AEnabled", "value": False, "desc": "Disables P3A (Privacy-Preserving Product Analytics), Brave's anonymized product usage telemetry."},
 
             {"name": "Disable Stats Ping", "key": "BraveStatsPingEnabled", "value": False, "desc": "Stops the daily usage ping that counts this install in Brave's active-user statistics, plus the search-engine usage counts it carries and the referral-code check. P3A Analytics sends its own copy of the search counts until it is disabled too."},
@@ -530,7 +532,7 @@ CATEGORIES = [
     {
         "name": "Privacy & Security",
         "features": [
-            {"name": "Disable Safe Browsing (security downgrade)", "key": "SafeBrowsingProtectionLevel", "value": 0, "desc": "Turns Safe Browsing fully off. Brave already routes these lookups through its own servers, so Google never sees the sites you visit even with Safe Browsing on - turning it off buys almost no privacy and costs you the phishing and malware warning pages. Excluded from every preset for that reason."},
+            {"name": "Disable Safe Browsing (security downgrade)", "key": "SafeBrowsingProtectionLevel", "value": 0, "group": "safebrowsing", "desc": "Turns Safe Browsing fully off. Brave routes these lookups through its own servers, so Google never learns who made them; turning it off buys almost no privacy and costs you the phishing and malware warning pages. Excluded from every preset. Mutually exclusive with Lock Safe Browsing On."},
 
             {"name": "Disable Autofill (Addresses)", "key": "AutofillAddressEnabled", "value": False, "desc": "Stops Brave from saving and auto-filling addresses and other contact details in web forms. Chromium has deprecated this policy, so brave://policy lists it as Deprecated, but Brave still applies it; its replacement (AutofillSettings) does not work in Brave yet."},
 
@@ -572,6 +574,8 @@ CATEGORIES = [
 
             {"name": "Disable JavaScript Optimization (hardening)", "key": "DefaultJavaScriptOptimizerSetting", "value": 2, "desc": "Turns off V8's optimizing compilers (TurboFan, Maglev) on websites; Brave says this makes it more resistant to attacks. Sites keep working, WebAssembly included, but script-heavy pages and web apps run slower, with no per-site exception. Applies to tabs opened after the change."},
 
+            {"name": "Remove 'Always Allow' from App-Launch Prompts", "key": "ExternalProtocolDialogShowAlwaysOpenCheckbox", "value": False, "desc": "Removes the 'Always allow' checkbox from the prompt Brave shows before a site opens an external app, so every launch (mailto:, Zoom, Teams, Steam, ms-* links) needs a click. Apps you already set to always open from a site still open without asking."},
+
             {"name": "Force Site Isolation for Every Site", "key": "SitePerProcess", "value": True, "desc": "Keeps every site in its own process, as Brave already does on desktop, and stops brave://flags#site-isolation-trial-opt-out or --disable-site-isolation-trials from turning it off. Takes effect after a restart."},
 
             {"name": "Isolate Subdomains in Separate Processes", "key": "OriginKeyedProcessesEnabled", "value": True, "desc": "Puts each origin (for example mail.example.com and docs.example.com) in its own process rather than one per site, for stronger protection against Spectre-style leaks between subdomains. Uses more processes and memory. Takes effect after a restart. A brave://flags setting overrides it."},
@@ -582,9 +586,10 @@ CATEGORIES = [
         ],
     },
     {
-        # Content-setting defaults sites are granted: every row here is a
-        # selector (Not managed / Ask / Block, plus Allow where Chromium
-        # has one), never a checkbox.
+        # Content-setting defaults sites are granted: each is a selector
+        # (Not managed / Ask / Block, plus Allow where Chromium has one).
+        # The microphone and camera rows at the end are checkboxes: their
+        # policies are booleans whose true equals unset.
         "name": "Site Permissions",
         "features": [
             {"name": "Web Notifications", "key": "DefaultNotificationsSetting", "value": 2, "choices": CHOICES_ALLOW_BLOCK, "desc": "Sets the default for desktop notifications. Block stops every site from asking or showing them; Allow lets every site show them. Either overrides your per-site settings. Not managed keeps Brave's normal prompt (a managed Ask would let no notification through)."},
@@ -605,6 +610,10 @@ CATEGORIES = [
 
             {"name": "Clipboard Read Access", "key": "DefaultClipboardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK, "desc": "Sets the default for sites reading your clipboard without you pasting. Block removes the prompt and breaks Paste buttons inside web apps; Ask keeps the prompt. Either one overrides sites you allowed before. Ctrl+V and copy buttons still work. Chromium has no Allow state for this key."},
 
+            {"name": "Block Microphone Access", "key": "AudioCaptureAllowed", "value": False, "desc": "Stops every site and extension from using the microphone or any other audio input, with no prompt; per-site Allow exceptions stop working too. Breaks web calls and meetings (Meet, Zoom or Teams on the web, Discord, Brave Talk), voice messages and dictation on websites."},
+
+            {"name": "Block Camera Access", "key": "VideoCaptureAllowed", "value": False, "desc": "Stops every site and extension from using the camera or any other video input, with no prompt; per-site Allow exceptions stop working too. Breaks web video calls (Meet, Zoom or Teams on the web, Discord, Brave Talk), webcam ID checks and in-browser QR scanners."},
+
         ],
     },
     {
@@ -614,11 +623,23 @@ CATEGORIES = [
         "features": [
             {"name": "Force Google SafeSearch", "key": "ForceGoogleSafeSearch", "value": True, "desc": "Forces SafeSearch on for all Google searches. Mainly useful for parental controls."},
 
+            {"name": "Force YouTube Restricted Mode (Strict)", "key": "ForceYouTubeRestrict", "value": 2, "desc": "Forces YouTube's Strict Restricted Mode on youtube.com and its country domains, including videos other sites embed from them; the user cannot turn it off. Many videos become unavailable and comments are hidden. Videos embedded from youtube-nocookie.com are not restricted."},
+
+            {"name": "Lock Safe Browsing On (Standard)", "key": "SafeBrowsingProtectionLevel", "value": 1, "group": "safebrowsing", "desc": "Locks Safe Browsing at Standard protection so it cannot be switched to No protection in brave://settings/security. Lookups go through Brave's proxy, as they do by default. Mutually exclusive with Disable Safe Browsing."},
+
+            {"name": "Block Bypassing Safe Browsing Warnings", "key": "DisableSafeBrowsingProceedAnyway", "value": True, "desc": "Removes the option to continue past Safe Browsing's malware and phishing warnings, so a flagged site cannot be opened, even one flagged by mistake. Does not cover certificate or download warnings. Does nothing while Safe Browsing is off; Lock Safe Browsing On keeps it on."},
+
+            {"name": "Block Bypassing Certificate Warnings", "key": "SSLErrorOverrideAllowed", "value": False, "desc": "Removes the Proceed link, and the typed bypass, from certificate-error pages, so a site whose certificate is invalid, expired or self-signed cannot be opened at all. Breaks router, NAS and printer admin pages and local dev servers that use self-signed certificates."},
+
             {"name": "Disable Guest Mode", "key": "BrowserGuestModeEnabled", "value": False, "desc": "Removes guest browsing sessions: off-the-record windows that keep no history and run without your profile's extensions. Disable Incognito Mode does not remove them. These policies still apply inside guest windows."},
+
+            {"name": "Prevent Deleting History", "key": "AllowDeletingBrowserHistory", "value": False, "desc": "Stops anyone deleting browsing and download history in History, Downloads or Clear browsing data; Brave's clear-on-exit keeps them too. Brave's Local history retention setting (brave://settings/privacy) can still expire history after as little as a day, and SlimBrave cannot lock it."},
 
             {"name": "Block All Extensions", "key": "ExtensionInstallBlocklist", "value": ["*"], "desc": "Blocks installation of every extension and disables ones already installed. For lockdown/parental setups - a proxy or VPN extension would bypass DNS filtering."},
 
             {"name": "Block Sideloaded (External) Extensions", "key": "BlockExternalExtensions", "value": True, "desc": "Blocks extensions other programs install through the Windows registry or a drop-in file (how bundleware gets in) and removes any added that way at the next launch, even ones you approved. Extensions you install yourself keep working."},
+
+            {"name": "Block Command-Line Extensions (--load-extension)", "key": "ExtensionInstallTypeBlocklist", "value": ["command_line"], "desc": "Ignores extensions passed with --load-extension, which malware adds to Brave's shortcuts to slip one in. Google Chrome ignores that switch; Brave honours it unless this is set. --disable-extensions-except can still load one. Breaks shortcuts and test tools that use the switch. Restart needed."},
 
             {"name": "Disable Incognito Mode", "key": "IncognitoModeAvailability", "value": 1, "group": "incognito", "desc": "Removes private browsing entirely - no incognito windows can be opened. Mutually exclusive with Force Incognito Mode."},
 
@@ -1649,7 +1670,7 @@ def desc_pane_lines(max_x):
     """Text lines the pane needs at this width.
 
     What the longest description wraps to at this width, up to
-    DESC_PANE_MAX_LINES: four lines at 80 columns, where three of the
+    DESC_PANE_MAX_LINES: four lines at 80 columns, where two of the
     descriptions still end in an ellipsis; three from about 120, where none
     does. Sized by the content rather than by a constant so a wider
     terminal gives the list its rows back.

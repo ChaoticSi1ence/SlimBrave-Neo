@@ -278,8 +278,21 @@ def test_import_legacy_array_first_match_wins(mod, tmp_path):
     assert _get_feature(mod, rows, "Disable Brave Rewards")["checked"] is True
 
 
-# The only group whose members sit on two different keys, so a config can
-# name both and ask for force-off and force-on over the same wildcards.
+def test_import_legacy_array_safe_browsing_key_keeps_its_old_row(mod, tmp_path):
+    # A pre-2026 array named SafeBrowsingProtectionLevel when its only row
+    # was Disable Safe Browsing; the first row for the key still takes it,
+    # so an old export never turns into the Strict Parental lock.
+    cfg = _write_config(tmp_path, "legacy-sb.json", ["SafeBrowsingProtectionLevel"])
+    rows = mod.build_rows()
+    ok, _ = mod.import_settings(rows, str(cfg))
+    assert ok
+    assert _get_feature(mod, rows, "Disable Safe Browsing (security downgrade)")["checked"] is True
+    assert _get_feature(mod, rows, "Lock Safe Browsing On (Standard)")["checked"] is False
+
+
+# A group whose members sit on two different keys (the spellcheck group is
+# the other), so a config can name both and ask for force-off and force-on
+# over the same wildcards.
 SHIELDS_OFF = ("Disable Brave Shields", "BraveShieldsDisabledForUrls")
 SHIELDS_ON = ("Force Shields On (All Sites)", "BraveShieldsEnabledForUrls")
 SHIELDS_WILDCARDS = ["https://*", "http://*"]
@@ -1496,8 +1509,11 @@ def _feature_pairs(mod):
 
 
 # Rows no preset may ship. Matched on display name, not key+value: the same
-# key legitimately carries value 2 (Cap Referrers) in most presets.
-FORBIDDEN_IN_PRESETS = {"Allow Permissive Referrers (unsafe-url)"}
+# key legitimately carries value 2 (Cap Referrers) in most presets, and
+# Strict Parental Controls writes SafeBrowsingProtectionLevel 1 (Lock Safe
+# Browsing On), where a slip to 0 would silently turn Safe Browsing off.
+FORBIDDEN_IN_PRESETS = {"Allow Permissive Referrers (unsafe-url)",
+                        "Disable Safe Browsing (security downgrade)"}
 
 _MISSING = object()
 
@@ -1601,6 +1617,17 @@ def test_maximum_privacy_preset_never_forces_incognito(mod):
     assert "IncognitoModeAvailability" not in policy
 
 
+def test_history_deletion_lock_is_parental_only():
+    # Prevent Deleting History keeps history from the person browsing; it
+    # belongs to the parental lockdown, never to a privacy preset (AUDIT.md).
+    for preset in PRESETS:
+        features = json.loads(preset.read_text())["Features"]
+        if preset.stem == "Strict Parental Controls Preset":
+            assert features.get("AllowDeletingBrowserHistory") is False
+        else:
+            assert "AllowDeletingBrowserHistory" not in features, preset.name
+
+
 def test_maximum_privacy_preset_keeps_the_pdf_viewer(mod):
     # Deliberately dropped: with the viewer off, navigator.plugins goes empty
     # and pdfViewerEnabled false outside Brave's farbling, which undoes the
@@ -1611,6 +1638,41 @@ def test_maximum_privacy_preset_keeps_the_pdf_viewer(mod):
     assert ok, msg
     policy, _ = mod._build_policy(rows)
     assert "AlwaysOpenPdfExternally" not in policy
+
+
+# Rows offered only for the user to tick: each breaks something every preset
+# audience relies on (web calls, one-click app links), so no preset carries
+# one (AUDIT.md rows). The PS1 copies follow through
+# test_ps1_embedded_presets_match_preset_files.
+OPT_IN_ONLY_KEYS = {"AudioCaptureAllowed", "VideoCaptureAllowed",
+                    "ExternalProtocolDialogShowAlwaysOpenCheckbox"}
+
+
+@pytest.mark.parametrize("preset", PRESETS, ids=lambda p: p.stem)
+def test_opt_in_only_rows_stay_out_of_presets(preset):
+    features = json.loads(preset.read_text())["Features"]
+    assert not OPT_IN_ONLY_KEYS & set(features), sorted(OPT_IN_ONLY_KEYS & set(features))
+
+
+def test_capture_blocks_are_site_permission_checkboxes(mod):
+    # Their policies are booleans whose true equals unset, so false is the
+    # only managed state: a checkbox at the end of Site Permissions, not a
+    # choice row and not grouped.
+    found = {}
+    for cat in mod.CATEGORIES:
+        for feat in cat["features"]:
+            if feat["key"] in ("AudioCaptureAllowed", "VideoCaptureAllowed"):
+                found[feat["key"]] = (cat["name"], feat)
+    assert set(found) == {"AudioCaptureAllowed", "VideoCaptureAllowed"}
+    for key, (category, feat) in found.items():
+        assert category == "Site Permissions", key
+        assert feat["value"] is False, key
+        assert "choices" not in feat and "group" not in feat, key
+
+
+def test_command_line_extension_row_writes_only_the_legal_value(mod):
+    assert [f["value"] for c in mod.CATEGORIES for f in c["features"]
+            if f["key"] == "ExtensionInstallTypeBlocklist"] == [["command_line"]]
 
 
 # ---------------------------------------------------------------------------
@@ -1736,9 +1798,15 @@ def test_ps1_embedded_preset_names_match_files():
 # Balanced Privacy and Developer (AUDIT ChromeVariations row), and Maximum
 # Privacy gained the new engine and process-isolation hardening
 # (XSLTEnabled, DefaultJavaScriptOptimizerSetting, SitePerProcess,
-# OriginKeyedProcessesEnabled, NetworkServiceSandboxEnabled); those pins
-# changed in the same commit. A pin change outside such a deliberate
-# curation is the drift this table exists to catch.
+# OriginKeyedProcessesEnabled, NetworkServiceSandboxEnabled). Balanced
+# Privacy and Maximum Privacy then gained ExtensionInstallTypeBlocklist,
+# those two and Developer gained AccessibilityImageLabelsEnabled, and Strict
+# Parental Controls gained its history and safety locks
+# (AllowDeletingBrowserHistory, ForceYouTubeRestrict,
+# SafeBrowsingProtectionLevel 1, DisableSafeBrowsingProceedAnyway,
+# SSLErrorOverrideAllowed); those pins changed in the same commit. A pin
+# change outside such a deliberate curation is the drift this table exists
+# to catch.
 #
 # Captured by loading the v1.9.5 scripts (git tag v1.9.5) and running
 # import_settings + _build_policy over the presets as they ship. The values
@@ -1748,6 +1816,7 @@ def test_ps1_embedded_preset_names_match_files():
 
 V195_PRESET_POLICIES = {
     "Balanced Privacy Preset": {
+        "AccessibilityImageLabelsEnabled": False,
         "AutofillCreditCardEnabled": False,
         "BackgroundModeEnabled": False,
         "BasicAuthOverHttpEnabled": False,
@@ -1771,6 +1840,7 @@ V195_PRESET_POLICIES = {
         "BrowserSignin": 0,
         "DefaultBrowserSettingEnabled": False,
         "DnsOverHttpsMode": "automatic",
+        "ExtensionInstallTypeBlocklist": ['command_line'],
         "MetricsReportingEnabled": False,
         "NetworkPredictionOptions": 2,
         "PaymentMethodQueryEnabled": False,
@@ -1783,6 +1853,7 @@ V195_PRESET_POLICIES = {
         "WebRtcIPHandling": "disable_non_proxied_udp",
     },
     "Developer Preset": {
+        "AccessibilityImageLabelsEnabled": False,
         "BackgroundModeEnabled": False,
         "BraveAIChatEnabled": False,
         "BraveLocalAIEnabled": False,
@@ -1800,6 +1871,7 @@ V195_PRESET_POLICIES = {
         "UrlKeyedAnonymizedDataCollectionEnabled": False,
     },
     "Maximum Privacy Preset": {
+        "AccessibilityImageLabelsEnabled": False,
         "AutofillAddressEnabled": False,
         "AutofillCreditCardEnabled": False,
         "BackgroundModeEnabled": False,
@@ -1839,6 +1911,7 @@ V195_PRESET_POLICIES = {
         "DeveloperToolsAvailability": 2,
         "EmailAliasesEnabled": False,
         "EnableMediaRouter": False,
+        "ExtensionInstallTypeBlocklist": ['command_line'],
         "MetricsReportingEnabled": False,
         "NetworkPredictionOptions": 2,
         "NetworkServiceSandboxEnabled": True,
@@ -1884,6 +1957,7 @@ V195_PRESET_POLICIES = {
         "MetricsReportingEnabled": False,
     },
     "Strict Parental Controls Preset": {
+        "AllowDeletingBrowserHistory": False,
         "BraveAIChatEnabled": False,
         "BraveDeAmpEnabled": True,
         "BraveDebouncingEnabled": True,
@@ -1900,12 +1974,16 @@ V195_PRESET_POLICIES = {
         "BrowserGuestModeEnabled": False,
         "BrowserSignin": 0,
         "DeveloperToolsAvailability": 2,
+        "DisableSafeBrowsingProceedAnyway": True,
         "DnsOverHttpsMode": "secure",
         "DnsOverHttpsTemplates": "https://family.cloudflare-dns.com/dns-query",
         "ExtensionInstallBlocklist": ['*'],
         "ForceGoogleSafeSearch": True,
+        "ForceYouTubeRestrict": 2,
         "IncognitoModeAvailability": 1,
         "RemoteDebuggingAllowed": False,
+        "SSLErrorOverrideAllowed": False,
+        "SafeBrowsingProtectionLevel": 1,
         "SyncDisabled": True,
         "TorDisabled": True,
     },
@@ -2282,8 +2360,8 @@ def test_collapse_state_survives_reset_policy(mod, tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # Filter
 #
-# "block" is the needle these tests lean on: six rows spread over three of
-# the six categories, so the match set proves the filter keeps row order,
+# "block" is the needle these tests lean on: twelve rows spread over four of
+# the seven categories, so the match set proves the filter keeps row order,
 # carries the owning header down with each group, and drops the categories
 # matching nothing. The expected rows are written out rather than derived
 # from row["text"], which would only re-run the implementation.
@@ -2296,9 +2374,15 @@ FILTER_EXPECTED = [
     "Block Payment Method Probing",
     "Block Remote Debugging",
     "Block Local Network Access",
+    "Site Permissions",
+    "Block Microphone Access",
+    "Block Camera Access",
     "Access Controls",
+    "Block Bypassing Safe Browsing Warnings",
+    "Block Bypassing Certificate Warnings",
     "Block All Extensions",
     "Block Sideloaded (External) Extensions",
+    "Block Command-Line Extensions (--load-extension)",
     "Shields & Content Protection",
     "Enforce Ad Blocking",
 ]
@@ -2534,7 +2618,7 @@ def test_paging_stays_inside_the_match_set_while_filtered(mod):
     rows = mod.build_rows()
     page = mod.viewport_rows(_FakeScreen(24, 80))
     sel = mod.selectable_indices(rows, FILTER_NEEDLE)
-    assert len(sel) < page  # the whole match set fits on one screen
+    assert len(sel) <= page  # the whole match set fits on one screen
 
     cursor_idx = _page(mod, rows, sel[0], page, FILTER_NEEDLE)
     assert cursor_idx == sel[-1]
@@ -3357,7 +3441,7 @@ def test_build_rows_carries_the_description_onto_every_setting_row(mod):
 
 
 def test_pane_lines_follow_the_longest_description_at_that_width(mod):
-    # At 80 columns the longest descriptions want five lines; the pane
+    # At 80 columns the two longest descriptions want five lines; the pane
     # stops at four and they end in an ellipsis. At 100 they still want
     # four. From about 120 columns nothing needs more than three, and the
     # list gets a row back.
@@ -3618,8 +3702,8 @@ def test_draw_frames_the_list_the_pane_and_the_buttons_at_80x24(mod, monkeypatch
     assert frame[bottom][0] == "+" and frame[bottom][78] == "+"
     assert set(frame[bottom][1:78]) <= {"-"}          # nothing to scroll: no marker
     first = frame[lay["list_top"]]
-    assert first[0] == "|" and first[78] == "|" and "0/7 on" in first
-    assert first.index("0/7 on") + len("0/7 on") <= 77   # counter inside the edge
+    assert first[0] == "|" and first[78] == "|" and "0/8 on" in first
+    assert first.index("0/8 on") + len("0/8 on") <= 77   # counter inside the edge
     assert frame[lay["pane_top"]].startswith("+- Description ")
     assert frame[lay["btn_top"]][0] == "+" and frame[lay["btn_top"] + 2][0] == "+"
     assert " Import " in frame[lay["btn_y"]] and frame[lay["btn_y"]][0] == "|"

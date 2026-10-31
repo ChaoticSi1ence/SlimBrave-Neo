@@ -4,10 +4,15 @@
         "BraveStatsPingEnabled": false,
         "IncognitoModeAvailability": 1,
         "BrowserGuestModeEnabled": false,
+        "AllowDeletingBrowserHistory": false,
         "ExtensionInstallBlocklist": [
             "*"
         ],
         "ForceGoogleSafeSearch": true,
+        "ForceYouTubeRestrict": 2,
+        "SafeBrowsingProtectionLevel": 1,
+        "DisableSafeBrowsingProceedAnyway": true,
+        "SSLErrorOverrideAllowed": false,
         "BrowserSignin": 0,
         "BraveDeAmpEnabled": true,
         "BraveDebouncingEnabled": true,

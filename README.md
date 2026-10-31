@@ -86,7 +86,7 @@ Requires Administrator privileges; the script re-launches itself elevated. It op
 
 **Search reads the descriptions, not just the names.** The box in the header matches titles, policy keys, category names *and* the description text, so typing `passwords` surfaces "Require HTTPS for Basic Auth" even though its title never says the word, and `telemetry` returns the whole reporting section. Several words narrow the results, plurals match singulars, punctuation is ignored on both sides, and title matches rank above prose matches.
 
-**A sidebar splits the policies into seven categories** — or skip it entirely: **All Options** lists all 81 in one scroll with section headers, for anyone who would rather not navigate.
+**A sidebar splits the policies into seven categories** — or skip it entirely: **All Options** lists all 91 in one scroll with section headers, for anyone who would rather not navigate.
 
 **Presets are cards.** Each shows what it does and how many policies it sets. Loading one only fills in the controls; nothing reaches the registry until you press Apply Settings, so you can change your mind first. The presets are embedded in `SlimBrave.ps1` itself, so they work for the one-liner download above with no `Presets/` directory on disk.
 
@@ -112,7 +112,7 @@ A dotted outline marks the focused control. It appears once the keyboard moves f
 
 The button row is Export, Import, **Re-sync**, Reset and Apply Settings. Re-sync reads the policy currently in the registry back into the interface, discarding on-screen selections you have not applied. It writes nothing, and goes through the same reader that fills the form at startup, so a re-sync can never disagree with a fresh launch.
 
-Every row of Site Permissions is a dropdown rather than a checkbox: **Not managed / Ask / Block**, plus **Allow** on the keys where Chromium accepts it; Web Notifications leaves out Ask. Not managed is the default and writes nothing at all. The Site Permissions section below covers what each state does and which keys offer Allow.
+Every content-setting row of Site Permissions is a dropdown rather than a checkbox: **Not managed / Ask / Block**, plus **Allow** on the keys where Chromium accepts it; Web Notifications leaves out Ask. Not managed is the default and writes nothing at all. The two rows at the end, Block Microphone Access and Block Camera Access, are plain checkboxes. The Site Permissions section below covers what each state does and which keys offer Allow.
 
 ---
 
@@ -231,6 +231,7 @@ After applying, restart Brave and verify at `brave://policy`.
 
 - Disable Metrics Reporting (crash reports; Brave sends no usage statistics through it. On by default in Beta and Nightly, and pre-ticked on Release's first-run welcome page; needs a restart)
 - Disable URL Data Collection (Brave already ships "Make searches and browsing better" off; this locks it and overrides an earlier opt-in in the hidden Privacy Guide)
+- Disable Google Image Descriptions — a lock: Brave no longer offers this opt-in, so it changes something only for a profile that accepted it in an older version
 - Disable P3A Analytics
 - Disable Stats Ping
 - Limit Variations to Critical Fixes, or Disable Variations / Griffin Experiments outright (mutually exclusive). Griffin is the remote seed Brave fetches to flip features in a browser that is already installed; "Limit" admits only studies Brave marks critical — today one Windows 11 24H2 kill switch for an enterprise-reporting field that does nothing without cloud management, so in practice the two behave alike — while "Disable" refuses those too. **Either also turns off what Brave ships only through Griffin:** WebGL/WebGPU fingerprint masking (at Standard fingerprinting protection, sites then read your GPU vendor and renderer; turn on `brave://flags/#brave-webgl-balanced-fingerprinting-protections` to keep it), clean links from sites' copy and share buttons (`brave://flags/#brave-clean-link-js-api`), and Brave's Google sign-in fix, without which Chromium's bounce-tracking cleanup may sign you out of Google. On macOS, session cookies are also dropped when you quit and reopen Brave, even with "Continue where you left off". Either refuses studies, not the download (the seed is still fetched), and takes effect after a browser restart.
@@ -241,7 +242,7 @@ After applying, restart Brave and verify at `brave://policy`.
 <details>
 <summary><strong>Privacy & Security</strong></summary>
 
-- Disable Safe Browsing (security downgrade — Brave proxies these lookups through its own servers, so Google never learns who made them either way; excluded from every preset)
+- Disable Safe Browsing (security downgrade — Brave proxies these lookups through its own servers, so Google never learns who made them either way; excluded from every preset; mutually exclusive with Lock Safe Browsing On under Access Controls)
 - Disable Autofill (Addresses & Credit Cards) — Chromium deprecated both policies in version 156 in favour of `AutofillSettings`, which does not work in Brave yet; Brave still applies them, and `brave://policy` lists them as Deprecated
 - Disable Password Manager (stops offering to save or generate passwords; passwords already saved still autofill)
 - Disable Password Leak Detection (the online breach-list check run on your credentials after you sign in to a site and on saved logins you edit; Brave already ships it off, and the key locks it)
@@ -261,6 +262,7 @@ After applying, restart Brave and verify at `brave://policy`.
 - Block Local Network Access (public websites can no longer reach your router, NAS, printers, smart-home hubs or apps on this computer, with no prompt and no per-site exception, where Brave otherwise asks per site; pages opened from a local address still work; breaks public web apps that pair with local devices or localhost helpers, such as hosted media-server UIs, device setup pages and hardware-wallet bridges; WebRTC is not covered, which Disable WebRTC IP Leak handles; in no preset)
 - Disable XSLT (turns off the legacy XML transform engine, an attack surface Chromium is removing; XSLT-styled RSS feeds and sitemaps show unstyled; it also stays off for sites that opt back in after Chromium switches it off by default in version 158; full effect after a browser restart)
 - Disable JavaScript Optimization (hardening) (turns off V8's optimizing compilers on websites, which is Brave's own "JavaScript optimization & security" setting, locked; Brave says it makes the browser more resistant to attacks; sites keep working, WebAssembly included, but script-heavy pages and web apps run slower and no site can be exempted; applies to tabs opened after the change)
+- Remove 'Always Allow' from App-Launch Prompts (the prompt Brave shows before a site opens an external app loses its "Always allow" checkbox, so every launch, mailto: links included, needs a click; apps already set to always open from a site keep opening without asking; in no preset)
 - Force Site Isolation for Every Site (a lock — Brave already gives every site its own process on desktop; this stops `brave://flags#site-isolation-trial-opt-out` or `--disable-site-isolation-trials` turning that off; needs a restart)
 - Isolate Subdomains in Separate Processes (one process per origin, so `mail.example.com` and `docs.example.com` no longer share one, against Spectre-style leaks between subdomains; more processes and memory; a setting in `brave://flags` still overrides it; needs a restart)
 - Sandbox the Network Service (Windows/Linux only — macOS always sandboxes it; Brave otherwise runs its network process unsandboxed, because Chrome turns this on only by Google field trial; ignored on Windows on ARM and before Windows 10 20H1, and after a failed sandboxed start until the next major update; on Linux, switched off for good the first time a site asks for Kerberos (Negotiate) sign-in)
@@ -271,7 +273,7 @@ After applying, restart Brave and verify at `brave://policy`.
 <details>
 <summary><strong>Site Permissions</strong></summary>
 
-Content-setting defaults sites are granted. These rows are **not checkboxes** — Chromium models these keys as an enum rather than a boolean, so the tool now exposes the enum instead of hardcoding "block". Each is a dropdown in the Windows GUI and a `< Block >`-style selector in the TUI, with the same states everywhere:
+Content-setting defaults sites are granted. The nine content-setting rows are **not checkboxes** — Chromium models these keys as an enum rather than a boolean, so the tool now exposes the enum instead of hardcoding "block". Each is a dropdown in the Windows GUI and a `< Block >`-style selector in the TUI, with the same states everywhere:
 
 - **Not managed** — the default. Writes nothing at all, so Brave's own default and your per-site choices stand. An untouched row behaves exactly like the unticked checkbox it replaced.
 - **Ask** — pins the permission prompt as managed policy: no site is silently granted, and the setting can't be weakened from `brave://settings` or per-site. The answer to a prompt is not remembered, so a site asks again each time. The exception is the WebUSB, Web Serial and WebHID rows, where a device you grant stays granted.
@@ -294,17 +296,27 @@ Any managed value overrides the per-site choices you made for that permission wh
 
 Older configs keep working unchanged: a v1.9.5 export or preset naming one of these keys carries the value `2`, so it imports as **Block**, and a key the config doesn't name comes back as **Not managed**. A value outside a key's legal set is left unmanaged rather than written out, and the import result names the key it skipped.
 
+The section ends with two plain checkboxes, because their policies are on/off switches whose "on" is the same as leaving them unset. Each is a hard block (no site or extension can use the device, none is asked, and per-site Allow exceptions stop working), so neither is in any preset:
+- Block Microphone Access: breaks web calls and meetings (Meet, Zoom or Teams on the web, Discord, Brave Talk), voice messages and dictation
+- Block Camera Access: every video input, not just the built-in camera; breaks web video calls, webcam ID checks and QR scanners
+
 </details>
 
 <details>
 <summary><strong>Access Controls</strong></summary>
 
-Lockdowns, and the escape hatches a lockdown would otherwise leave open (guest and incognito windows that keep no history, extensions that can route around a filter) — ordinary toggles:
+Lockdowns, and the escape hatches a lockdown would otherwise leave open (guest and incognito windows that keep no history, history that can be deleted, extensions that can route around a filter, the click-through on security warnings) — ordinary toggles:
 
 - Force Google SafeSearch
+- Force YouTube Restricted Mode (Strict) (youtube.com and its country domains, embeds from them included; many videos become unavailable and comments are hidden; videos embedded from youtube-nocookie.com are not restricted)
+- Lock Safe Browsing On (Standard) (No protection can no longer be picked in `brave://settings/security`; mutually exclusive with Disable Safe Browsing)
+- Block Bypassing Safe Browsing Warnings (no way past a malware or phishing warning, even a mistaken one; certificate and download warnings are not covered, and it does nothing while Safe Browsing is off)
+- Block Bypassing Certificate Warnings (no Proceed link or typed bypass on certificate errors; breaks router, NAS and printer pages and local dev servers with self-signed certificates)
 - Disable Guest Mode (a guest window is an off-the-record session without your history or extensions, which Disable Incognito Mode does not cover; policies still apply inside it)
+- Prevent Deleting History (blocks deleting browsing and download history in History, Downloads and Clear browsing data, and Brave's clear-on-exit keeps them; Brave's own Local history retention setting in `brave://settings/privacy` can still expire history after as little as a day, and no policy can lock it; machine-wide, so it binds every profile on the computer)
 - Block All Extensions (blocks new installs and disables existing ones — lockdown/parental setups)
 - Block Sideloaded (External) Extensions (the registry / drop-in-file install channel bundleware uses — anything already added that way is removed at the next launch, even if you approved it; extensions you install yourself keep working)
+- Block Command-Line Extensions (`--load-extension`) — Google Chrome ignores that switch, but Brave honours it, and malware adds it to browser shortcuts to slip an extension in; this makes Brave ignore it too. `--disable-extensions-except` can still load one (only Block All Extensions refuses both). Breaks shortcuts and test tools that use the switch; needs a restart
 - Disable / Force Incognito Mode (mutually exclusive; needs a restart; either one removes Tor windows, and Force also takes Leo, Rewards and, unless it is allowed in private windows, Wallet)
 
 </details>
@@ -431,8 +443,9 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 - **DNS:** Left unmanaged. Forcing DoH off would hand every DNS query to your ISP in cleartext, while forcing DoH on concentrates that visibility at the DoH provider — which trade-off is right depends on who you distrust more, so the preset leaves the choice to you (set it manually in the DNS section if you have a preference).
 - **Note:** No longer forces incognito-only browsing (earlier versions set `IncognitoModeAvailability: 2`, which silently disabled history, persistent logins, and most extensions). Forget-on-close storage covers the privacy goal; the Force Incognito toggle is still available manually.
 - **New in 2.1:** on-device AI off, remote debugging blocked (the `--remote-debugging-port` cookie-theft vector `DeveloperToolsAvailability` never covered), Basic Auth refused over cleartext HTTP, the sideload-extension channel closed, and variations limited to critical fixes only — Brave's A/B seed stops flipping features; only studies Brave marks critical still arrive (today one Windows 11 kill switch with no effect here).
+- **New in v2.4.0:** extensions passed with `--load-extension` are ignored: Google Chrome already ignores that switch, which malware adds to browser shortcuts; `--disable-extensions-except` can still load one.
 - **What limiting variations costs:** Brave turns a few protections on only through that seed, so this preset loses them unless you turn them back on in `brave://flags`: WebGL/WebGPU fingerprint masking (`#brave-webgl-balanced-fingerprinting-protections`; without it, sites can read your GPU vendor and renderer) and clean links from sites' copy buttons (`#brave-clean-link-js-api`). Brave's Google sign-in fix goes too, so Google may sign you out mid-session (forget-on-close already signs you out once a site's last tab closes), and on macOS session cookies are dropped when you quit and reopen Brave. The preset keeps the limit because it is what keeps strict HTTPS enforced where Brave is moving to HTTPS-First, and Brave's servers can no longer flip its features between updates, critical fixes aside.
-- **Deliberately not set:** the WebUSB / Web Serial / WebHID / Local Fonts / Multi-Screen / Clipboard dropdowns stay *Not managed* — blocking them breaks hardware wallets, flashers, some security keys and Paste buttons inside web apps. Flip them to Block yourself for the full lockdown. Block Local Network Access stays off too: Brave already asks before a public site reaches your network or this computer, and the lock would break web apps that pair with local devices or helper apps.
+- **Deliberately not set:** the WebUSB / Web Serial / WebHID / Local Fonts / Multi-Screen / Clipboard dropdowns stay *Not managed* and Block Microphone Access / Block Camera Access stay unticked: blocking them breaks hardware wallets, flashers, some security keys, Paste buttons inside web apps and every web call. Set them yourself for the full lockdown. Block Local Network Access stays off too: Brave already asks before a public site reaches your network or this computer, and the lock would break web apps that pair with local devices or helper apps.
 - **Best for:** Paranoid users, journalists, activists, or anyone who wants Brave as private as possible — provided they read the performance bullet first.
 
 </details>
@@ -447,6 +460,7 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 - **Performance:** Turns off background mode and the default-browser prompt.
 - **DNS:** Uses automatic DoH (DNS-over-HTTPS through your system resolver's provider when it offers it, falling back to plain DNS on error).
 - **New in 2.1:** locks off the enhanced-spellcheck web service (already off in Brave) while keeping offline spellcheck working — the exact balanced trade — plus on-device AI off, remote debugging blocked, cleartext Basic Auth refused, and sideloaded extensions blocked (your own extensions keep working).
+- **New in v2.4.0:** extensions passed with `--load-extension` are ignored: Google Chrome already ignores that switch, which malware adds to browser shortcuts; `--disable-extensions-except` can still load one.
 - **Deliberately not set:** Limit Variations. Brave turns WebGL/WebGPU fingerprint masking and clean links from sites' copy buttons on only through its remote seed, and ships its Google sign-in fix the same way, so limiting the seed would leave this preset below Brave's own defaults. Tick it yourself if you want features to change only with updates.
 - **Best for:** Most users who want privacy but still need convenience features — the password manager, address autofill, and Shields left at Brave's own defaults.
 
@@ -485,9 +499,10 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 <summary><strong>Strict Parental Controls Preset</strong></summary>
 
 - **Telemetry:** P3A analytics and the daily stats ping.
-- **Privacy:** Blocks incognito mode **and guest mode** (a guest window is an off-the-record session that keeps no history, which blocking incognito does not cover; the other policies still apply inside it), forces Google SafeSearch, disables browser sign-in and **Brave Sync**, and turns on De-AMP, debouncing, tracking-parameter stripping, and reduced language fingerprinting.
+- **Privacy:** Blocks incognito mode **and guest mode** (a guest window is an off-the-record session that keeps no history, which blocking incognito does not cover; the other policies still apply inside it), blocks deleting browsing and download history (Brave's Local history retention setting can still expire it after as little as a day, and no policy can lock that; the block also covers a parent's own profile on the same computer), forces Google SafeSearch, disables browser sign-in and **Brave Sync**, and turns on De-AMP, debouncing, tracking-parameter stripping, and reduced language fingerprinting.
+- **Safety locks:** Forces YouTube's Strict Restricted Mode (many videos become unavailable and comments are hidden; videos embedded from youtube-nocookie.com are not covered), locks Safe Browsing on, and removes the way past Safe Browsing's malware and phishing warnings and past certificate errors. A site Safe Browsing flags by mistake, and a router, NAS or printer page with a self-signed certificate, cannot be opened in Brave on this machine, for any account.
 - **No SafeSites filter.** Earlier versions also turned on `SafeSitesFilterBehavior`. It blocks nothing in Brave (Brave ships no Google API key, so Google rejects every lookup) yet still sent every page address to Google, so it was dropped; the DNS filter below does the blocking. On Windows, Apply and Reset remove a value an older version wrote.
-- **Extensions:** Blocks all extension installs and disables existing ones — a proxy or VPN extension would bypass the DNS filter.
+- **Extensions:** Blocks all extension installs, disables existing ones and refuses any passed on the command line (`--load-extension`, `--disable-extensions-except`) — a proxy or VPN extension would bypass the DNS filter.
 - **Brave Features:** Disables Rewards, Wallet, VPN, AI Chat, News, Talk, Web Discovery, Tor, and developer tools.
 - **DNS — no plaintext fallback.** The preset sets a custom DoH template of `https://family.cloudflare-dns.com/dns-query` (Cloudflare for Families). Custom mode is Chromium's **secure** DoH mode: Brave sends DNS-over-HTTPS queries *only*, and a lookup that fails is not retried against your system resolver. If that endpoint is blocked or unreachable — captive-portal Wi-Fi, some corporate and school networks — **nothing resolves at all** until you change the DNS mode back to `unmanaged` and re-Apply, or reset the policy entirely. Point it at a resolver you know works on the networks the machine will be used on.
 - **New in 2.1:** remote debugging blocked — a debugging port is a scriptable side door past every filter this preset sets up.

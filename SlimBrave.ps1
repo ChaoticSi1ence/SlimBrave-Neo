@@ -170,6 +170,8 @@ $telemetryFeatures = @(
        Tip = "Stops Brave from uploading crash reports: locks 'Automatically send diagnostic reports' off, hides the prompt after a crash and blocks Send now on brave://crashes. Beta and Nightly turn it on by default; on Release the welcome page pre-ticks it. P3A and the usage ping have their own rows." },
     @{ Name = "Disable URL Data Collection"; Key = "UrlKeyedAnonymizedDataCollectionEnabled"; Value = 0; Type = "DWord"
        Tip = "Locks 'Make searches and browsing better' (URL-keyed anonymized data collection) off. Brave already ships it off; its only switch, the hidden Privacy Guide at brave://settings/privacy/guide, goes away once any policy is set. This also overrides an opt-in made there earlier." },
+    @{ Name = "Disable Google Image Descriptions"; Key = "AccessibilityImageLabelsEnabled"; Value = 0; Type = "DWord"
+       Tip = "Brave already keeps Google's image descriptions off and no longer offers the opt-in. A profile that accepted it in an older version still sends unlabeled images to Google whenever a screen reader runs; this turns that off and locks it." },
     @{ Name = "Disable P3A Analytics"; Key = "BraveP3AEnabled"; Value = 0; Type = "DWord"
        Tip = "Disables P3A (Privacy-Preserving Product Analytics), Brave's anonymized product usage telemetry." },
     @{ Name = "Disable Stats Ping"; Key = "BraveStatsPingEnabled"; Value = 0; Type = "DWord"
@@ -183,8 +185,8 @@ $telemetryFeatures = @(
 )
 
 $privacyFeatures = @(
-    @{ Name = "Disable Safe Browsing (security downgrade)"; Key = "SafeBrowsingProtectionLevel"; Value = 0; Type = "DWord"
-       Tip = "Turns Safe Browsing fully off. Brave already routes these lookups through its own servers, so Google never sees the sites you visit even with Safe Browsing on - turning it off buys almost no privacy and costs you the phishing and malware warning pages. Excluded from every preset for that reason." },
+    @{ Name = "Disable Safe Browsing (security downgrade)"; Key = "SafeBrowsingProtectionLevel"; Value = 0; Type = "DWord"; Group = "safebrowsing"
+       Tip = "Turns Safe Browsing fully off. Brave routes these lookups through its own servers, so Google never learns who made them; turning it off buys almost no privacy and costs you the phishing and malware warning pages. Excluded from every preset. Mutually exclusive with Lock Safe Browsing On." },
     @{ Name = "Disable Autofill (Addresses)"; Key = "AutofillAddressEnabled"; Value = 0; Type = "DWord"
        Tip = "Stops Brave from saving and auto-filling addresses and other contact details in web forms. Chromium has deprecated this policy, so brave://policy lists it as Deprecated, but Brave still applies it; its replacement (AutofillSettings) does not work in Brave yet." },
     @{ Name = "Disable Autofill (Credit Cards)"; Key = "AutofillCreditCardEnabled"; Value = 0; Type = "DWord"
@@ -225,6 +227,8 @@ $privacyFeatures = @(
        Tip = "Turns off XSLT, the legacy XML transform engine behind XSLTProcessor and xml-stylesheet pages, an attack surface Chromium is removing; this keeps it off, even for sites that opt back in. XML styled with it (some RSS feeds and sitemaps) shows unstyled. Takes full effect after a restart." },
     @{ Name = "Disable JavaScript Optimization (hardening)"; Key = "DefaultJavaScriptOptimizerSetting"; Value = 2; Type = "DWord"
        Tip = "Turns off V8's optimizing compilers (TurboFan, Maglev) on websites; Brave says this makes it more resistant to attacks. Sites keep working, WebAssembly included, but script-heavy pages and web apps run slower, with no per-site exception. Applies to tabs opened after the change." },
+    @{ Name = "Remove 'Always Allow' from App-Launch Prompts"; Key = "ExternalProtocolDialogShowAlwaysOpenCheckbox"; Value = 0; Type = "DWord"
+       Tip = "Removes the 'Always allow' checkbox from the prompt Brave shows before a site opens an external app, so every launch (mailto:, Zoom, Teams, Steam, ms-* links) needs a click. Apps you already set to always open from a site still open without asking." },
     @{ Name = "Force Site Isolation for Every Site"; Key = "SitePerProcess"; Value = 1; Type = "DWord"
        Tip = "Keeps every site in its own process, as Brave already does on desktop, and stops brave://flags#site-isolation-trial-opt-out or --disable-site-isolation-trials from turning it off. Takes effect after a restart." },
     @{ Name = "Isolate Subdomains in Separate Processes"; Key = "OriginKeyedProcessesEnabled"; Value = 1; Type = "DWord"
@@ -256,6 +260,10 @@ $privacyFeatures = @(
 # `Value` stays on a choice row as the value its pre-tri-state checkbox
 # wrote (always Block). It is never written directly; it is what a bare key
 # in a legacy array-format export means on import.
+#
+# The last two rows (microphone, camera) carry no Choices and are plain
+# checkboxes: AudioCaptureAllowed / VideoCaptureAllowed are booleans whose
+# true equals unset, so false is the only managed state.
 $sitePermissionFeatures = @(
     @{ Name = "Web Notifications"; Key = "DefaultNotificationsSetting"; Value = 2; Type = "DWord"
        Choices = @(
@@ -312,7 +320,11 @@ $sitePermissionFeatures = @(
            @{ Label = "Not managed"; Value = $null },
            @{ Label = "Ask";   Value = 3 },
            @{ Label = "Block"; Value = 2 })
-       Tip = "Sets the default for sites reading your clipboard without you pasting. Block removes the prompt and breaks Paste buttons inside web apps; Ask keeps the prompt. Either one overrides sites you allowed before. Ctrl+V and copy buttons still work. Chromium has no Allow state for this key." }
+       Tip = "Sets the default for sites reading your clipboard without you pasting. Block removes the prompt and breaks Paste buttons inside web apps; Ask keeps the prompt. Either one overrides sites you allowed before. Ctrl+V and copy buttons still work. Chromium has no Allow state for this key." },
+    @{ Name = "Block Microphone Access"; Key = "AudioCaptureAllowed"; Value = 0; Type = "DWord"
+       Tip = "Stops every site and extension from using the microphone or any other audio input, with no prompt; per-site Allow exceptions stop working too. Breaks web calls and meetings (Meet, Zoom or Teams on the web, Discord, Brave Talk), voice messages and dictation on websites." },
+    @{ Name = "Block Camera Access"; Key = "VideoCaptureAllowed"; Value = 0; Type = "DWord"
+       Tip = "Stops every site and extension from using the camera or any other video input, with no prompt; per-site Allow exceptions stop working too. Breaks web video calls (Meet, Zoom or Teams on the web, Discord, Brave Talk), webcam ID checks and in-browser QR scanners." }
 )
 
 # Lockdowns and the escape hatches (guest, incognito, extensions) that
@@ -320,12 +332,24 @@ $sitePermissionFeatures = @(
 $accessControlFeatures = @(
     @{ Name = "Force Google SafeSearch"; Key = "ForceGoogleSafeSearch"; Value = 1; Type = "DWord"
        Tip = "Forces SafeSearch on for all Google searches. Mainly useful for parental controls." },
+    @{ Name = "Force YouTube Restricted Mode (Strict)"; Key = "ForceYouTubeRestrict"; Value = 2; Type = "DWord"
+       Tip = "Forces YouTube's Strict Restricted Mode on youtube.com and its country domains, including videos other sites embed from them; the user cannot turn it off. Many videos become unavailable and comments are hidden. Videos embedded from youtube-nocookie.com are not restricted." },
+    @{ Name = "Lock Safe Browsing On (Standard)"; Key = "SafeBrowsingProtectionLevel"; Value = 1; Type = "DWord"; Group = "safebrowsing"
+       Tip = "Locks Safe Browsing at Standard protection so it cannot be switched to No protection in brave://settings/security. Lookups go through Brave's proxy, as they do by default. Mutually exclusive with Disable Safe Browsing." },
+    @{ Name = "Block Bypassing Safe Browsing Warnings"; Key = "DisableSafeBrowsingProceedAnyway"; Value = 1; Type = "DWord"
+       Tip = "Removes the option to continue past Safe Browsing's malware and phishing warnings, so a flagged site cannot be opened, even one flagged by mistake. Does not cover certificate or download warnings. Does nothing while Safe Browsing is off; Lock Safe Browsing On keeps it on." },
+    @{ Name = "Block Bypassing Certificate Warnings"; Key = "SSLErrorOverrideAllowed"; Value = 0; Type = "DWord"
+       Tip = "Removes the Proceed link, and the typed bypass, from certificate-error pages, so a site whose certificate is invalid, expired or self-signed cannot be opened at all. Breaks router, NAS and printer admin pages and local dev servers that use self-signed certificates." },
     @{ Name = "Disable Guest Mode"; Key = "BrowserGuestModeEnabled"; Value = 0; Type = "DWord"
        Tip = "Removes guest browsing sessions: off-the-record windows that keep no history and run without your profile's extensions. Disable Incognito Mode does not remove them. These policies still apply inside guest windows." },
+    @{ Name = "Prevent Deleting History"; Key = "AllowDeletingBrowserHistory"; Value = 0; Type = "DWord"
+       Tip = "Stops anyone deleting browsing and download history in History, Downloads or Clear browsing data; Brave's clear-on-exit keeps them too. Brave's Local history retention setting (brave://settings/privacy) can still expire history after as little as a day, and SlimBrave cannot lock it." },
     @{ Name = "Block All Extensions"; Key = "ExtensionInstallBlocklist"; Value = @("*"); Type = "List"
        Tip = "Blocks installation of every extension and disables ones already installed. For lockdown/parental setups - a proxy or VPN extension would bypass DNS filtering." },
     @{ Name = "Block Sideloaded (External) Extensions"; Key = "BlockExternalExtensions"; Value = 1; Type = "DWord"
        Tip = "Blocks extensions other programs install through the Windows registry or a drop-in file (how bundleware gets in) and removes any added that way at the next launch, even ones you approved. Extensions you install yourself keep working." },
+    @{ Name = "Block Command-Line Extensions (--load-extension)"; Key = "ExtensionInstallTypeBlocklist"; Value = @("command_line"); Type = "List"
+       Tip = "Ignores extensions passed with --load-extension, which malware adds to Brave's shortcuts to slip one in. Google Chrome ignores that switch; Brave honours it unless this is set. --disable-extensions-except can still load one. Breaks shortcuts and test tools that use the switch. Restart needed." },
     @{ Name = "Disable Incognito Mode"; Key = "IncognitoModeAvailability"; Value = 1; Type = "DWord"; Group = "incognito"
        Tip = "Removes private browsing entirely - no incognito windows can be opened. Mutually exclusive with Force Incognito Mode." },
     @{ Name = "Force Incognito Mode"; Key = "IncognitoModeAvailability"; Value = 2; Type = "DWord"; Group = "incognito"
@@ -436,6 +460,7 @@ $script:embeddedPresets = [ordered]@{
     "Features": {
         "MetricsReportingEnabled": false,
         "UrlKeyedAnonymizedDataCollectionEnabled": false,
+        "AccessibilityImageLabelsEnabled": false,
         "BraveP3AEnabled": false,
         "BraveStatsPingEnabled": false,
         "AutofillAddressEnabled": false,
@@ -486,6 +511,9 @@ $script:embeddedPresets = [ordered]@{
         "RemoteDebuggingAllowed": false,
         "BasicAuthOverHttpEnabled": false,
         "BlockExternalExtensions": true,
+        "ExtensionInstallTypeBlocklist": [
+            "command_line"
+        ],
         "ChromeVariations": 1,
         "XSLTEnabled": false,
         "DefaultJavaScriptOptimizerSetting": 2,
@@ -500,6 +528,7 @@ $script:embeddedPresets = [ordered]@{
     "Features": {
         "MetricsReportingEnabled": false,
         "UrlKeyedAnonymizedDataCollectionEnabled": false,
+        "AccessibilityImageLabelsEnabled": false,
         "BraveP3AEnabled": false,
         "BraveStatsPingEnabled": false,
         "AutofillCreditCardEnabled": false,
@@ -529,6 +558,9 @@ $script:embeddedPresets = [ordered]@{
         "RemoteDebuggingAllowed": false,
         "BasicAuthOverHttpEnabled": false,
         "BlockExternalExtensions": true,
+        "ExtensionInstallTypeBlocklist": [
+            "command_line"
+        ],
         "SpellCheckServiceEnabled": false
     },
     "DnsMode": "automatic"
@@ -567,6 +599,7 @@ $script:embeddedPresets = [ordered]@{
     "Features": {
         "MetricsReportingEnabled": false,
         "UrlKeyedAnonymizedDataCollectionEnabled": false,
+        "AccessibilityImageLabelsEnabled": false,
         "BraveP3AEnabled": false,
         "BraveStatsPingEnabled": false,
         "BraveRewardsDisabled": true,
@@ -590,10 +623,15 @@ $script:embeddedPresets = [ordered]@{
         "BraveStatsPingEnabled": false,
         "IncognitoModeAvailability": 1,
         "BrowserGuestModeEnabled": false,
+        "AllowDeletingBrowserHistory": false,
         "ExtensionInstallBlocklist": [
             "*"
         ],
         "ForceGoogleSafeSearch": true,
+        "ForceYouTubeRestrict": 2,
+        "SafeBrowsingProtectionLevel": 1,
+        "DisableSafeBrowsingProceedAnyway": true,
+        "SSLErrorOverrideAllowed": false,
         "BrowserSignin": 0,
         "BraveDeAmpEnabled": true,
         "BraveDebouncingEnabled": true,
@@ -662,7 +700,7 @@ $categories = @(
 # The interface wants a lowercase row shape with a description and an ordered
 # choices list. The tables above are the single source of truth and stay in the
 # form the test suite parses, so the translation happens here at startup rather
-# than by maintaining a second copy of all 81 policies.
+# than by maintaining a second copy of all 91 policies.
 #
 # Ids are index-based because a few policy keys legitimately appear on two rows
 # (incognito, referrers). State is keyed by id, never by key.

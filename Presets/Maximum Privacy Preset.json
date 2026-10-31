@@ -2,6 +2,7 @@
     "Features": {
         "MetricsReportingEnabled": false,
         "UrlKeyedAnonymizedDataCollectionEnabled": false,
+        "AccessibilityImageLabelsEnabled": false,
         "BraveP3AEnabled": false,
         "BraveStatsPingEnabled": false,
         "AutofillAddressEnabled": false,
@@ -52,6 +53,9 @@
         "RemoteDebuggingAllowed": false,
         "BasicAuthOverHttpEnabled": false,
         "BlockExternalExtensions": true,
+        "ExtensionInstallTypeBlocklist": [
+            "command_line"
+        ],
         "ChromeVariations": 1,
         "XSLTEnabled": false,
         "DefaultJavaScriptOptimizerSetting": 2,
