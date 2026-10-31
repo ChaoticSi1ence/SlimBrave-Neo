@@ -953,11 +953,33 @@ function Test-DohTemplate([string]$Raw) {
 # Preferences (policy content settings stay in memory), and no writer of these
 # entries has been identified, so this is a guard for profiles that carry
 # them, not a fix for a known cause. Every profile of every installed channel
-# is checked.
+# is checked, in the invoking account only.
 # ---------------------------------------------------------------------------
-function Repair-OneBravePrefs([string]$pref) {
-    if (-not (Test-Path $pref)) { return 0 }
-    try { $j = Get-Content $pref -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return 0 }
+function Test-NoReparsePoint([string]$root, [string]$path) {
+    # True when nothing from $path up to and including $root is a junction,
+    # symbolic link or other reparse point. Everything below the root is the
+    # user's to replace, and this runs elevated, so a link there could aim the
+    # rewrite at a file the user cannot touch. A component whose attributes
+    # cannot be read counts as a link.
+    $p = $path
+    while (-not [string]::IsNullOrEmpty($p)) {
+        if (Test-Path -LiteralPath $p) {
+            try {
+                if ([System.IO.File]::GetAttributes($p) -band [System.IO.FileAttributes]::ReparsePoint) { return $false }
+            } catch {
+                return $false
+            }
+        }
+        if ($p.TrimEnd('\') -ieq $root.TrimEnd('\')) { return $true }
+        $p = [System.IO.Path]::GetDirectoryName($p)
+    }
+    return $true
+}
+
+function Repair-OneBravePrefs([string]$pref, [string]$root) {
+    if (-not (Test-NoReparsePoint $root $pref)) { return 0 }
+    if (-not (Test-Path -LiteralPath $pref)) { return 0 }
+    try { $j = Get-Content -LiteralPath $pref -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return 0 }
     $bs = $null
     if ($j.profile -and $j.profile.content_settings -and $j.profile.content_settings.exceptions) {
         $bs = $j.profile.content_settings.exceptions.braveShields
@@ -974,12 +996,25 @@ function Repair-OneBravePrefs([string]$pref) {
     # Brave reads Preferences as compact UTF-8 without BOM. Out-File would
     # write UTF-16 with a BOM and break Brave on next launch.
     $json = $j | ConvertTo-Json -Depth 100 -Compress
-    $tmp = "$pref.slimbrave-tmp"
+    # A random name opened with CreateNew, never a fixed one: CreateNew fails
+    # rather than reuse a file or link someone left at the path.
+    $tmp = $pref + '.slimbrave-' + [guid]::NewGuid().ToString('N')
+    $stream = $null
     try {
-        [System.IO.File]::WriteAllText($tmp, $json, (New-Object System.Text.UTF8Encoding $false))
-        Move-Item -Force $tmp $pref
+        $bytes = (New-Object System.Text.UTF8Encoding $false).GetBytes($json)
+        $stream = New-Object System.IO.FileStream($tmp, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Close()
+        $stream = $null
+        # Checked again just before the rename, for a link swapped in since.
+        if (-not (Test-NoReparsePoint $root $pref)) {
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+            return 0
+        }
+        Move-Item -LiteralPath $tmp -Destination $pref -Force -ErrorAction Stop
     } catch {
-        if (Test-Path $tmp) { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
+        if ($null -ne $stream) { $stream.Close() }
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
         return 0
     }
     return $removed
@@ -987,17 +1022,11 @@ function Repair-OneBravePrefs([string]$pref) {
 
 function Get-UserAppDataRoots {
     <#
-      Which LOCALAPPDATA roots hold a Brave profile worth scrubbing.
-
-      The single-user case is the fast path and comes first: the invoking
-      user's own root. But the policy this tool writes lives in HKLM and
-      applies to every account on the machine, so the scrub covers every
-      account's profiles too - not just the one running this.
-
-      Other users' roots come from the ProfileList registry key rather than by
-      globbing C:\Users, because that key is the authoritative mapping and it
-      lets us filter to real interactive accounts (S-1-5-21-*), skipping
-      SYSTEM, service accounts, Default and Public.
+      The LOCALAPPDATA root whose Brave profiles get scrubbed: the invoking
+      account's own, which the elevated relaunch forwards, just as the Linux
+      and macOS scripts scrub only the invoking user's home. Other accounts
+      are never touched: any of them could plant a junction in its own
+      profile tree and aim this elevated rewrite at a file it cannot reach.
     #>
     $roots = New-Object System.Collections.ArrayList
     $primary = $env:LOCALAPPDATA
@@ -1007,36 +1036,12 @@ function Get-UserAppDataRoots {
     if (-not [string]::IsNullOrWhiteSpace($primary)) {
         [void]$roots.Add(@{ Path = $primary; Label = "this user" })
     }
-
-    $profileList = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
-    if (Test-Path $profileList) {
-        foreach ($sk in (Get-ChildItem $profileList -ErrorAction SilentlyContinue)) {
-            $sid = $sk.PSChildName
-            if ($sid -notlike "S-1-5-21-*") { continue }
-            $img = (Get-ItemProperty $sk.PSPath -ErrorAction SilentlyContinue).ProfileImagePath
-            if ([string]::IsNullOrWhiteSpace($img)) { continue }
-            $local = Join-Path $img "AppData\Local"
-            # Another user's profile is unreadable when this is running
-            # unelevated, and Test-Path surfaces that as a visible error even
-            # though the miss is handled. Silence it: an unreadable root is
-            # simply one we cannot repair.
-            if (-not (Test-Path $local -ErrorAction SilentlyContinue)) { continue }
-            $already = $false
-            foreach ($r in $roots) {
-                if ($r.Path -and ($r.Path.TrimEnd('\') -ieq $local.TrimEnd('\'))) { $already = $true; break }
-            }
-            if ($already) { continue }
-            # only bother with accounts that actually have Brave data
-            if (-not (Test-Path (Join-Path $local "BraveSoftware") -ErrorAction SilentlyContinue)) { continue }
-            [void]$roots.Add(@{ Path = $local; Label = (Split-Path $img -Leaf) })
-        }
-    }
     return $roots
 }
 
 function Repair-OneUserRoot([string]$localAppData) {
-    # One unreadable or locked profile must not abort the sweep - the other
-    # users on the machine still deserve their repair.
+    # One unreadable or locked profile must not abort the sweep; the other
+    # profiles still get their repair.
     $removed = 0
     foreach ($channelDir in @('Brave-Browser', 'Brave-Browser-Beta', 'Brave-Browser-Nightly', 'Brave-Browser-Dev')) {
         $userData = Join-Path $localAppData "BraveSoftware\$channelDir\User Data"
@@ -1044,7 +1049,7 @@ function Repair-OneUserRoot([string]$localAppData) {
         $profileDirs = Get-ChildItem -Path $userData -Directory -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' }
         foreach ($dir in $profileDirs) {
-            try { $removed += Repair-OneBravePrefs (Join-Path $dir.FullName 'Preferences') } catch { }
+            try { $removed += Repair-OneBravePrefs (Join-Path $dir.FullName 'Preferences') $localAppData } catch { }
         }
     }
     return $removed
@@ -1057,16 +1062,13 @@ function Repair-BravePrefs {
     # on shutdown, so a scrub done now is discarded the moment the user closes
     # Brave - which is exactly what we tell them to do next. Report it instead
     # of claiming a clean that will not survive.
-    if ($running) { return @{ Removed = 0; Running = $true; Skipped = $true; Users = 0 } }
+    if ($running) { return @{ Removed = 0; Running = $true; Skipped = $true } }
 
     $removed = 0
-    $users = 0
     foreach ($root in Get-UserAppDataRoots) {
-        $n = Repair-OneUserRoot $root.Path
-        if ($n -gt 0) { $users++ }
-        $removed += $n
+        $removed += Repair-OneUserRoot $root.Path
     }
-    return @{ Removed = $removed; Running = $false; Skipped = $false; Users = $users }
+    return @{ Removed = $removed; Running = $false; Skipped = $false }
 }
 
 function Join-Status([string]$lead, $repair) {
@@ -1101,11 +1103,6 @@ function Get-RepairNote($repair) {
     if ($repair.Removed -gt 0) {
         $plural = ""
         if ($repair.Removed -ne 1) { $plural = "s" }
-        # Machine policy applies to every account, so say when the repair
-        # reached beyond the person sitting here.
-        if ($repair.Users -gt 1) {
-            return " Also cleaned $($repair.Removed) leaked profile pref$plural across $($repair.Users) user profiles on this PC."
-        }
         return " Also cleaned $($repair.Removed) leaked profile pref$plural from your Brave profile."
     }
     return ""

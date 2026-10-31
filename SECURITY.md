@@ -132,7 +132,18 @@ service, daemon, scheduled task, launch agent or startup entry, runs nothing in
 the background after it exits, and touches no path outside the ones listed
 below. Every write is either a policy location, the Shields-exception scrub
 described under each platform, or the JSON config file you pick yourself in the
-Import/Export dialog (`--import` / `--export` on Linux and macOS).
+Import/Export dialog (`--import` / `--export` on Linux and macOS). On Linux and
+macOS, Export creates that file with your own account's rights, not root's, so
+it can only land where you could write it yourself; Import reads the file you
+name as root and refuses one over 1 MiB.
+
+If you grant sudo for this tool alone: the Linux and macOS scripts run every
+helper program by absolute path (`/usr/bin/pgrep`; on macOS also
+`/usr/bin/profiles`, `/usr/bin/open`, `/usr/bin/sudo` and `/usr/bin/killall`),
+so a PATH passed through sudo cannot replace them. The documented
+`sudo python3` still finds python3 through your PATH wherever sudoers sets no
+secure_path, and macOS's stock sudoers sets none, so such a rule has to name an
+absolute interpreter and a root-owned copy of the script.
 
 ### Windows — `SlimBrave.ps1`
 
@@ -147,12 +158,15 @@ It writes to exactly three places:
 |----------|--------------------|
 | `HKLM:\SOFTWARE\Policies\BraveSoftware\Brave` | One value per ticked option (or one numbered subkey for list policies), plus `DnsOverHttpsMode` / `DnsOverHttpsTemplates`. Created only when you press Apply — opening the app writes nothing. |
 | `HKCU:\SOFTWARE\Policies\BraveSoftware\Brave` (or `HKEY_USERS\<your SID>\...` when elevated as another account) | Values are only **removed** here, never written, so a leftover user-scope policy cannot override the machine one. |
-| `%LOCALAPPDATA%\BraveSoftware\<channel>\User Data\<profile>\Preferences`, for **every interactive account on the machine** | Only the `profile.content_settings.exceptions.braveShields` entries for `http://*,*` and `https://*,*` are deleted. Nothing else in the file is read back out or changed. Covers Stable/Beta/Nightly/Dev and every profile (`Default`, `Profile 1`, ...). The policy this tool writes is machine-wide, so the scrub follows it: your own profile root plus every other interactive account (`S-1-5-21-*` in the ProfileList registry key) whose Brave data is readable; the status line says when other users' profiles were cleaned. Skipped entirely while Brave is running, because Brave would overwrite the file on its next save. |
+| `%LOCALAPPDATA%\BraveSoftware\<channel>\User Data\<profile>\Preferences`, for the account you ran it from (the profile path the elevated relaunch forwards) | Only the `profile.content_settings.exceptions.braveShields` entries for `http://*,*` and `https://*,*` are deleted. Nothing else in the file is read back out or changed. Covers Stable/Beta/Nightly/Dev and every profile (`Default`, `Profile 1`, ...). Other accounts are never touched, and a profile reached through a junction or symbolic link is skipped. Skipped entirely while Brave is running, because Brave would overwrite the file on its next save. |
 
 Those Shields entries have no identified writer: no SlimBrave version writes
 them (the managed policy lives in memory and is never copied into the
 profile), but profiles that carry them keep Shields off after "Disable Brave
-Shields" is unticked, so every Apply and Reset removes them as a guard.
+Shields" is unticked, so every Apply and Reset removes them as a guard. Under
+over-the-shoulder UAC this rewrite runs with the admin's token. The link check
+runs before the read and again before the rename, so a link swapped in after
+the last check can still redirect it.
 
 **Reset is scoped to this tool's own keys.** It removes only the policy names
 SlimBrave Neo manages, in both scopes, and the two DNS values. Apply and Reset
@@ -176,16 +190,23 @@ actions report how many they skipped.
 Root is needed for one file: `/etc/brave/policies/managed/slimbrave.json`
 (mode `0644`, written atomically). That single file is the entire policy
 footprint — every Brave channel reads it, because brave-core hardcodes the
-directory. `--policy-file` can point elsewhere, but only inside
-`/etc/brave/policies/managed` or `/etc/chromium/policies/managed`; anything
-else is refused.
+directory. `--policy-file` can point elsewhere, but only to a `slimbrave*.json`
+file directly inside `/etc/brave/policies/managed` or
+`/etc/chromium/policies/managed`; anything else is refused.
 
 The Shields-exception scrub runs over
 `~/.config/BraveSoftware/<channel>/<profile>/Preferences` for the invoking
-user (resolved from `SUDO_USER`, not from root's home), plus the Flatpak
-profile under `~/.var/app/com.brave.Browser` when present. It is done in a
-forked child that drops to that user's uid/gid first, so root never follows a
-path component inside someone's home directory.
+user (resolved from `SUDO_USER`, else from `USER`, as a plain `su` leaves it;
+never root's home), plus the Flatpak profile under
+`~/.var/app/com.brave.Browser` when present. It is done in a forked child that
+drops to that user's uid/gid first, profile listing included, so the scrub
+never follows a path component inside someone's home as root. With no non-root
+invoking user (a root login), nothing is scrubbed.
+
+Export uses the same drop: the file and any folders it needs are created by a
+child running as you, so nothing changes owner afterwards. Both drops act for
+that same invoking user; elevated without one (doas, pkexec, a root login),
+Export writes with root's rights.
 
 `--reset` unlinks the policy file it wrote. Nothing else in
 `/etc/brave/policies/managed` is touched.
@@ -194,21 +215,24 @@ path component inside someone's home directory.
 
 Root writes `/Library/Managed Preferences/com.brave.Browser.plist`, and the
 matching `com.brave.Browser.beta` / `com.brave.Browser.nightly` plists for
-whichever channels you select. `--policy-file` can only target
+whichever channels you select. `--policy-file` can only name
+`com.brave.Browser.plist`, `com.brave.Browser.beta.plist` or
+`com.brave.Browser.nightly.plist` directly inside
 `/Library/Managed Preferences` or `/Library/Preferences`; anything else is
 refused.
 
 With `--persist on`, the policy is instead delivered as a **Configuration
 Profile** (identifier `io.github.slimbrave-neo.brave-policy`) — Apple's
 supported path, because macOS 13+ can clear directly-written managed plists at
-reboot. The profile is staged into a private per-run `0700` temp directory and
-handed to System Settings; **you approve the install yourself** in Device
-Management. The tool also runs `killall cfprefsd` so the new values are picked
-up without a reboot.
+reboot. The profile is staged into a per-run temp directory that stays
+root-owned (`0755`, the file `0644`: readable by anyone, like the managed plist
+it stands in for, and writable only by root) and handed to System Settings;
+**you approve the install yourself** in Device Management. The tool also runs
+`killall cfprefsd` so the new values are picked up without a reboot.
 
-The Shields-exception scrub is the same as Linux, over
-`~/Library/Application Support/BraveSoftware/<channel>/<profile>/Preferences`,
-with the same privilege drop.
+The Shields-exception scrub and Export work as on Linux, with the same
+privilege drop; the scrub covers
+`~/Library/Application Support/BraveSoftware/<channel>/<profile>/Preferences`.
 
 `--reset` removes the plists it wrote and removes the Configuration Profile by
 identifier. No other managed preference is touched.

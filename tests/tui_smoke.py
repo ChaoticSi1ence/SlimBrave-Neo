@@ -10,10 +10,10 @@ mode off, expecting the ASCII fallback the scripts pick when the codec
 cannot encode the box glyphs.
 
 Needs tmux, passwordless sudo (the scripts refuse to run otherwise) and a
-policy-file path inside the script's allowed directories. CI only; it
-writes nothing - the TUI is quit without Apply.
+policy-file path that passes the script's own directory and file-name
+check. CI only; it writes nothing - the TUI is quit without Apply.
 
-    python3 tests/tui_smoke.py slimbrave-linux.py /etc/brave/policies/managed/smoke.json
+    python3 tests/tui_smoke.py slimbrave-linux.py /etc/brave/policies/managed/slimbrave-smoke.json
 """
 import os
 import pathlib

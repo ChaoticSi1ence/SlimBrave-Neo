@@ -9,6 +9,7 @@ touches /etc, the registry, or a real Brave profile — filesystem work stays
 in pytest's tmp_path.
 """
 
+import ast
 import curses
 import importlib.util
 import json
@@ -358,36 +359,70 @@ def test_read_json_file_handles_boms(mod, tmp_path, encoding, bom):
 # ---------------------------------------------------------------------------
 
 
-def test_allowed_policy_dir_accepts_inside_path(mod, tmp_path, monkeypatch):
+def _good_policy_name(mod):
+    # MAC_MOD is darwin on the macOS runner, where the name is a bundle id's.
+    return "com.brave.Browser.plist" if getattr(mod, "IS_MAC", False) else "slimbrave.json"
+
+
+def test_allowed_policy_file_accepts_inside_path(mod, tmp_path, monkeypatch):
     allowed = tmp_path / "allowed"
     allowed.mkdir()
     monkeypatch.setattr(mod, "ALLOWED_POLICY_DIRS", (str(allowed),))
-    assert mod._is_within_allowed_policy_dir(str(allowed / "policy.json"))
+    assert mod._is_allowed_policy_file(str(allowed / _good_policy_name(mod)))
+    if not getattr(mod, "IS_MAC", False):
+        # CI's Linux smoke leg uses this name
+        assert mod._is_allowed_policy_file(str(allowed / "slimbrave-smoke.json"))
 
 
-def test_allowed_policy_dir_rejects_outside_path(mod, tmp_path, monkeypatch):
+def test_allowed_policy_file_rejects_outside_path(mod, tmp_path, monkeypatch):
     allowed = tmp_path / "allowed"
     allowed.mkdir()
     monkeypatch.setattr(mod, "ALLOWED_POLICY_DIRS", (str(allowed),))
-    assert not mod._is_within_allowed_policy_dir(str(tmp_path / "shadow"))
-    assert not mod._is_within_allowed_policy_dir(
-        str(allowed / ".." / "shadow"))
-    # The allowed dir itself is not a writable target, only paths inside it
-    assert not mod._is_within_allowed_policy_dir(str(allowed))
+    good = _good_policy_name(mod)
+    for path in (
+        allowed / "corp.json",           # another tool's file in the same dir
+        allowed / "policy.json",
+        allowed / "sub" / good,          # Chromium never descends into it
+        allowed / ".." / good,
+        tmp_path / "shadow",
+        allowed,                         # the dir itself is not a target
+    ):
+        assert not mod._is_allowed_policy_file(str(path)), path
 
 
 @pytest.mark.skipif(
     os.name == "nt",
     reason="symlink creation requires elevation or Developer Mode")
-def test_allowed_policy_dir_rejects_symlink_escape(mod, tmp_path, monkeypatch):
+def test_allowed_policy_file_rejects_symlink_escape(mod, tmp_path, monkeypatch):
     allowed = tmp_path / "allowed"
     outside = tmp_path / "outside"
     allowed.mkdir()
     outside.mkdir()
+    good = _good_policy_name(mod)
+    (outside / good).write_text("{}")
     (allowed / "link").symlink_to(outside)
     monkeypatch.setattr(mod, "ALLOWED_POLICY_DIRS", (str(allowed),))
-    assert not mod._is_within_allowed_policy_dir(
-        str(allowed / "link" / "policy.json"))
+    assert not mod._is_allowed_policy_file(str(allowed / "link" / good))
+    # The right name, but a symlink to a file outside the dir
+    (allowed / good).symlink_to(outside / good)
+    assert not mod._is_allowed_policy_file(str(allowed / good))
+
+
+def test_mac_policy_file_names(tmp_path, monkeypatch):
+    """On macOS the name must be a channel's bundle-id plist, the only plists
+    Brave reads there; a Linux-style SlimBrave name does not count."""
+    dirs = (tmp_path / "Managed Preferences", tmp_path / "Preferences")
+    for d in dirs:
+        d.mkdir()
+    monkeypatch.setattr(MAC_DARWIN, "ALLOWED_POLICY_DIRS", tuple(str(d) for d in dirs))
+    for d in dirs:
+        for name in ("com.brave.Browser.plist", "com.brave.Browser.beta.plist",
+                     "com.brave.Browser.nightly.plist"):
+            assert MAC_DARWIN._is_allowed_policy_file(str(d / name)), name
+        for rel in ("com.apple.loginwindow.plist",
+                    os.path.join("SystemConfiguration", "preferences.plist"),
+                    "slimbrave-smoke.plist"):
+            assert not MAC_DARWIN._is_allowed_policy_file(str(d / rel)), rel
 
 
 # ---------------------------------------------------------------------------
@@ -485,6 +520,289 @@ def test_repair_one_prefs_ignores_missing_or_invalid(mod, tmp_path):
     bad = tmp_path / "Preferences"
     bad.write_text("{not json")
     assert mod._repair_one_prefs(str(bad)) == 0
+
+
+# ---------------------------------------------------------------------------
+# Root and elevated file handling: the invoking user, the privilege-dropped
+# child, Export, and the import cap
+#
+# The fork tests fork for real. os.geteuid is faked to 0 so the drop path
+# runs, and initgroups/setgid/setuid are faked so the child never changes
+# identity; each fake records its name in a file, because the child's memory
+# is gone by the time the parent looks. Windows has no fork, so they skip
+# there and the scripts run inline.
+# ---------------------------------------------------------------------------
+
+needs_fork = pytest.mark.skipif(not hasattr(os, "fork"), reason="no os.fork on Windows")
+posix_only = pytest.mark.skipif(os.name == "nt", reason="pwd, fork and POSIX modes")
+
+LEAKED_PREFS = {"profile": {"content_settings": {"exceptions": {"braveShields": {
+    "http://*,*": {"setting": 2}, "https://*,*": {"setting": 2}}}}}}
+
+
+def _fake_root_dropping_to_self(mod, monkeypatch, log, fail_setuid=False):
+    import pwd
+    me = pwd.getpwuid(os.getuid()).pw_name
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(mod, "_sudo_user_identity", lambda: (me, os.getuid(), os.getgid()))
+
+    def recorder(name, fail=False):
+        def fake(*args):
+            with open(log, "a", encoding="utf-8") as f:
+                f.write(name + "\n")
+            if fail:
+                raise PermissionError(f"{name} refused")
+        return fake
+
+    monkeypatch.setattr(os, "initgroups", recorder("initgroups"), raising=False)
+    monkeypatch.setattr(os, "setgid", recorder("setgid"))
+    monkeypatch.setattr(os, "setuid", recorder("setuid", fail=fail_setuid))
+
+
+def _fake_passwd(monkeypatch, accounts):
+    """Answer pwd.getpwnam from {name: uid}; everyone else is unknown."""
+    import pwd
+
+    def getpwnam(name):
+        if name not in accounts:
+            raise KeyError(name)
+        uid = accounts[name]
+        return pwd.struct_passwd((name, "x", uid, uid, "", f"/home/{name}", "/bin/sh"))
+
+    monkeypatch.setattr(pwd, "getpwnam", getpwnam)
+
+
+@posix_only
+def test_invoking_user_is_sudo_user_then_user_never_root(mod, monkeypatch):
+    _fake_passwd(monkeypatch, {"alice": 1000, "bob": 1001, "toor": 0})
+    monkeypatch.setenv("SUDO_USER", "alice")
+    monkeypatch.setenv("USER", "bob")
+    assert mod._invoking_user() == ("alice", 1000, 1000, "/home/alice")
+    assert mod._sudo_user_identity() == ("alice", 1000, 1000)
+    assert mod._user_home_for_brave() == "/home/alice"
+    # a plain `su` to root keeps USER and sets no SUDO_USER
+    monkeypatch.delenv("SUDO_USER")
+    assert mod._invoking_user() == ("bob", 1001, 1001, "/home/bob")
+    for name in ("root", "toor", "nobody-known"):
+        monkeypatch.setenv("USER", name)
+        assert mod._invoking_user() is None, name
+        assert mod._user_home_for_brave() is None, name
+    monkeypatch.delenv("USER")
+    assert mod._invoking_user() is None
+
+
+@needs_fork
+def test_run_as_invoking_user_drops_in_a_child(mod, monkeypatch, tmp_path):
+    log = tmp_path / "drop.log"
+    _fake_root_dropping_to_self(mod, monkeypatch, log)
+    child = mod._run_as_invoking_user(os.getpid, default=None)
+    assert isinstance(child, int) and child != os.getpid()
+    assert log.read_text(encoding="utf-8").split() == ["initgroups", "setgid", "setuid"]
+
+
+@needs_fork
+def test_run_as_invoking_user_returns_a_large_reply(mod, monkeypatch, tmp_path):
+    # Several times the pipe buffer: the parent must read while the child writes.
+    _fake_root_dropping_to_self(mod, monkeypatch, tmp_path / "drop.log")
+    assert mod._run_as_invoking_user(lambda: "x" * 300_000, default=None) == "x" * 300_000
+
+
+@needs_fork
+def test_run_as_invoking_user_returns_default_if_drop_fails(mod, monkeypatch, tmp_path):
+    _fake_root_dropping_to_self(mod, monkeypatch, tmp_path / "drop.log", fail_setuid=True)
+    marker = tmp_path / "ran-without-the-drop"
+    assert mod._run_as_invoking_user(marker.touch, default="default") == "default"
+    assert not marker.exists()
+
+
+def _logging_fake(log, name, fail=False):
+    def fake(*args):
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(name + "\n")
+        if fail:
+            raise PermissionError(f"{name} refused")
+    return fake
+
+
+@needs_fork
+@pytest.mark.parametrize("setgroups_fails", [False, True])
+def test_run_as_invoking_user_never_keeps_root_groups(mod, monkeypatch, tmp_path, setgroups_fails):
+    # A failed initgroups leaves the child with only the user's primary
+    # group; if even that fails, the drop fails and fn never runs.
+    log = tmp_path / "drop.log"
+    _fake_root_dropping_to_self(mod, monkeypatch, log)
+    monkeypatch.setattr(os, "initgroups", _logging_fake(log, "initgroups", fail=True), raising=False)
+    monkeypatch.setattr(os, "setgroups", _logging_fake(log, "setgroups", fail=setgroups_fails))
+    marker = tmp_path / "ran"
+    result = mod._run_as_invoking_user(lambda: marker.touch() or "ran", default="default")
+    steps = log.read_text(encoding="utf-8").split()
+    if setgroups_fails:
+        assert result == "default" and not marker.exists()
+        assert steps == ["initgroups", "setgroups"]
+    else:
+        assert result == "ran" and marker.exists()
+        assert steps == ["initgroups", "setgroups", "setgid", "setuid"]
+
+
+@needs_fork
+def test_export_writes_as_invoking_user(mod, monkeypatch, tmp_path):
+    log = tmp_path / "drop.log"
+    _fake_root_dropping_to_self(mod, monkeypatch, log)
+
+    def no_chown(*args, **kwargs):
+        raise OSError("Export must not change owner after the fact")
+
+    monkeypatch.setattr(os, "chown", no_chown)
+    rows = mod.build_rows()
+    _check_feature(mod, rows, "Disable Brave Rewards")
+    out = tmp_path / "a" / "b" / "x.json"
+    ok, msg = mod.export_settings(rows, str(out))
+    assert ok, msg
+    assert json.loads(out.read_text(encoding="utf-8"))["Features"] == {"BraveRewardsDisabled": True}
+    assert log.read_text(encoding="utf-8").split() == ["initgroups", "setgid", "setuid"]
+
+
+@posix_only
+def test_export_permission_error_suggests_home(mod, monkeypatch, tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root can write the locked folder")
+    import pwd
+    me = pwd.getpwuid(os.getuid())
+    monkeypatch.delenv("SUDO_USER", raising=False)
+    monkeypatch.setenv("USER", me.pw_name)
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o500)
+    try:
+        ok, msg = mod.export_settings(mod.build_rows(), str(locked / "x.json"))
+    finally:
+        locked.chmod(0o700)
+    assert not ok
+    assert f"{me.pw_name} cannot write" in msg
+    assert os.path.join(me.pw_dir, "SlimBraveNeoSettings.json") in msg
+
+
+def test_import_caps_at_one_mib(mod, tmp_path):
+    assert mod.MAX_IMPORT_BYTES == 1024 * 1024
+    body = json.dumps({"Features": {"BraveRewardsDisabled": True}}).encode("utf-8")
+    path = tmp_path / "padded.json"
+    path.write_bytes(body + b" " * (mod.MAX_IMPORT_BYTES - len(body)))
+    rows = mod.build_rows()
+    ok, msg = mod.import_settings(rows, str(path))
+    assert ok, msg
+    assert _get_feature(mod, rows, "Disable Brave Rewards")["checked"] is True
+    path.write_bytes(body + b" " * (mod.MAX_IMPORT_BYTES - len(body) + 1))
+    ok, msg = mod.import_settings(mod.build_rows(), str(path))
+    assert not ok
+    assert "larger than 1 MiB" in msg
+
+
+@posix_only
+def test_import_reads_a_pipe(mod):
+    """`--import /dev/stdin` keeps working: nothing asks for a regular file."""
+    config = {"Features": {"BraveRewardsDisabled": True}}
+    r, w = os.pipe()
+    try:
+        os.write(w, json.dumps(config).encode("utf-8"))
+        os.close(w)
+        w = None
+        assert mod.read_json_file(f"/dev/fd/{r}") == config
+    finally:
+        os.close(r)
+        if w is not None:
+            os.close(w)
+
+
+def test_no_path_chown():
+    """Export and the profile scrub write as the user and the macOS stage dir
+    stays root's, so nothing changes owner by path any more."""
+    for name in ("slimbrave-linux.py", "slimbrave-mac.py"):
+        src = (ROOT / name).read_text(encoding="utf-8")
+        assert "os.chown(" not in src, name
+        assert "_chown_to_sudo_user" not in src, name
+
+
+@posix_only
+def test_repair_drops_to_user_under_su(mod, monkeypatch, tmp_path):
+    """A plain `su` leaves USER and no SUDO_USER: the scrub still forks to
+    drop to that user rather than rewriting their home as root."""
+    _fake_passwd(monkeypatch, {"alice": 1000})
+    monkeypatch.delenv("SUDO_USER", raising=False)
+    monkeypatch.setenv("USER", "alice")
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    forks, scrubbed = [], []
+
+    def refused_fork():
+        forks.append(1)
+        raise OSError("no fork in this test")
+
+    monkeypatch.setattr(os, "fork", refused_fork)
+    monkeypatch.setattr(mod, "_scrub_one_prefs", lambda p: scrubbed.append(p) or 2)
+    prefs = tmp_path / "Preferences"
+    prefs.write_text(json.dumps(LEAKED_PREFS))
+    assert mod._repair_one_prefs(str(prefs)) == 0
+    assert forks == [1]
+    assert scrubbed == []
+
+
+@posix_only
+@pytest.mark.parametrize("user", [None, "root"])
+def test_repair_as_root_without_an_invoking_user_scrubs_nothing(mod, monkeypatch, tmp_path, user):
+    """A root login or `su -`: nobody to drop to, so nothing is scrubbed
+    rather than scrubbed as root."""
+    monkeypatch.delenv("SUDO_USER", raising=False)
+    if user is None:
+        monkeypatch.delenv("USER", raising=False)
+    else:
+        monkeypatch.setenv("USER", user)
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    forks, scrubbed = [], []
+
+    def refused_fork():
+        forks.append(1)
+        raise OSError("no fork in this test")
+
+    monkeypatch.setattr(os, "fork", refused_fork)
+    monkeypatch.setattr(mod, "_scrub_one_prefs", lambda p: scrubbed.append(p) or 2)
+    prefs = tmp_path / "Default" / "Preferences"
+    prefs.parent.mkdir()
+    prefs.write_text(json.dumps(LEAKED_PREFS))
+    assert mod._repair_one_prefs(str(prefs)) == 0
+    assert mod._repair_user_data_dir(str(prefs)) == 0
+    assert forks == [] and scrubbed == []
+
+
+@needs_fork
+def test_repair_lists_profiles_in_the_child_and_forks_once(mod, monkeypatch, tmp_path):
+    """One drop per user-data dir, with the profile listing inside it, so
+    the parent never reads a directory in the user's home as root."""
+    user_data = tmp_path / "Brave-Browser"
+    for profile in ("Default", "Profile 1"):
+        (user_data / profile).mkdir(parents=True)
+        (user_data / profile / "Preferences").write_text(json.dumps(LEAKED_PREFS))
+    _fake_root_dropping_to_self(mod, monkeypatch, tmp_path / "drop.log")
+    monkeypatch.setattr(mod, "_is_brave_running", lambda *a: False)
+    real_fork, real_listdir = os.fork, os.listdir
+    forks, listed = [], []
+
+    def counting_fork():
+        forks.append(1)
+        return real_fork()
+
+    def watching_listdir(path="."):
+        listed.append(os.fspath(path))
+        return real_listdir(path)
+
+    monkeypatch.setattr(os, "fork", counting_fork)
+    monkeypatch.setattr(os, "listdir", watching_listdir)
+    inst = {"prefs_path": str(user_data / "Default" / "Preferences")}
+    # two records on one user-data dir still mean one drop
+    assert mod.repair_brave_prefs([inst, dict(inst)]) == (4, False)
+    assert forks == [1]
+    assert str(user_data) not in listed
+    for profile in ("Default", "Profile 1"):
+        after = json.loads((user_data / profile / "Preferences").read_text())
+        assert after["profile"]["content_settings"]["exceptions"]["braveShields"] == {}
 
 
 # ---------------------------------------------------------------------------
@@ -660,6 +978,37 @@ def test_detect_persist_mode_is_off_without_macos():
     assert MAC_MOD.detect_persist_mode() == "off"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="pwd and POSIX modes")
+def test_profile_stage_dir_stays_root_owned(monkeypatch, tmp_path):
+    """The staged profile changes owner never: its dir is 0755 and the file
+    0644, readable by the user's `open` and System Settings, writable by
+    root alone. `open` runs as the invoking user, by absolute path."""
+    if os.geteuid() == 0:
+        pytest.skip("as root SUDO_USER cannot name a non-root user here")
+    import pwd
+    import tempfile
+    me = pwd.getpwuid(os.getuid()).pw_name
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    calls = []
+
+    def recorder(cmd, **kw):
+        calls.append(list(cmd))
+        return type("R", (), {"returncode": 0, "stdout": b""})()
+
+    def no_chown(*args, **kwargs):
+        raise AssertionError("the stage dir must not change owner")
+
+    monkeypatch.setattr(MAC_DARWIN.subprocess, "run", recorder)
+    monkeypatch.setattr(os, "chown", no_chown)
+    monkeypatch.setenv("SUDO_USER", me)
+    assert MAC_DARWIN._install_profile_from_policy({"com.brave.Browser": {}}) == (True, "")
+    stage, = tmp_path.glob("slimbrave-neo-*")
+    assert stat.S_IMODE(stage.stat().st_mode) == 0o755
+    profile = stage / "slimbrave-neo-policy.mobileconfig"
+    assert stat.S_IMODE(profile.stat().st_mode) == 0o644
+    assert calls[0][:4] == ["/usr/bin/sudo", "-u", me, "/usr/bin/open"]
+
+
 # ---------------------------------------------------------------------------
 # Linux detection — Brave Origin
 #
@@ -832,9 +1181,10 @@ def test_running_check_names_the_origin_launcher(mod, monkeypatch):
     # comm of the bash launcher that stays alive around the browser is
     # brave-origin (12 chars, inside pgrep's 15-char cap); the browser
     # itself is brave, which the stable row already covers.
-    asked = []
+    asked, exes = [], []
 
     def fake_run(cmd, **kw):
+        exes.append(cmd[0])
         asked.append(cmd[-1])
         return type("R", (), {"returncode": 1})()
 
@@ -843,6 +1193,52 @@ def test_running_check_names_the_origin_launcher(mod, monkeypatch):
     inst = mod._make_installation(origin, plist_path="/x", prefs_path=None)
     assert mod._is_brave_running([inst]) is False
     assert asked == ["brave-origin"]
+    assert exes == ["/usr/bin/pgrep"]
+
+
+def test_running_check_without_pgrep(mod, monkeypatch):
+    """No pgrep at either fixed path (the Windows test leg, a minimal
+    container): not running, after trying both, and no PATH lookup."""
+    tried = []
+
+    def fake_run(cmd, **kw):
+        tried.append(cmd[0])
+        raise FileNotFoundError(cmd[0])
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    stable = mod._make_installation(mod.LINUX_CHANNELS[0], plist_path="/x", prefs_path=None)
+    assert mod._is_brave_running([stable]) is False
+    assert tried == list(mod.PGREP_PATHS)
+
+
+def test_subprocess_argv0_is_absolute():
+    """sudo can pass the caller's PATH through, so every helper program the
+    scripts run as root is named by absolute path."""
+    seen = {}
+    for script in ("slimbrave-linux.py", "slimbrave-mac.py"):
+        tree = ast.parse((ROOT / script).read_text(encoding="utf-8"))
+        runs = open_cmds = 0
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "run" and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "subprocess" and node.args
+                    and isinstance(node.args[0], ast.List) and node.args[0].elts
+                    and isinstance(node.args[0].elts[0], ast.Constant)
+                    and isinstance(node.args[0].elts[0].value, str)):
+                runs += 1
+                assert node.args[0].elts[0].value.startswith("/"), (script, node.lineno)
+            if isinstance(node, ast.Assign) and any(
+                    isinstance(t, ast.Name) and t.id == "open_cmd" for t in node.targets):
+                open_cmds += 1
+                first = node.value.elts[0]
+                assert isinstance(first, ast.Constant) and first.value.startswith("/"), (
+                    script, node.lineno)
+        seen[script] = (runs, open_cmds)
+    # the walk reaches what it checks: profiles x2, killall, and open_cmd
+    runs, open_cmds = seen["slimbrave-mac.py"]
+    assert runs >= 3 and open_cmds >= 1
+    for m in MODULES:
+        assert m.PGREP_PATHS and all(p.startswith("/") for p in m.PGREP_PATHS)
 
 
 # ---------------------------------------------------------------------------
@@ -3013,6 +3409,34 @@ def test_ps1_user_scope_registry_path_is_sid_aware():
     assert not re.search(r"^\$script:userReg\s*=\s*\"HKCU:", text, re.MULTILINE), (
         "$script:userReg hard-codes HKCU again"
     )
+
+
+def _ps1_function(text, name):
+    """One PS1 function's text, from its definition to the next one."""
+    m = re.search(rf"^function {re.escape(name)}\b", text, re.MULTILINE)
+    assert m, f"function {name} is missing from SlimBrave.ps1"
+    nxt = re.search(r"^function ", text[m.end():], re.MULTILINE)
+    return text[m.start():m.end() + nxt.start()] if nxt else text[m.start():]
+
+
+def test_ps1_prefs_repair_stays_in_the_invoking_account_and_skips_links():
+    """The elevated scrub used to walk every account in ProfileList and
+    follow any junction through a fixed temp name, so a standard user on a
+    shared PC could aim the admin's write anywhere. It now covers the
+    invoking account only, checks every path component for a reparse point
+    before the read and again before the rename, and writes through a fresh
+    random CreateNew file."""
+    text = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    assert "ProfileList" not in _ps1_function(text, "Get-UserAppDataRoots")
+    assert "ReparsePoint" in _ps1_function(text, "Test-NoReparsePoint")
+    one = re.sub(r"(?m)^\s*#.*$", "", _ps1_function(text, "Repair-OneBravePrefs"))
+    assert "CreateNew" in one
+    assert one.count("Test-NoReparsePoint") == 2
+    assert "$pref.slimbrave-tmp" not in one
+    user_root = _ps1_function(text, "Repair-OneUserRoot")
+    assert re.search(r"Repair-OneBravePrefs\s+\(Join-Path[^)]*\)\s+\$localAppData", user_root), (
+        "Repair-OneUserRoot does not pass its root to Repair-OneBravePrefs")
+    assert "user profiles on this PC" not in text
 
 
 def test_ps1_row_mousedown_uses_zone_of_for_the_expander():

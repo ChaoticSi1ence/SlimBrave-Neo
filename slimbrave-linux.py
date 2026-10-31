@@ -35,12 +35,16 @@ import tempfile
 POLICY_DIR = "/etc/brave/policies/managed"
 POLICY_FILE = os.path.join(POLICY_DIR, "slimbrave.json")
 
-# Directories a `--policy-file` argument is permitted to target. The flag
-# runs with root, so an unvalidated path combined with `--reset` would let a
-# permissive sudoers rule delete arbitrary files (e.g. `--policy-file
-# /etc/shadow --reset`). Legitimate use needs no other path. Brave reads
-# Linux policies only from /etc/brave/policies; it never reads Chromium's
-# /etc/chromium/policies, which this list still accepts.
+# Where a `--policy-file` argument may point. The flag runs with root, so an
+# unvalidated path combined with `--reset` would let a permissive sudoers
+# rule delete arbitrary files (e.g. `--policy-file /etc/shadow --reset`).
+# Two rules, both on the resolved path: the file sits directly in one of
+# these directories, never in a subdirectory, and its name is
+# slimbrave*.json, so a policy file another tool put there is out of reach.
+# Chromium reads a managed directory without descending into it, so neither
+# rule hides a file Brave would read. Brave reads Linux policies only from
+# /etc/brave/policies; it never reads Chromium's /etc/chromium/policies,
+# which this list still accepts.
 ALLOWED_POLICY_DIRS = (
     "/etc/brave/policies/managed",
     "/etc/chromium/policies/managed",
@@ -123,29 +127,36 @@ def is_origin_only(installations):
         for i in installations)
 
 
-def _user_home_for_brave():
-    """Return the home directory of the real user (the one running sudo)."""
-    sudo_user = os.environ.get("SUDO_USER") or os.environ.get("USER")
-    if not sudo_user or sudo_user == "root":
-        return None
-    home = os.path.expanduser(f"~{sudo_user}")
-    # expanduser returns the input unchanged when the user is unknown
-    if home.startswith("~"):
-        return None
-    return home
+def _invoking_user():
+    """Return (name, uid, gid, home) of the user who ran this, or None.
 
-
-def _chown_to_sudo_user(path):
-    """Return a root-created file to the invoking user (no-op without sudo)."""
-    sudo_user = os.environ.get("SUDO_USER")
-    if not sudo_user:
-        return
+    The one answer to "who is the user here": the prefs scrub, Export and
+    the macOS profile hand-off all act for this account. The name is
+    SUDO_USER, else USER, which a plain `su` to root leaves as the caller's.
+    None when neither is set, the name is root, pwd does not know it (or
+    there is no pwd, as on Windows), or it maps to uid 0, so nothing is ever
+    done as root, or in root's home, on its behalf.
+    """
+    name = os.environ.get("SUDO_USER") or os.environ.get("USER")
+    if not name or name == "root":
+        return None
     try:
         import pwd
-        user_info = pwd.getpwnam(sudo_user)
-        os.chown(path, user_info.pw_uid, user_info.pw_gid)
-    except (ImportError, KeyError, OSError):
-        pass
+        info = pwd.getpwnam(name)
+    except (ImportError, KeyError):
+        return None
+    if info.pw_uid == 0:
+        return None
+    return (name, info.pw_uid, info.pw_gid, info.pw_dir)
+
+
+def _user_home_for_brave():
+    """Return the invoking user's home directory (see _invoking_user).
+
+    Brave's profile lives under the invoking user's home, not root's.
+    """
+    identity = _invoking_user()
+    return identity[3] if identity else None
 
 
 def _channel_prefs_path(user_data_dir):
@@ -201,16 +212,20 @@ def _profile_prefs_paths(default_prefs_path):
     return paths or [default_prefs_path]
 
 
-def _is_within_allowed_policy_dir(path):
-    """Return True if `path`'s realpath lives under an allowed policy dir."""
-    real_path = os.path.realpath(path)
-    for allowed in ALLOWED_POLICY_DIRS:
-        real_allowed = (
-            os.path.realpath(allowed) if os.path.exists(allowed) else allowed
-        )
-        if real_path.startswith(real_allowed + os.sep):
-            return True
-    return False
+def _is_allowed_policy_file(path):
+    """True if `path` is a slimbrave*.json directly in an allowed policy dir.
+
+    Both rules run on the realpath, so a symlinked directory or file cannot
+    lead out of ALLOWED_POLICY_DIRS, and neither a subdirectory nor the
+    directory itself qualifies.
+    """
+    real = os.path.realpath(path)
+    parent, name = os.path.split(real)
+    allowed = {os.path.realpath(d) if os.path.exists(d) else d
+               for d in ALLOWED_POLICY_DIRS}
+    if parent not in allowed:
+        return False
+    return name.startswith("slimbrave") and name.endswith(".json")
 
 
 def _atomic_write(path, data, *, binary=False, mode=0o644):
@@ -927,10 +942,22 @@ def _enforce_groups(rows, features_map):
 # ---------------------------------------------------------------------------
 
 
+# Import reads the file you name as root, so it reads no more than a config
+# could ever need. A pipe such as /dev/stdin still works: nothing asks for a
+# regular file, the read just stops one byte past the cap.
+MAX_IMPORT_BYTES = 1024 * 1024
+
+
 def read_json_file(path):
-    """Read a JSON file, handling BOM and encoding from PS1 exports."""
+    """Read a JSON file, handling BOM and encoding from PS1 exports.
+
+    Raises OSError for a file over MAX_IMPORT_BYTES, which import_settings
+    reports as a read error.
+    """
     with open(path, "rb") as f:
-        data = f.read()
+        data = f.read(MAX_IMPORT_BYTES + 1)
+    if len(data) > MAX_IMPORT_BYTES:
+        raise OSError("file is larger than 1 MiB")
 
     # Detect BOM and decode accordingly
     if data[:2] == b"\xff\xfe":
@@ -1001,6 +1028,26 @@ def _singleton_lock_pid(prefs_path):
     return int(pid_part) if pid_part.isdigit() else None
 
 
+# pgrep by absolute path, never through PATH: sudo can pass the caller's
+# PATH through, and a script-only sudoers grant must not let it pick the
+# program root runs. macOS and procps install it in /usr/bin; /bin covers
+# Linux distributions that have not merged /usr.
+PGREP_PATHS = ("/usr/bin/pgrep", "/bin/pgrep")
+
+
+def _pgrep(name):
+    """Return the exit status of `pgrep -x name`, or None with no pgrep."""
+    for exe in PGREP_PATHS:
+        try:
+            return subprocess.run(
+                [exe, "-x", name],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            ).returncode
+        except FileNotFoundError:
+            continue
+    return None
+
+
 def _is_brave_running(installations=None):
     """True if any of the listed Brave installations have a live process."""
     if installations is None:
@@ -1019,31 +1066,94 @@ def _is_brave_running(installations=None):
         # negative, so don't spend a process asking.
         if len(name) > 15:
             continue
-        try:
-            result = subprocess.run(
-                ["pgrep", "-x", name],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            if result.returncode == 0:
-                return True
-        except FileNotFoundError:
+        rc = _pgrep(name)
+        if rc is None:
             return False
+        if rc == 0:
+            return True
     return False
 
 
 def _sudo_user_identity():
-    """Return (name, uid, gid) of the invoking user, or None if there is none."""
-    sudo_user = os.environ.get("SUDO_USER")
-    if not sudo_user:
-        return None
+    """Return (name, uid, gid) of the invoking user, or None (_invoking_user)."""
+    identity = _invoking_user()
+    return identity[:3] if identity else None
+
+
+def _run_as_invoking_user(fn, *args, default):
+    """Call fn(*args) with the invoking user's rights; return its result.
+
+    As root with an invoking user to drop to, fn runs in a forked child
+    that takes on that user's groups, gid and uid first, so it can read,
+    create and replace only what the user could; its JSON-encoded result
+    comes back over a pipe. A failed fork or drop, an exception in fn, or
+    a reply that does not decode gives `default`, never a second try as
+    root. Without root, without an invoking user or without fork (Windows),
+    fn runs inline.
+    """
+    identity = _sudo_user_identity()
+    if identity is None or not hasattr(os, "fork") or os.geteuid() != 0:
+        return fn(*args)
+
+    name, uid, gid = identity
+    read_fd, write_fd = os.pipe()
     try:
-        import pwd
-        info = pwd.getpwnam(sudo_user)
-    except (ImportError, KeyError):
-        return None
-    if info.pw_uid == 0:
-        return None
-    return (sudo_user, info.pw_uid, info.pw_gid)
+        pid = os.fork()
+    except OSError:
+        os.close(read_fd)
+        os.close(write_fd)
+        return default
+
+    if pid == 0:
+        try:
+            os.close(read_fd)
+            try:
+                os.initgroups(name, gid)
+            except (AttributeError, OSError):
+                # Never keep root's supplementary groups: fall back to the
+                # primary group alone, and if even that fails the drop
+                # fails and fn never runs.
+                os.setgroups([gid])
+            os.setgid(gid)
+            os.setuid(uid)
+            data = json.dumps(fn(*args)).encode("utf-8")
+            while data:
+                data = data[os.write(write_fd, data):]
+        except BaseException:
+            pass  # nothing more is sent; a cut-off reply fails to decode
+        finally:
+            os._exit(0)
+
+    os.close(write_fd)
+    chunks = []
+    try:
+        # Read to EOF before waiting: a reply larger than the pipe buffer
+        # would otherwise block the child, and the wait with it.
+        while True:
+            chunk = os.read(read_fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except OSError:
+        chunks = []
+    finally:
+        os.close(read_fd)
+    os.waitpid(pid, 0)
+    try:
+        return json.loads(b"".join(chunks))
+    except ValueError:
+        return default
+
+
+def _scrub_as_invoking_user(scrub, path):
+    """Run a prefs scrub as the invoking user; 0 when there is none.
+
+    As root with nobody to drop to (a root login, `su -`), nothing is
+    scrubbed: rewriting a home directory as root is what the drop avoids.
+    """
+    if getattr(os, "geteuid", lambda: -1)() == 0 and _sudo_user_identity() is None:
+        return 0
+    return _run_as_invoking_user(scrub, path, default=0)
 
 
 def _repair_one_prefs(pref_path):
@@ -1057,53 +1167,21 @@ def _repair_one_prefs(pref_path):
     entries removed (0 on any failure, so a broken drop repairs nothing
     rather than repairing as root).
     """
-    identity = _sudo_user_identity()
-    if identity is None or not hasattr(os, "fork") or os.geteuid() != 0:
-        return _scrub_one_prefs(pref_path)
+    return _scrub_as_invoking_user(_scrub_one_prefs, pref_path)
 
-    name, uid, gid = identity
-    read_fd, write_fd = os.pipe()
-    try:
-        pid = os.fork()
-    except OSError:
-        os.close(read_fd)
-        os.close(write_fd)
-        return 0
 
-    if pid == 0:
-        removed = 0
-        try:
-            os.close(read_fd)
-            try:
-                os.initgroups(name, gid)
-            except (AttributeError, OSError):
-                pass  # supplementary groups are best-effort
-            os.setgid(gid)
-            os.setuid(uid)
-            removed = _scrub_one_prefs(pref_path)
-        except BaseException:
-            removed = 0
-        finally:
-            try:
-                # Decimal, not a raw byte: a single byte wraps at 256 and
-                # would report a large scrub as 0. Well under PIPE_BUF, so
-                # the write is atomic and one read gets all of it.
-                os.write(write_fd, str(removed).encode("ascii"))
-            except OSError:
-                pass
-            os._exit(0)
+def _repair_user_data_dir(default_prefs_path):
+    """Scrub every profile of one user-data dir in a single drop.
 
-    os.close(write_fd)
-    try:
-        reply = os.read(read_fd, 32)
-    except OSError:
-        reply = b""
-    os.close(read_fd)
-    os.waitpid(pid, 0)
-    try:
-        return int(reply)
-    except ValueError:
-        return 0
+    The child lists the profiles as well, so root never reads a directory
+    inside the user's home. Returns the number of entries removed.
+    """
+    return _scrub_as_invoking_user(_scrub_user_data_dir, default_prefs_path)
+
+
+def _scrub_user_data_dir(default_prefs_path):
+    """List a user-data dir's profiles and scrub each, as the caller."""
+    return sum(_scrub_one_prefs(p) for p in _profile_prefs_paths(default_prefs_path))
 
 
 def _scrub_one_prefs(pref_path):
@@ -1145,10 +1223,6 @@ def _scrub_one_prefs(pref_path):
     except OSError:
         return 0
 
-    # Normally a no-op: _repair_one_prefs' fork already dropped to this
-    # user, so the file never changed hands. Kept for the inline path.
-    _chown_to_sudo_user(pref_path)
-
     return removed
 
 
@@ -1164,11 +1238,15 @@ def repair_brave_prefs(installations=None):
     total = 0
     seen = set()
     for inst in installations:
-        for path in _profile_prefs_paths(inst.get("prefs_path")):
-            if path in seen:
-                continue
-            seen.add(path)
-            total += _repair_one_prefs(path)
+        prefs_path = inst.get("prefs_path")
+        if not prefs_path:
+            continue
+        # One drop per user-data dir, which holds every profile's folder.
+        user_data = os.path.dirname(os.path.dirname(prefs_path))
+        if user_data in seen:
+            continue
+        seen.add(user_data)
+        total += _repair_user_data_dir(prefs_path)
     return (total, running)
 
 
@@ -1448,17 +1526,38 @@ def export_settings(rows, path):
         if dns_template and dns_mode in ("custom", "secure", "automatic"):
             settings["DnsTemplates"] = dns_template
 
+    # Written as the invoking user, not as root: the file and any folders
+    # it needs are theirs from the start, and a path they could not write
+    # themselves fails instead of being created with root's rights.
+    text = json.dumps(settings, indent=4)
+    ok, msg = _run_as_invoking_user(
+        _write_export, path, text,
+        default=[False, "Export failed: could not write as the invoking user"])
+    return ok, msg
+
+
+def _write_export(path, text):
+    """Create the export file and its folders; returns [ok, message]."""
     try:
         out_dir = os.path.dirname(path)
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
-        _atomic_write(path, json.dumps(settings, indent=4))
-        # Running as root: hand the export back to the invoking user so it
-        # isn't a root-owned file stranded in their home directory.
-        _chown_to_sudo_user(path)
-        return True, f"Exported to {path}"
+        _atomic_write(path, text)
+    except PermissionError as e:
+        home = _user_home_for_brave()
+        if hasattr(os, "geteuid") and os.geteuid() != 0 and home:
+            # The TUI prompt does not expand ~, so the hint spells it out.
+            import pwd
+            try:
+                who = pwd.getpwuid(os.getuid()).pw_name
+            except KeyError:
+                who = f"uid {os.getuid()}"
+            suggestion = os.path.join(home, "SlimBraveNeoSettings.json")
+            return [False, f"Export failed: {who} cannot write {path}; try {suggestion}"]
+        return [False, f"Export failed: {e}"]
     except OSError as e:
-        return False, f"Export failed: {e}"
+        return [False, f"Export failed: {e}"]
+    return [True, f"Exported to {path}"]
 
 
 def _parse_imported_features(features_obj):
@@ -1765,7 +1864,8 @@ BUTTON_DESC = {
     "Import": "Load a settings file - a preset from Presets/ or an earlier "
               "export - into the list. Nothing is written until Apply.",
     "Export": "Save the current selections as JSON that Import, and the "
-              "other platforms' scripts, read back.",
+              "other platforms' scripts, read back. Under sudo the file is "
+              "written as you, not root, so pick a folder you can write to.",
     "Apply": "Write the selected policies where Brave reads them at "
              "startup. A running Brave picks them up when it restarts.",
     "Reset": "Remove the policy this tool wrote, so Brave returns to its "
@@ -2857,9 +2957,9 @@ if __name__ == "__main__":
 
     override_installations = None
     if args.policy_file:
-        if not _is_within_allowed_policy_dir(args.policy_file):
+        if not _is_allowed_policy_file(args.policy_file):
             print(
-                "--policy-file must resolve to a path inside one of: "
+                "--policy-file must be a slimbrave*.json file directly inside one of: "
                 + ", ".join(ALLOWED_POLICY_DIRS)
             )
             sys.exit(2)

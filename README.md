@@ -409,9 +409,9 @@ The Windows PowerShell script is GUI-only: it has no user-facing flags. It decla
 | Flag | Description |
 |------|-------------|
 | `--import PATH` | Import a SlimBrave Neo JSON config and apply policies |
-| `--export PATH` | Export current policy to a SlimBrave Neo JSON config |
+| `--export PATH` | Export current policy to a SlimBrave Neo JSON config, written with your own account's rights (pick a path you can write) |
 | `--reset` | Remove the managed policy file |
-| `--policy-file PATH` | Override policy file path |
+| `--policy-file PATH` | Override the policy file: a `slimbrave*.json` directly in `/etc/brave/policies/managed` (Linux), or `com.brave.Browser[.beta\|.nightly].plist` directly in `/Library/Managed Preferences` or `/Library/Preferences` (macOS); anything else is refused |
 | `--doh-templates URL` | Set custom DNS-over-HTTPS template URL |
 | `--channels LIST` | Comma-separated channels to target (`stable,beta,nightly`; Linux also accepts `dev`, `origin`, `origin-beta` and `origin-nightly`). Default `auto` = all detected. macOS writes one plist per channel; Linux always shares a single policy file. |
 | `--persist MODE` | **macOS only** (`slimbrave-mac.py`). `off` (plist only; may reset after reboot on macOS 13+) or `on` (install an Apple Configuration Profile via System Settings; durable, Apple-recommended). Omitted = reuse whatever mode is currently installed; falls back to `off` if nothing is. `slimbrave-linux.py` does not accept this flag at all and exits 2 if it is passed; `slimbrave-mac.py` run on Linux accepts only `off`, because `/etc/brave/policies` is already durable. |

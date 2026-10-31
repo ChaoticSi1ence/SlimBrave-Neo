@@ -58,7 +58,7 @@ jobs:
             policy: /etc/brave/policies/managed/slimbrave-smoke.json
           - os: macos-latest
             script: slimbrave-mac.py
-            policy: /Library/Preferences/slimbrave-smoke.plist
+            policy: /Library/Preferences/com.brave.Browser.plist
     steps:
       - uses: actions/checkout@v7
       # tmux is the terminal here: a real emulator at 80x24, driven with
@@ -69,8 +69,8 @@ jobs:
         run: command -v tmux >/dev/null || brew install tmux
       # The scripts refuse to run without root; the runners grant sudo
       # without a password. The TUI is quit without Apply, so it writes
-      # nothing, and the policy path only has to sit inside the script's
-      # allowed directories to get past its own path check.
+      # nothing, and the policy path only has to pass the script's own
+      # directory and file-name check to get past it.
       - run: python3 tests/tui_smoke.py ${{ matrix.script }} ${{ matrix.policy }}
 
   powershell:

@@ -79,17 +79,19 @@ not append.
   macOS every Apply and Reset first runs `profiles remove` on any installed
   SlimBrave profile and deletes earlier `slimbrave-neo-*` staging dirs; a
   persist-`off` Apply and a Reset then run `killall cfprefsd`; persist `on`
-  stages a `.mobileconfig` in a new `slimbrave-neo-*` temp dir and opens
-  System Settings for the user to approve it.
+  stages a `.mobileconfig` in a new root-owned `slimbrave-neo-*` temp dir and
+  opens System Settings for the user to approve it.
 - The one write to a file Brave owns is the prefs repair (since v1.4.1,
   `80d461f`, issue #2): every Apply and Reset deletes the `http://*,*` and
   `https://*,*` entries of `profile.content_settings.exceptions.braveShields`
   from each `Default` / `Profile *` `Preferences`. `SlimBrave.ps1` does this
-  for every account with Brave data (`ProfileList`, `S-1-5-21-*`) under
-  `Brave-Browser{,-Beta,-Nightly,-Dev}`, and not at all while `brave.exe`
-  runs; the Python scripts do it only in the invoking user's home
-  (`$SUDO_USER`, else `$USER`) for the targeted channels, even while Brave
-  runs, with a warning that Brave will overwrite it. These scheme-wide
+  for the invoking account only (the `LOCALAPPDATA` its elevated relaunch
+  forwards) under `Brave-Browser{,-Beta,-Nightly,-Dev}`, skips any profile
+  reached through a junction or symbolic link, and does nothing while
+  `brave.exe` runs; the Python scripts do it only in the invoking user's home
+  (`$SUDO_USER`, else `$USER`), in a child process dropped to that user,
+  profile listing included, for the targeted channels, even while Brave runs,
+  with a warning that Brave will overwrite it. These scheme-wide
   exceptions kept Shields off after the Shields list was removed; no
   SlimBrave version writes them itself (see Cross-cutting).
 - Three implementations kept in lockstep by tests: `SlimBrave.ps1` (Windows,
@@ -1401,11 +1403,28 @@ Watch list, each with the trigger that turns it into work:
     capture `brave://net-export` while typing a saved password on another
     site, and see whether the `clientreport/login` request goes to
     `sb-ssl.brave.com` and gets a verdict.
+  - SlimBrave's own elevated file handling. On Linux (and on a Mac as an
+    admin, with `slimbrave-mac.py` in its place),
+    `sudo python3 slimbrave-linux.py --import Presets/<x>.json --export ~/new/dir/x.json`
+    leaves `~/new/dir` and `x.json` owned by you, `--export /etc/x.json`
+    fails and suggests a path in your home, and
+    `echo '<config>' | sudo python3 slimbrave-linux.py --import /dev/stdin`
+    still applies. On macOS 13+,
+    `sudo python3 slimbrave-mac.py --import <preset> --persist on` opens the
+    profile from its root-owned `0755` stage dir and System Settings >
+    General > Device Management installs it (read access should be enough;
+    unverified). On Windows 10 or 11 under Windows PowerShell 5.1, Apply and
+    Reset scrub a profile carrying both Shields entries and leave no
+    `Preferences.slimbrave-*` file, a profile whose `User Data` is a junction
+    is skipped, and a second account carrying the entries is untouched.
   - Optional: `PrintingEnabled` = false, then Screenshot (Ctrl+Shift+S) >
     Full page on a docs.google.com document: no image, and the tool stays
     usable afterwards.
   - Optional: `DefaultNotificationsSetting` = 3, allow the prompt on a test
     site, then run `new Notification('x')`: nothing shows.
+  - Optional: on Debian, `su -c 'python3 slimbrave-linux.py --reset'` against
+    a profile seeded with the leaked Shields entries leaves `Preferences`
+    owned by the user (the plain-`su` identity, `USER`).
   - Optional, since the source is unambiguous: with
     `ExtensionInstallTypeBlocklist` = `["command_line"]`, an extension passed
     with `--load-extension` does not appear in `brave://extensions`, while
