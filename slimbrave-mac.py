@@ -755,8 +755,6 @@ CATEGORIES = [
 
             {"name": "Isolate Subdomains in Separate Processes", "key": "OriginKeyedProcessesEnabled", "value": True, "desc": "Puts each origin (for example mail.example.com and docs.example.com) in its own process rather than one per site, for stronger protection against Spectre-style leaks between subdomains. Uses more processes and memory. Takes effect after a restart. A brave://flags setting overrides it."},
 
-            # NetworkServiceSandboxEnabled is chrome.win / chrome.linux only;
-            # it is appended below when this script runs on Linux.
             # DynamicCodeSettings is chrome.win only: SlimBrave.ps1 alone offers it.
         ],
     },
@@ -918,10 +916,6 @@ CATEGORIES = [
 # running platform rather than `not IS_MAC` so the row only appears where
 # Brave actually honours it. Index 0 of Performance & Bloat matches the
 # position it occupies in slimbrave-linux.py and SlimBrave.ps1.
-# NetworkServiceSandboxEnabled is chrome.win + chrome.linux only too: macOS
-# always sandboxes the network service and is not in its supported_on. It
-# is appended last to Privacy & Security, so the order matches
-# slimbrave-linux.py.
 # BraveVPNDisabled works the other way round: honoured on macOS, compiled
 # out of Linux builds. On Linux the row keeps its key and value but takes
 # the same label and description note slimbrave-linux.py gives it.
@@ -931,10 +925,6 @@ if sys.platform.startswith("linux"):
             _cat["features"].insert(0, {"name": "Disable Background Mode",
                                         "key": "BackgroundModeEnabled", "value": False,
                                         "desc": "Stops Brave from staying open in the background after its last window closes, which it does only while an installed extension asks to run in the background. Without one, the policy only locks off 'Continue running background apps when Brave is closed' (brave://settings/system)."})
-        if _cat["name"] == "Privacy & Security":
-            _cat["features"].append({"name": "Sandbox the Network Service",
-                                     "key": "NetworkServiceSandboxEnabled", "value": True,
-                                     "desc": "Runs Brave's network process in the OS sandbox, which Brave leaves off by default. Ignored on Windows on ARM and before Windows 10 20H1, and after a failed sandboxed start until the next major update. On Linux, switched off for good the first time a site asks for Kerberos (Negotiate) sign-in."})
         for _feat in _cat["features"]:
             if _feat["key"] == "BraveVPNDisabled":
                 _feat["name"] = "Disable Brave VPN (no effect on Linux builds)"

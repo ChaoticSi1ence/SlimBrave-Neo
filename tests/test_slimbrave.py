@@ -70,13 +70,12 @@ MAC_DARWIN = _load_as_darwin("slimbrave_mac_darwin", "slimbrave-mac.py")
 PRESETS = sorted((ROOT / "Presets").glob("*.json"))
 
 # Keys presets may contain that are deliberately absent on some platforms;
-# the import silently skips them there. BackgroundModeEnabled and
-# NetworkServiceSandboxEnabled are chrome.win / chrome.linux only in
-# Chromium (see AUDIT.md), so the mac script exposes them only when it runs
-# on Linux. DynamicCodeSettings is chrome.win only, so SlimBrave.ps1 alone
-# offers it and neither Python script has the row.
-PLATFORM_OMITTED_KEYS = {"BackgroundModeEnabled", "NetworkServiceSandboxEnabled",
-                         "DynamicCodeSettings"}
+# the import silently skips them there. BackgroundModeEnabled is
+# chrome.win / chrome.linux only in Chromium (see AUDIT.md), so the mac
+# script exposes it only when it runs on Linux. DynamicCodeSettings is
+# chrome.win only, so SlimBrave.ps1 alone offers it and neither Python
+# script has the row.
+PLATFORM_OMITTED_KEYS = {"BackgroundModeEnabled", "DynamicCodeSettings"}
 
 
 @pytest.fixture(params=MODULES, ids=["linux", "mac"])
@@ -3151,8 +3150,8 @@ def test_ps1_embedded_preset_names_match_files():
 # undoes the preset's fingerprinting pin), ChromeVariations left
 # Balanced Privacy and Developer (AUDIT ChromeVariations row), and Maximum
 # Privacy gained the new engine and process-isolation hardening
-# (XSLTEnabled, DefaultJavaScriptOptimizerSetting, SitePerProcess,
-# OriginKeyedProcessesEnabled, NetworkServiceSandboxEnabled). Balanced
+# (XSLTEnabled, DefaultJavaScriptOptimizerSetting, SitePerProcess and
+# OriginKeyedProcessesEnabled). Balanced
 # Privacy and Maximum Privacy then gained ExtensionInstallTypeBlocklist,
 # those two and Developer gained AccessibilityImageLabelsEnabled, and Strict
 # Parental Controls gained its history and safety locks
@@ -3268,7 +3267,6 @@ V195_PRESET_POLICIES = {
         "ExtensionInstallTypeBlocklist": ['command_line'],
         "MetricsReportingEnabled": False,
         "NetworkPredictionOptions": 2,
-        "NetworkServiceSandboxEnabled": True,
         "OriginKeyedProcessesEnabled": True,
         "PasswordLeakDetectionEnabled": False,
         "PasswordManagerEnabled": False,
@@ -4990,8 +4988,7 @@ def _features(module):
     return [f for cat in module.CATEGORIES for f in cat["features"]]
 
 
-@pytest.mark.parametrize("key,value", [("BackgroundModeEnabled", 0),
-                                       ("NetworkServiceSandboxEnabled", 1)])
+@pytest.mark.parametrize("key,value", [("BackgroundModeEnabled", 0)])
 def test_the_mac_scripts_linux_only_rows_carry_their_descriptions(key, value):
     """slimbrave-mac.py adds the chrome.win / chrome.linux rows at import
     time when it runs on Linux, outside the table literal - so the parity

@@ -60,7 +60,6 @@
         "XSLTEnabled": false,
         "DefaultJavaScriptOptimizerSetting": 2,
         "SitePerProcess": true,
-        "OriginKeyedProcessesEnabled": true,
-        "NetworkServiceSandboxEnabled": true
+        "OriginKeyedProcessesEnabled": true
     }
 }

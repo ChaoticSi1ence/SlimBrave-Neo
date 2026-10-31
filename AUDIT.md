@@ -130,25 +130,23 @@ not append.
   `--doh-templates`, the policy file read at launch, or text typed under
   `custom`/`secure` before switching mode; their UI then greys the field and
   cannot clear it (What's next). Three exceptions by design:
-  `slimbrave-mac.py` on macOS has no `BackgroundModeEnabled` or
-  `NetworkServiceSandboxEnabled` row and ignores those keys on import
-  without a note; only `SlimBrave.ps1` offers `DynamicCodeSettings`
+  `slimbrave-mac.py` on macOS has no `BackgroundModeEnabled` row and ignores
+  that key on import without a note; only `SlimBrave.ps1` offers `DynamicCodeSettings`
   (`chrome.win` only), which the Python scripts neither offer nor import,
   also without a note; on a Linux machine whose only Brave is Origin, the
   Python scripts leave the 13 `ORIGIN_BUILTIN_KEYS` unmanaged on import,
   with a note, and out of export.
-- **Inventory: 90 rows over 85 distinct keys** (`ChromeVariations`,
+- **Inventory: 89 rows over 84 distinct keys** (`ChromeVariations`,
   `IncognitoModeAvailability`, `DefaultBraveReferrersSetting`,
   `HardwareAccelerationModeEnabled` and `SafeBrowsingProtectionLevel` have
   two rows each), plus `DnsOverHttpsMode` and `DnsOverHttpsTemplates` from
-  the DNS section — 87 keys written, 27 Brave and 60 Chromium
-  (`slimbrave-linux.py`). Machines differ: `SlimBrave.ps1` has 91 rows over
-  86 keys (88 written), adding the Windows-only `DynamicCodeSettings`;
+  the DNS section — 86 keys written, 27 Brave and 59 Chromium
+  (`slimbrave-linux.py`). Machines differ: `SlimBrave.ps1` has 90 rows over
+  85 keys (87 written), adding the Windows-only `DynamicCodeSettings`;
   `slimbrave-mac.py` on macOS has 88 rows over 83 keys (85 written), since
-  `BackgroundModeEnabled` and `NetworkServiceSandboxEnabled` are
-  `chrome.win` / `chrome.linux` only; on a Linux machine where every Brave
+  `BackgroundModeEnabled` is `chrome.win` / `chrome.linux` only; on a Linux machine where every Brave
   found is Origin (and no `--policy-file`), the Python scripts mark the 13
-  `ORIGIN_BUILTIN_KEYS` rows inert and write at most 74. Seven categories:
+  `ORIGIN_BUILTIN_KEYS` rows inert and write at most 73. Seven categories:
   Telemetry & Reporting, Privacy & Security, Site Permissions, Access
   Controls, Brave Features, Shields & Content Protection, Performance &
   Bloat. Six presets, all derived from the same tables.
@@ -423,12 +421,11 @@ Dispatch for every row is `factory` unless the Notes say otherwise.
 | ExternalProtocolDialogShowAlwaysOpenCheckbox | ✅ | cr79 | bool | false | desktop (factory `:2096-2098`, in the `!IS_ANDROID && !IS_CHROMEOS` block `:2045-2132` at 156.0.8078.80) into `external_protocol_dialog.show_always_open_checkbox`; restart per YAML, but the dialog reads the pref each time it opens (`chrome/browser/ui/views/external_protocol_dialog.cc:157-169`), so the next prompt follows it. `false` drops the per-origin 'Always allow' checkbox, which Chromium calls an opt-in to relaxed security (`:159-164`). It does not revoke pairs remembered earlier: `GetBlockState` still returns `DONT_BLOCK` for them (`chrome/browser/external_protocol/external_protocol_handler.cc:441-458`), so the YAML's 'prompted each time' holds only for new pairs. In Brave that includes `mailto:`: brave-core's rewrite drops upstream's mailto fast path (`rewrite/chrome/browser/external_protocol/external_protocol_handler.cc.yaml:15-17`, `v1.98.60` through master) and brave-core#39636 (1.97) made its 'Always allow' stick (brave-browser#16927), so with `false` every mailto link prompts every time. Hardening: CIS Google Chrome benchmark L2 item 2.45 (Tenable's index). No brave-core override of the dialog or pref, no Griffin study. Opt-in, in no preset |
 | SitePerProcess | ✅ | cr63 | bool | true | lock only; every site already gets its own process in Brave on desktop. `kSitePerProcess` is on by default off Android (156.0.8078.80 `chrome/common/chrome_features.cc:1700-1706`), and desktop enforces no memory threshold (`components/site_isolation/site_isolation_policy.cc:42-57`, Android only). brave-core uses `kDisableSiteIsolation` only in two browser tests (`v1.98.64`; nothing on `1.99.x` or master), and there is no Griffin study. A managed `true` appends `--site-per-process` at startup (`chrome/browser/chrome_browser_main.cc:1395-1398`; `IsEnterprisePolicyApplicable()` is true on desktop, `components/site_isolation/site_isolation_policy.cc:237-249`). `UseDedicatedProcessesForAllSites()` checks that switch before the opt-out (`content/public/browser/site_isolation_policy.cc:85-92`), so `brave://flags#site-isolation-trial-opt-out` and `--disable-site-isolation-trials` (`chrome/browser/about_flags.cc:1248-1252`) stop working. The opt-out still turns off partial-isolation extras such as isolated sandboxed iframes. `false` turns nothing off on desktop. Restart; browser-wide. Keeps `OriginKeyedProcessesEnabled` effective, since that key needs site-per-process. Maximum Privacy only |
 | OriginKeyedProcessesEnabled | ✅ | cr140 | bool | true | restart, browser-wide (factory `:654-656` in the non-Android block at 156.0.8078.80; local state `site_isolation.origin_keyed_processes_enabled`). `kOriginKeyedProcessesByDefault` is off at 156.0.8078.80 (`content/public/common/content_features.cc:875`), 157.0.8103.30 and main, with no testing-config trial, no brave-core override and no Griffin study. So `true` moves Brave from one process per site to one per origin for pages that are origin-keyed agent clusters by default; sites sending `Origin-Agent-Cluster: ?0` stay site-keyed. A managed or recommended value wins (`chrome/browser/chrome_content_browser_client.cc:2749-2773`) unless `brave://flags#origin-keyed-processes-by-default` or the command line overrides the feature, so it sets a default, not a lock. The YAML is recommended-only (`can_be_mandatory: false`), but `SimplePolicyHandler` checks no level (only the schema-validating handlers do, `components/policy/core/browser/configuration_policy_handler.cc:576-582,632-638`), and upstream's pref-mapping test asserts the mandatory value (`components/policy/core/browser/policy_pref_mapping_test.cc:823-831`). Needs site-per-process (`content/public/browser/site_isolation_policy.cc:247-249`; see SitePerProcess), and does nothing if `OriginAgentClusterDefaultEnabled` is false (`chrome_content_browser_client.cc:8722-8731`). Desktop has no origin-isolation memory limit (`kOriginIsolationMemoryThreshold` is off, `components/site_isolation/features.cc:122-123`): the cost is more processes and memory. brave-core runs `OriginKeyedProcessByDefaultBrowserTest` and skips only `OriginAgentClusterBrowserTest.*` and `OriginAgentClusterDisabledBrowserTest.*`, undiagnosed (`test/filters/browser_tests.filter:3043-3044` at `v1.98.64`). Maximum Privacy only |
-| NetworkServiceSandboxEnabled | ⚠️ Win/Linux only | cr96 (Win) / cr117 (Linux) | bool | true | **Windows and Linux only** (`chrome.win:96-`, `chrome.linux:117-`; the factory entry sits under a Windows/Linux guard, 156.0.8078.80 `:1988-1992`); restart, browser-wide (local state `net.network_service_sandbox`). Without it Brave's network process runs unsandboxed. `kNetworkServiceSandbox` is off by default (`sandbox/policy/features.cc:20` at 156.0.8078.80 and 157.0.8103.30), and Chrome turns it on only through the Windows-only `NetworkServiceSandboxWindows` trial (`testing/variations/fieldtrial_testing_config.json:12509-12520`). Brave never gets that trial (`disable_fieldtrial_testing_config = true`, `build/args/brave_defaults.gni:11` at `v1.98.64`), and there is no brave-core override (`v1.98.64`, `1.99.x`, master) or Griffin study. The managed value decides (`chrome/browser/net/system_network_context_manager.cc:292-297`; content applies it, `content/browser/service_host/service_process_host_impl.cc:33-35`), with three exceptions. After a failed sandboxed launch or a crash before IPC, it runs unsandboxed until the next Chromium major (`system_network_context_manager.cc:260-266,396-406,410-442`). It is ignored on Windows on ARM and before 10 20H1 (`sandbox/policy/features.cc:138-162`). On Linux it is off for good once any server sends `WWW-Authenticate: Negotiate`: the default `AuthSchemes` includes `negotiate` (`system_network_context_manager.cc:724-725`), and the first challenge sets `net.received_http_auth_negotiate_headers`, which nothing clears (`services/network/network_context.cc:679-686`; `system_network_context_manager.cc:610-614,279-283`). macOS always sandboxes it (`sandbox/policy/features.cc:166-168`). The installer grants the AppContainer ACL the sandbox needs (`chrome/installer/setup/install_worker.cc:991-1000`; brave-core keeps it by including the upstream file at `chromium_src/chrome/installer/setup/install_worker.cc:215`). brave-core skips the upstream Enabled-case test on Windows (`test/filters/browser_tests-win.filter:156` at `v1.98.64`; `1faa83314f` added it as passing locally but failing on CI) and skips `NetworkServiceRestartsFailingLaunches` on all platforms (`browser_tests.filter:3241`). Not yet runtime-checked: the row ships only if `brave://sandbox` on Windows x64 shows the Network Service sandboxed (What's next, Runtime checks owed). `slimbrave-mac.py` builds the row only under `sys.platform.startswith("linux")`, as for BackgroundModeEnabled. Maximum Privacy only |
 | DynamicCodeSettings | ⚠️ Windows only | cr127 | int enum | 1 (`DisabledForBrowser`) | **Windows only, and only `SlimBrave.ps1` offers it** (`chrome.win:127-`; factory `:1942-1944` inside the Windows block at 156.0.8078.80; local state `dynamic_code_settings`); restart, browser-wide. A managed `1` applies Arbitrary Code Guard (`MITIGATION_DYNAMIC_CODE_DISABLE_WITH_OPT_OUT`) to the browser process whatever `kBrowserDynamicCodeDisabled` says (`chrome/browser/chrome_browser_main_win.cc:397-427`, "Policy intentionally takes precedence over the feature"; run from `PostEarlyInitialization`, `:661-662`), except under `--single-process`, `--in-process-gpu` or `--no-sandbox`. The feature is off by default (`chrome/browser/browser_features.cc:184` at 156.0.8078.80 and 157.0.8103.30). Chrome turns it on only through the Windows `BrowserDynamicCodeDisabled` trial (`testing/variations/fieldtrial_testing_config.json:3304-3317`), which Brave never gets. brave-core's `browser_features.cc` patch and rewrite leave the feature alone, its `ChromeBrowserMainParts` shim does not override `PostEarlyInitialization` (`chromium_src/chrome/browser/chrome_browser_main.h` at `v1.98.64`), and no Griffin study touches it. The YAML warns of third-party code that must run in the browser process (certain printer drivers). Such code can fail or crash Brave, so the row is opt-in and in no preset. The Python scripts neither offer nor import it |
 
 Every key above fetches 200 at Chromium 156.0.8078.80 (whose policy
 definitions are 156.0.8078.48's), at 157.0.8103.30 and at main
-`7b96745f7dfb` (158.0.8123.0), and all 61 YAML files are byte-identical
+`7b96745f7dfb` (158.0.8123.0), and all 60 YAML files are byte-identical
 across the three except `XSLTEnabled`'s, whose text moves the policy's
 removal from M164 at 156 to M176 at 157.0.8103.30 and main, and
 `AudioCaptureAllowed`'s, to which main adds `android:157-`; none is
@@ -458,8 +455,7 @@ master (see Sources and pins). Every Chromium-inherited key is cr111 or
 older except `ExtensionInstallTypeBlocklist` (cr120), `DynamicCodeSettings`
 (cr127), `DefaultJavaScriptOptimizerSetting` (cr133),
 `LocalNetworkAccessBlockedForUrls` (cr139), `OriginKeyedProcessesEnabled`
-(cr140) and `XSLTEnabled` (cr146), with `NetworkServiceSandboxEnabled` on
-Linux from cr117, and every Brave key cr142 or older except the three
+(cr140) and `XSLTEnabled` (cr146), and every Brave key cr142 or older except the three
 branch-probed rows (`EmailAliasesEnabled` and `PsstEnabled` cr147,
 `BraveLocalAIEnabled` cr149), so all are present in any Brave still
 receiving updates.
@@ -1180,11 +1176,28 @@ Watch list, each with the trigger that turns it into work:
   restates the default and locks nothing, because `brave://flags` still
   wins: drop the row then. Each pass also re-checks that a simple handler
   still applies a mandatory value for this recommended-only key.
-- `AuthSchemes` without `negotiate` on Linux — would stop any site from
-  cancelling `NetworkServiceSandboxEnabled` there
-  (`system_network_context_manager.cc:610-614` at 156.0.8078.80). Not
-  offered: it breaks Kerberos single sign-on. A candidate for a later
-  batch of keys.
+- `NetworkServiceSandboxEnabled` — withdrawn before v2.4.0 shipped. It is
+  dispatched on Windows and Linux (`chrome.win:96-`, `chrome.linux:117-`;
+  factory `:1988-1992` at 156.0.8078.80) and is the only way to sandbox
+  Brave's network process, which Brave leaves unsandboxed
+  (`kNetworkServiceSandbox` off by default, no brave-core override, no
+  Griffin study). But `brave://sandbox` on Brave Origin 1.98.62, Windows
+  x64, listed the Network Service as not sandboxed (2026-10-31; whether
+  the policy had taken effect was not confirmed), so under "Nothing dead
+  ships" the row left the three scripts, Maximum Privacy and the
+  Chromium table. Trigger: a Windows x64 check with the key applied and
+  Brave fully restarted that lists the Network Service as sandboxed
+  (AppContainer), with a Tor window still loading pages. Then add the row
+  back (the macOS script only under Linux, like `BackgroundModeEnabled`)
+  with v2.4.0's description: "Runs Brave's network process in the OS
+  sandbox, which Brave leaves off by default. Ignored on Windows on ARM
+  and before Windows 10 20H1, and after a failed sandboxed start until
+  the next major update. On Linux, switched off for good the first time
+  a site asks for Kerberos (Negotiate) sign-in." On Linux also check
+  `Seccomp: 2` in the network process's `/proc/<pid>/status`, on the
+  Flatpak build too. `AuthSchemes` without `negotiate` would keep it on
+  there (`system_network_context_manager.cc:610-614`) but breaks
+  Kerberos single sign-on.
 - `DynamicCodeSettings` — if Chromium turns `kBrowserDynamicCodeDisabled`
   on by default, the row only locks it; reword the description then.
 - `AudioSandboxEnabled` — read straight from the policy service, with no
@@ -1309,8 +1322,8 @@ Watch list, each with the trigger that turns it into work:
   built-ins. A key that matches no row (`AlternateErrorPagesEnabled`,
   `DNSInterceptionChecksEnabled`, `MediaRecommendationsEnabled`,
   `SafeBrowsingExtendedReportingEnabled`, `SafeSitesFilterBehavior`,
-  `ShoppingListEnabled`, `BackgroundModeEnabled` and
-  `NetworkServiceSandboxEnabled` on macOS, or `DynamicCodeSettings` in the
+  `ShoppingListEnabled`, `NetworkServiceSandboxEnabled`,
+  `BackgroundModeEnabled` on macOS, or `DynamicCodeSettings` in the
   Python scripts), or a legal value no row writes, is still dropped without
   a word. `SlimBrave.ps1` also matches key names (`Features` included),
   string values and list entries in any letter case. The Python scripts need
@@ -1334,9 +1347,9 @@ Watch list, each with the trigger that turns it into work:
   `MAC_CHANNELS` needs no Dev entry: Brave dropped Dev (brave-browser#25248)
   and its macOS Dev appcast stopped at 1.61.87 (2023-11).
 - Runtime checks owed on a shipping Brave:
-  - Before release, a Windows PowerShell 5.1 pass over Import, Re-sync and
-    Apply: v2.4.0's changes to `SlimBrave.ps1` have never run, since CI only
-    parses the script and runs PSScriptAnalyzer. On Windows 10 or 11:
+  - A Windows PowerShell 5.1 pass over Import, Re-sync and Apply, owed
+    because v2.4.0 shipped after only CI's parse and PSScriptAnalyzer run
+    and one clean launch on Windows. On Windows 10 or 11:
     (a) import a file whose Features name both `BraveShieldsDisabledForUrls`
     and `BraveShieldsEnabledForUrls` as `["https://*","http://*"]`, then the
     same with the two keys swapped: Force Shields On is staged both times and
@@ -1374,28 +1387,8 @@ Watch list, each with the trigger that turns it into work:
     blocking: start it from a mapped drive (with and without
     `EnableLinkedConnections`) and from a `subst` drive, under same-account
     and over-the-shoulder UAC, and record what each does.
-  - Before release, and the row ships only if it passes:
-    `NetworkServiceSandboxEnabled` = 1 on Windows x64 (Brave 1.98.6x or
-    1.99.x). Apply it with `SlimBrave.ps1`, restart Brave and open
-    `brave://sandbox`: the Network Service must be listed as sandboxed
-    (AppContainer), not unsandboxed. Also load a page in a Tor window with
-    Tor allowed, Brave's local SOCKS proxy path, which Chrome's trial never
-    covers; if Tor breaks, say so in the description before shipping. If the
-    service shows unsandboxed (the failed-launch fallback,
-    `system_network_context_manager.cc:260-266,396-406`), the row does not
-    ship: take it out of the three scripts, Maximum Privacy and the Chromium
-    table, and turn this item into a watch item saying the key is dispatched
-    on Windows and Linux (factory `:1988-1992` at 156.0.8078.80) and is the
-    only way to sandbox Brave's network process, but `brave://sandbox` on
-    Windows x64 showed it unsandboxed with the key set (date, version);
-    trigger: a later Brave shows it sandboxed, then add the row back as it
-    stands now. On Linux, before release if at all possible: the network
-    utility process shows `Seccomp: 2` in `/proc/<pid>/status`, pages load,
-    and a `.local` or intranet name still resolves; repeat on the Flatpak
-    build, where zypak replaces Chromium's sandbox. If Linux fails, keep the
-    row `SlimBrave.ps1`-only (both Python scripts omit it, like
-    `DynamicCodeSettings`) and record why here.
-  - Before release, `BrowserSignin`: does any shipping build carry a Google
+  - `BrowserSignin`, owed (v2.4.0 shipped without it): does any shipping
+    build carry a Google
     OAuth client? On Brave Release for Windows, macOS and Linux, with no
     `BrowserSignin` policy applied, turn on "Allow Google login for
     extensions" in `brave://settings/extensions`, restart, and read
@@ -1565,7 +1558,7 @@ with the reference that carries the detail. Newest first.
 
 | When | What | Reference |
 |---|---|---|
-| 2026-10-31 | Missed-items audit at Brave 1.98.64 / Chromium 156.0.8078.80 / brave-variations `c73faf3`, every proposal argued red vs blue. Inert-key rule rewritten: `ShoppingListEnabled`, `AlternateErrorPagesEnabled` and `DNSInterceptionChecksEnabled` move to Considered and rejected and the PS1 and macOS retired tables; lock-only rows say what Brave already does; about 30 descriptions corrected and side effects named (printing, DevTools, default browser, Force Incognito, Shields cookies; Web Notifications drops Ask). `ChromeVariations` leaves Balanced Privacy and Developer (it refuses Griffin's WebGL/WebGPU masking) and stays in Maximum Privacy; `AlwaysOpenPdfExternally` leaves Maximum Privacy and `HardwareAccelerationModeEnabled` leaves Performance Focused. 18 rows over 17 new keys (clipboard, local network, XSLT, JavaScript optimizer, microphone, camera, app-launch prompt, site isolation, subdomain processes, network-service sandbox, dynamic code (PS1), command-line extensions, Google image descriptions, YouTube Restricted Mode, Safe Browsing lock, no click-through on Safe Browsing or certificate warnings, history deletion lock); 49 more Considered-and-rejected rows (66 keys plus the 20 `RemoteAccessHost*` keys); cloud-only keys screened out. Code: Export written as the invoking user, `--policy-file` limited to a `slimbrave*.json` or Brave channel plist in a policy directory, helpers by absolute path, macOS keeps other tools' plist keys, fsync and umask fixes, import type checks and one group-conflict rule, PS1 Apply reports failed writes; four more leftovers deleted on Windows and macOS. 76 → 90 rows, 72 → 85 keys (`SlimBrave.ps1` 91 over 86) | v2.4.0 |
+| 2026-10-31 | Missed-items audit at Brave 1.98.64 / Chromium 156.0.8078.80 / brave-variations `c73faf3`, every proposal argued red vs blue. Inert-key rule rewritten: `ShoppingListEnabled`, `AlternateErrorPagesEnabled` and `DNSInterceptionChecksEnabled` move to Considered and rejected and the PS1 and macOS retired tables; lock-only rows say what Brave already does; about 30 descriptions corrected and side effects named (printing, DevTools, default browser, Force Incognito, Shields cookies; Web Notifications drops Ask). `ChromeVariations` leaves Balanced Privacy and Developer (it refuses Griffin's WebGL/WebGPU masking) and stays in Maximum Privacy; `AlwaysOpenPdfExternally` leaves Maximum Privacy and `HardwareAccelerationModeEnabled` leaves Performance Focused. 17 rows over 16 new keys (clipboard, local network, XSLT, JavaScript optimizer, microphone, camera, app-launch prompt, site isolation, subdomain processes, dynamic code (PS1), command-line extensions, Google image descriptions, YouTube Restricted Mode, Safe Browsing lock, no click-through on Safe Browsing or certificate warnings, history deletion lock; `NetworkServiceSandboxEnabled` withdrawn before release when `brave://sandbox` on Windows showed the network service unsandboxed); 49 more Considered-and-rejected rows (66 keys plus the 20 `RemoteAccessHost*` keys); cloud-only keys screened out. Code: Export written as the invoking user, `--policy-file` limited to a `slimbrave*.json` or Brave channel plist in a policy directory, helpers by absolute path, macOS keeps other tools' plist keys, fsync and umask fixes, import type checks and one group-conflict rule, PS1 Apply reports failed writes; four more leftovers deleted on Windows and macOS. 76 → 89 rows, 72 → 84 keys (`SlimBrave.ps1` 90 over 85) | v2.4.0, PR #31 |
 | 2026-10-24 | Pass at the new pins (Brave 1.98.60, Chromium 156.0.8078.48), every row re-read. `SafeBrowsingExtendedReportingEnabled` removed (capped at cr144; handler and pref mapping deleted before 156) and `SafeSitesFilterBehavior` removed (blocks nothing in Brave, which ships no Google API key, yet sends every URL to Google): 78 → 76 rows, 74 → 72 keys; `SlimBrave.ps1` Apply and Reset now delete retired keys it wrote. `AutofillAddressEnabled` / `AutofillCreditCardEnabled` → ⚠️ deprecated, still applied (kept by the maintainer's decision while `AutofillSettings` is inert); `DefaultBraveHttpsUpgradeSetting` → ⚠️ (Griffin's `TransitionToUpstreamHttpsUpgrade` turns Brave's upgrader off on Beta, Nightly and part of Release; `ChromeVariations` keeps it); `DNSInterceptionChecksEnabled` → ⚠️ inert (Chromium skips the probes unless `IntranetRedirectBehavior` is 3). New watch items: Brave's HTTPS transition, Chromium's GPC, the News new-user opt-in, `AlternateErrorPagesEnabled` on 157, the sensors Ask model, the nixpkgs source build. Descriptions corrected for QUIC, Sync, Network Prediction, ChromeVariations, Talk, Browser Sign-in, Basic Auth, sideloaded extensions, Local AI, Default Browser, Rewards, Stats Ping and the two Autofill rows | v2.3.3, PR #30 (`b228a18`) |
 | 2026-09-28 | Full pass at the new pins (Brave 1.96.59, Chromium 154.0.8037.58), every key re-read through dispatch, feature defaults and Griffin studies. `EmailAliasesEnabled` ⚠️ → ✅ (Griffin enables it on Release); `BravePlaylistEnabled`, `BraveLocalAIEnabled` → ⚠️ feature off on Release/Beta; `SafeBrowsingExtendedReportingEnabled`, `AlternateErrorPagesEnabled`, `ShoppingListEnabled` → ⚠️ inert, kept with a caveat in their labels; `RemoteDebuggingAllowed` loses its restart note; `PsstEnabled` → ⚠️ (dispatched since 1.95); `BraveSearchResultAdsEnabled` → ❌; FirstPartySets / RelatedWebsiteSets → ❌; `AutofillSettings` → ⚠️. Sponsored Ads has no policy key; `BraveRewardsDisabled` keeps the ads service off, so it also stops NTP sponsored wallpapers, not Brave Search's own ads. No key added or removed; labels, descriptions, comments and README corrected | v2.3.2, PR #29 (`e5249d0`); brave-browser#51040, #54917 |
 | 2026-09-11 | Brave Origin on Linux: policy directory proven, detection for every packaging, 13 dead keys shown inert on Origin-only machines; nothing changed for other users | v2.3.1, PR #25 (`a5df793`), issue #13 |
@@ -1602,7 +1595,7 @@ Verified to work; the paths are the ones that bit before.
   only adds the `BraveSoftware` group.
 - **Dispatch of a Chromium key:** `chrome/browser/policy/configuration_policy_handler_list_factory.cc`
   at the tag: a `key::k<Key>` entry or, for a key with a dedicated handler
-  class (16 of the 61 Chromium keys written at 156.0.8078.80, through 14
+  class (16 of the 60 Chromium keys written at 156.0.8078.80, through 14
   handler classes, e.g.
   `syncer::SyncPolicyHandler`, `SecureDnsPolicyHandler`,
   `autofill::AutofillSettingsPolicyHandler`), the handler source that reads

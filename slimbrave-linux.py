@@ -618,8 +618,6 @@ CATEGORIES = [
 
             {"name": "Isolate Subdomains in Separate Processes", "key": "OriginKeyedProcessesEnabled", "value": True, "desc": "Puts each origin (for example mail.example.com and docs.example.com) in its own process rather than one per site, for stronger protection against Spectre-style leaks between subdomains. Uses more processes and memory. Takes effect after a restart. A brave://flags setting overrides it."},
 
-            {"name": "Sandbox the Network Service", "key": "NetworkServiceSandboxEnabled", "value": True, "desc": "Runs Brave's network process in the OS sandbox, which Brave leaves off by default. Ignored on Windows on ARM and before Windows 10 20H1, and after a failed sandboxed start until the next major update. On Linux, switched off for good the first time a site asks for Kerberos (Negotiate) sign-in."},
-
             # DynamicCodeSettings is chrome.win only: SlimBrave.ps1 alone offers it.
         ],
     },

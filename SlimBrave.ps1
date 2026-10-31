@@ -258,8 +258,6 @@ $privacyFeatures = @(
        Tip = "Keeps every site in its own process, as Brave already does on desktop, and stops brave://flags#site-isolation-trial-opt-out or --disable-site-isolation-trials from turning it off. Takes effect after a restart." },
     @{ Name = "Isolate Subdomains in Separate Processes"; Key = "OriginKeyedProcessesEnabled"; Value = 1; Type = "DWord"
        Tip = "Puts each origin (for example mail.example.com and docs.example.com) in its own process rather than one per site, for stronger protection against Spectre-style leaks between subdomains. Uses more processes and memory. Takes effect after a restart. A brave://flags setting overrides it." },
-    @{ Name = "Sandbox the Network Service"; Key = "NetworkServiceSandboxEnabled"; Value = 1; Type = "DWord"
-       Tip = "Runs Brave's network process in the OS sandbox, which Brave leaves off by default. Ignored on Windows on ARM and before Windows 10 20H1, and after a failed sandboxed start until the next major update. On Linux, switched off for good the first time a site asks for Kerberos (Negotiate) sign-in." },
     @{ Name = "Block Dynamic Code in the Browser Process"; Key = "DynamicCodeSettings"; Value = 1; Type = "DWord"
        Tip = "Stops Brave's main process from creating or changing executable memory (Arbitrary Code Guard), which blocks injected shellcode and code-patching hooks there. Some antivirus, printer-driver or input-method software that loads into Brave may fail or crash it; untick this if so." }
 )
@@ -543,8 +541,7 @@ $script:embeddedPresets = [ordered]@{
         "XSLTEnabled": false,
         "DefaultJavaScriptOptimizerSetting": 2,
         "SitePerProcess": true,
-        "OriginKeyedProcessesEnabled": true,
-        "NetworkServiceSandboxEnabled": true
+        "OriginKeyedProcessesEnabled": true
     }
 }
 '@
@@ -725,7 +722,7 @@ $categories = @(
 # The interface wants a lowercase row shape with a description and an ordered
 # choices list. The tables above are the single source of truth and stay in the
 # form the test suite parses, so the translation happens here at startup rather
-# than by maintaining a second copy of all 91 policies.
+# than by maintaining a second copy of all 90 policies.
 #
 # Ids are index-based because a few policy keys legitimately appear on two rows
 # (incognito, referrers). State is keyed by id, never by key.
