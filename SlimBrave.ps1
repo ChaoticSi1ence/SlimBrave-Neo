@@ -889,11 +889,17 @@ function Remove-ListPolicy([string]$RegistryPath, [string]$Name) {
 # Considered and rejected). Get-AllRows no longer names them, so Apply and
 # Reset would leave an upgraded machine's value in force. Each is removed
 # from both scopes only while it still holds the DWORD SlimBrave wrote, so a
-# value an admin set for their own reasons is left alone.
+# value an admin set for their own reasons is left alone. slimbrave-mac.py
+# keeps the same names and values (RETIRED_POLICIES); a test holds the two
+# equal.
 $script:retiredPolicies = [ordered]@{
     "AlternateErrorPagesEnabled"           = 0
     "DNSInterceptionChecksEnabled"         = 0
+    "EnableDoNotTrack"                     = 1
+    "FeedbackSurveysEnabled"               = 0
+    "IPFSEnabled"                          = 0
     "MediaRecommendationsEnabled"          = 0
+    "PromotionsEnabled"                    = 0
     "SafeBrowsingExtendedReportingEnabled" = 0
     "SafeSitesFilterBehavior"              = 1
     "ShoppingListEnabled"                  = 0

@@ -28,6 +28,7 @@ import json
 import locale
 import os
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -215,11 +216,16 @@ def _user_home_for_brave():
 
 
 def _mac_app_search_paths(app_name):
-    """Possible locations for a Brave app bundle (system + per-user)."""
+    """Possible locations for a Brave app bundle (system + per-user).
+
+    The per-user one is the invoking user's ~/Applications (_invoking_user),
+    so a plain `su` searches theirs, not root's; with no invoking user (a
+    root login) it is the running account's own.
+    """
     paths = [f"/Applications/{app_name}"]
-    sudo_user = os.environ.get("SUDO_USER")
-    if sudo_user:
-        paths.append(f"/Users/{sudo_user}/Applications/{app_name}")
+    home = _user_home_for_brave()
+    if home:
+        paths.append(os.path.join(home, "Applications", app_name))
     else:
         paths.append(os.path.expanduser(f"~/Applications/{app_name}"))
     return paths
@@ -317,6 +323,12 @@ def _atomic_write(path, data, *, binary=False, mode=0o644):
     target directory entry without following a symlink that happened to
     exist there. Also avoids leaving a half-written policy if the
     process is killed mid-write.
+
+    The data is fsynced before the rename, as Chromium's ImportantFileWriter
+    does, so a crash or power cut leaves the old file or the new one, never
+    an empty one: ext4's rename heuristic misses a freshly created file and
+    XFS has none. The directory is fsynced afterwards where POSIX allows it,
+    on a best-effort basis.
     """
     directory = os.path.dirname(path) or "."
     fd, tmp = tempfile.mkstemp(prefix=".slimbrave.", suffix=".tmp", dir=directory)
@@ -334,13 +346,28 @@ def _atomic_write(path, data, *, binary=False, mode=0o644):
                 os.fchmod(f.fileno(), mode)
             else:
                 os.chmod(tmp, mode)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, path)
-    except Exception:
+    except BaseException:
+        # BaseException, so a Ctrl+C mid-write leaves no temp file either.
         try:
             os.unlink(tmp)
         except OSError:
             pass
         raise
+    if os.name == "posix":
+        # Makes the rename itself durable. Outside the cleanup above: the
+        # file is already in place, so a directory that cannot be opened or
+        # synced fails nothing.
+        try:
+            dir_fd = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
 
 # ---------------------------------------------------------------------------
 # Brave browser detection
@@ -1174,7 +1201,7 @@ def _pid_is_alive(pid):
 
 
 def _singleton_lock_pid(prefs_path):
-    """Return the pid holding a profile's Chromium SingletonLock, or None.
+    """Return (host, pid) from a profile's Chromium SingletonLock, or None.
 
     Chromium symlinks <user-data-dir>/SingletonLock to "<hostname>-<pid>"
     for as long as the profile is open. This is the only running-check that
@@ -1189,8 +1216,36 @@ def _singleton_lock_pid(prefs_path):
         target = os.readlink(os.path.join(user_data, "SingletonLock"))
     except OSError:
         return None
-    pid_part = target.rsplit("-", 1)[-1]
-    return int(pid_part) if pid_part.isdigit() else None
+    host, sep, pid_part = target.rpartition("-")
+    if not sep or not pid_part.isdigit():
+        return None
+    return host, int(pid_part)
+
+
+def _lock_holder_is_running(host, pid):
+    """True if a SingletonLock's holder still counts as a running Brave.
+
+    A lock taken on another host counts: the profile is in use there (a
+    shared home), and Chromium treats it the same way. On this host the
+    pid has to be alive, and on Linux it also has to be a Brave binary,
+    Chromium's own IsChromeProcess test: a lock a crash left behind can
+    name a pid some other program has since been given. Every Brave build
+    on Linux, Origin included, runs a binary named brave. macOS has no
+    procfs, so there a live pid is enough.
+    """
+    if host != socket.gethostname():
+        return True
+    if not _pid_is_alive(pid):
+        return False
+    if not os.path.isdir("/proc/self"):
+        return True
+    try:
+        exe = os.readlink(f"/proc/{pid}/exe")
+    except OSError:
+        return False
+    if exe.endswith(" (deleted)"):
+        exe = exe[:-len(" (deleted)")]
+    return os.path.basename(exe) == "brave"
 
 
 # pgrep by absolute path, never through PATH: sudo can pass the caller's
@@ -1200,12 +1255,13 @@ def _singleton_lock_pid(prefs_path):
 PGREP_PATHS = ("/usr/bin/pgrep", "/bin/pgrep")
 
 
-def _pgrep(name):
-    """Return the exit status of `pgrep -x name`, or None with no pgrep."""
+def _pgrep(name, uid=None):
+    """Return the exit status of `pgrep [-u uid] -x name`, or None with no pgrep."""
+    args = ["-x", name] if uid is None else ["-u", str(uid), "-x", name]
     for exe in PGREP_PATHS:
         try:
             return subprocess.run(
-                [exe, "-x", name],
+                [exe, *args],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             ).returncode
         except FileNotFoundError:
@@ -1218,25 +1274,29 @@ def _is_brave_running(installations=None):
 
     When `installations` is None, falls back to the legacy single-channel
     process name (Stable on each platform), preserving old behaviour for
-    callers that haven't been updated.
+    callers that haven't been updated. The process search is limited to
+    the invoking user's processes (_invoking_user): theirs is the profile
+    the scrub rewrites, and another account's Brave cannot overwrite it.
     """
     if installations is None:
         names = ["Brave Browser"] if IS_MAC else ["brave"]
     else:
         for inst in installations:
-            pid = _singleton_lock_pid(inst.get("prefs_path"))
-            if pid is not None and _pid_is_alive(pid):
+            holder = _singleton_lock_pid(inst.get("prefs_path"))
+            if holder is not None and _lock_holder_is_running(*holder):
                 return True
         names = [i["process_name"] for i in installations if i.get("process_name")]
         if not names:
             names = ["Brave Browser"] if IS_MAC else ["brave"]
 
+    identity = _sudo_user_identity()
+    uid = identity[1] if identity else None
     for name in names:
         # A name longer than the kernel's accounting-name cap can only ever
         # be a false negative, so don't spend a process asking.
         if len(name) > 15:
             continue
-        rc = _pgrep(name)
+        rc = _pgrep(name, uid)
         if rc is None:
             return False
         if rc == 0:
@@ -1315,15 +1375,15 @@ def _run_as_invoking_user(fn, *args, default):
         return default
 
 
-def _scrub_as_invoking_user(scrub, path):
-    """Run a prefs scrub as the invoking user; 0 when there is none.
+def _scrub_as_invoking_user(scrub, path, default):
+    """Run a prefs scrub as the invoking user; `default` when there is none.
 
     As root with nobody to drop to (a root login, `su -`), nothing is
     scrubbed: rewriting a home directory as root is what the drop avoids.
     """
     if getattr(os, "geteuid", lambda: -1)() == 0 and _sudo_user_identity() is None:
-        return 0
-    return _run_as_invoking_user(scrub, path, default=0)
+        return default
+    return _run_as_invoking_user(scrub, path, default=default)
 
 
 def _repair_one_prefs(pref_path):
@@ -1333,32 +1393,45 @@ def _repair_one_prefs(pref_path):
     doing the read-modify-write as root would follow a symlinked
     `Default`/`Profile *` into a file root owns and then hand it over.
     Fork and drop to the invoking user's uid/gid instead — the child can
-    only reach what that user could already reach. Returns the number of
-    entries removed (0 on any failure, so a broken drop repairs nothing
-    rather than repairing as root).
+    only reach what that user could already reach. Returns what
+    _scrub_one_prefs does (0 when the drop fails, so a broken drop repairs
+    nothing rather than repairing as root).
     """
-    return _scrub_as_invoking_user(_scrub_one_prefs, pref_path)
+    return _scrub_as_invoking_user(_scrub_one_prefs, pref_path, 0)
 
 
 def _repair_user_data_dir(default_prefs_path):
     """Scrub every profile of one user-data dir in a single drop.
 
     The child lists the profiles as well, so root never reads a directory
-    inside the user's home. Returns the number of entries removed.
+    inside the user's home. Returns [removed, failed] (_scrub_user_data_dir).
     """
-    return _scrub_as_invoking_user(_scrub_user_data_dir, default_prefs_path)
+    return _scrub_as_invoking_user(_scrub_user_data_dir, default_prefs_path, [0, 0])
 
 
 def _scrub_user_data_dir(default_prefs_path):
-    """List a user-data dir's profiles and scrub each, as the caller."""
-    return sum(_scrub_one_prefs(p) for p in _profile_prefs_paths(default_prefs_path))
+    """List a user-data dir's profiles and scrub each, as the caller.
+
+    Returns [removed, failed]: the entries removed, and the number of
+    profiles whose Preferences could not be read or rewritten. A list, so
+    the reply from the dropped child decodes to the same value.
+    """
+    removed = failed = 0
+    for path in _profile_prefs_paths(default_prefs_path):
+        count = _scrub_one_prefs(path)
+        if count < 0:
+            failed += 1
+        else:
+            removed += count
+    return [removed, failed]
 
 
 def _scrub_one_prefs(pref_path):
     """Remove SlimBrave's Shields-disabled exceptions from one Preferences file.
 
-    Returns the number of exception entries removed (0 if file missing or
-    no matching keys present).
+    Returns the number of exception entries removed: 0 if the file is
+    missing, is not JSON (or not UTF-8), or holds none of them; -1 if it
+    exists but cannot be read, or holds them and cannot be rewritten.
     """
     if not pref_path or not os.path.isfile(pref_path):
         return 0
@@ -1366,15 +1439,19 @@ def _scrub_one_prefs(pref_path):
     try:
         with open(pref_path, "r", encoding="utf-8") as f:
             prefs = json.load(f)
-    except (OSError, json.JSONDecodeError):
+    except ValueError:
+        # JSONDecodeError and UnicodeDecodeError: not a file Brave could
+        # load either, so there is nothing of ours to remove.
         return 0
+    except OSError:
+        return -1
 
-    bs = (
-        prefs.get("profile", {})
-             .get("content_settings", {})
-             .get("exceptions", {})
-             .get("braveShields")
-    )
+    # Walk with type checks: valid JSON can still hold a null or a list
+    # where Brave keeps an object.
+    node = prefs
+    for key in ("profile", "content_settings", "exceptions"):
+        node = node.get(key) if isinstance(node, dict) else None
+    bs = node.get("braveShields") if isinstance(node, dict) else None
     if not isinstance(bs, dict) or not bs:
         return 0
 
@@ -1402,7 +1479,7 @@ def _scrub_one_prefs(pref_path):
             mode=original_mode,
         )
     except OSError:
-        return 0
+        return -1
 
     return removed
 
@@ -1410,7 +1487,9 @@ def _scrub_one_prefs(pref_path):
 def repair_brave_prefs(installations=None):
     """Remove the leaked Shields exceptions across all given channels.
 
-    Returns (removed_count, brave_was_running). When `installations` is None,
+    Returns (removed_count, failed, brave_was_running), where `failed` maps
+    each user-data dir to the number of its profiles that could not be
+    cleaned (_scrub_failure_note words it). When `installations` is None,
     repairs only the legacy stable-channel prefs path (back-compat).
     """
     if installations is None:
@@ -1420,6 +1499,7 @@ def repair_brave_prefs(installations=None):
 
     running = _is_brave_running(installations)
     total = 0
+    failed = {}
     seen = set()
     for inst in installations:
         prefs_path = inst.get("prefs_path")
@@ -1430,8 +1510,20 @@ def repair_brave_prefs(installations=None):
         if user_data in seen:
             continue
         seen.add(user_data)
-        total += _repair_user_data_dir(prefs_path)
-    return (total, running)
+        removed, not_cleaned = _repair_user_data_dir(prefs_path)
+        total += removed
+        if not_cleaned:
+            failed[user_data] = not_cleaned
+    return (total, failed, running)
+
+
+def _scrub_failure_note(failed):
+    """The sentence naming profiles the scrub could not clean, or ''."""
+    if not failed:
+        return ""
+    n = sum(failed.values())
+    return (f"Failed to clean {n} profile{'s' if n != 1 else ''}; "
+            f"check ownership of {', '.join(failed)}.")
 
 
 # ---------------------------------------------------------------------------
@@ -1456,9 +1548,12 @@ def _is_profile_installed():
 
     Reads `profiles list -output stdout-xml` (a plist mapping a domain
     label to an array of profile dicts) and scans for our identifier.
-    Returns False on any error so callers treat "unknown" the same as
-    "not installed" — the worst case is we redundantly remove a missing
-    profile, which is silent.
+    Any error (no `profiles`, a timeout, a non-zero exit, output that does
+    not parse) reads as not installed. An omitted --persist then resolves
+    to off, so a profile can be removed without being re-staged, and the
+    scope guard (_scope_conflict) stays out of the way. Telling "no
+    profiles" from "the command failed" needs its output and exit status
+    recorded on a real Mac first (AUDIT.md, What's next).
     """
     if not IS_MAC:
         return False
@@ -1532,11 +1627,14 @@ def _remove_profile():
 
     `profiles remove -identifier ... -forced` is the root-only path that
     still works without a GUI on macOS 11+. Silent when nothing to remove.
+    Returns True when `profiles remove` exits 0; a non-zero exit can also
+    mean there was nothing to remove, so callers that must know ask
+    _is_profile_installed afterwards.
     """
     if not IS_MAC:
-        return
+        return False
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["/usr/bin/profiles", "remove",
              "-identifier", PERSIST_PROFILE_IDENTIFIER,
              "-type", "configuration",
@@ -1545,7 +1643,8 @@ def _remove_profile():
             timeout=15, check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        pass
+        return False
+    return result.returncode == 0
 
 
 def _sweep_stale_stage_dirs(keep=None):
@@ -1592,12 +1691,19 @@ def _install_profile_from_policy(policy_by_bundle):
     `man profiles`), so the only path is `open <file.mobileconfig>`
     which lets macOS route the file to System Settings > General >
     Device Management for user approval. The caller (apply_policy) has
-    already torn down any prior version via _clear_persistence_artifacts,
-    so the user sees a single fresh entry.
+    already removed any installed version via _clear_persistence_artifacts,
+    so until the user approves this one no Configuration Profile carries
+    a SlimBrave policy.
 
     `open` is run as the invoking user (_invoking_user: SUDO_USER, else
     USER) so LaunchServices targets that user's GUI session — running it
     as root produces inconsistent behaviour when the console user differs.
+
+    Returns (True, profile_path) once `open` has taken the file, or
+    (False, message) if the file cannot be written or `open` fails, times
+    out or exits non-zero (over SSH with no desktop session for the user,
+    say). The staged file is kept then and the message names it, so the
+    user can double-click it from a desktop session.
     """
     mc = _build_mobileconfig(policy_by_bundle)
     # mkdtemp, not a fixed /tmp name: any local user can pre-create that
@@ -1629,14 +1735,30 @@ def _install_profile_from_policy(policy_by_bundle):
     else:
         open_cmd = ["/usr/bin/open"]
     try:
-        subprocess.run(
+        result = subprocess.run(
             open_cmd + [profile_path],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=15, check=False,
         )
+        reason = f"exit status {result.returncode}" if result.returncode else ""
+    except subprocess.TimeoutExpired:
+        reason = "timed out"
+    except (OSError, subprocess.SubprocessError) as e:
+        reason = str(e) or type(e).__name__
+    if reason:
+        # The .mobileconfig stays on disk: double-clicking it from a
+        # desktop session finishes the same install.
+        return False, (
+            f"Could not hand the profile to System Settings ({reason}). "
+            f"It is staged at {profile_path}; double-click it while logged "
+            "in to the desktop. Until it is installed, no Configuration "
+            "Profile carries these settings."
+        )
+    try:
         # Also jump System Settings to the Device Management pane — the
         # `open` of the .mobileconfig only queues the download on
-        # macOS 13+ and doesn't surface the install UI on its own.
+        # macOS 13+ and doesn't surface the install UI on its own. Only a
+        # convenience, so its result is not checked.
         subprocess.run(
             open_cmd + [
                 "x-apple.systempreferences:com.apple.Profiles-Settings.extension"
@@ -1645,10 +1767,8 @@ def _install_profile_from_policy(policy_by_bundle):
             timeout=15, check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        # The .mobileconfig is on disk regardless; user can double-click
-        # it from Finder if the auto-open path fails.
         pass
-    return True, ""
+    return True, profile_path
 
 
 def _flush_cfprefsd():
@@ -1674,40 +1794,90 @@ def _flush_cfprefsd():
 def _clear_persistence_artifacts():
     """Remove any installed Configuration Profile.
 
-    Called by reset and by apply when switching modes (so an `off` Apply
-    after a previous `on` Apply cleanly tears the profile down). Plist
-    file deletion is the caller's responsibility — apply/reset already
-    iterate over plist_path targets.
+    Called by every Apply and Reset except a --policy-file run (so an
+    `off` Apply after a previous `on` Apply cleanly tears the profile
+    down). Clearing SlimBrave's keys from the plists is the caller's job
+    (_strip_managed): apply/reset already iterate over plist_path targets.
 
     The staged mobileconfig outlives the run that wrote it on purpose:
     approving a profile is an asynchronous, user-driven step in System
     Settings. But tearing the profile down means no approval is pending,
-    so the staged copies go too.
+    so the staged copies go too. Returns what _remove_profile does.
     """
     if not IS_MAC:
-        return
-    _remove_profile()
+        return False
+    removed = _remove_profile()
     _sweep_stale_stage_dirs()
+    return removed
 
 
 # ---------------------------------------------------------------------------
 # Policy I/O
 # ---------------------------------------------------------------------------
 
+# Keys earlier versions wrote and this one no longer offers, with the value
+# they wrote (AUDIT.md, Considered and rejected). A macOS plist is shared
+# with anything else that manages Brave, so Apply and Reset no longer
+# rewrite it whole; they delete each of these only while it still holds
+# exactly that value, type included (plistlib reads <false/> as a bool, and
+# 0 == False in Python). Kept equal to SlimBrave.ps1's
+# $script:retiredPolicies by a test. On Linux the policy file is
+# SlimBrave's own and is rewritten whole, so these never come up there.
+RETIRED_POLICIES = {
+    "AlternateErrorPagesEnabled": False,
+    "DNSInterceptionChecksEnabled": False,
+    "EnableDoNotTrack": True,
+    "FeedbackSurveysEnabled": False,
+    "IPFSEnabled": False,
+    "MediaRecommendationsEnabled": False,
+    "PromotionsEnabled": False,
+    "SafeBrowsingExtendedReportingEnabled": False,
+    "SafeSitesFilterBehavior": 1,
+    "ShoppingListEnabled": False,
+}
+# v1.1.0 to v1.5.0 also wrote this on macOS, where Chromium never reads it.
+# It is not retired on Windows or Linux, where a row still writes it.
+MAC_ONLY_RETIRED_POLICIES = {"BackgroundModeEnabled": False}
+
+
+def _managed_keys():
+    """Every key a row writes on this platform, plus the two DNS keys."""
+    keys = {feat["key"] for cat in CATEGORIES for feat in cat["features"]}
+    return keys | {"DnsOverHttpsMode", "DnsOverHttpsTemplates"}
+
+
+def _holds_managed_key(policy):
+    """True if a policy dict holds at least one key SlimBrave manages."""
+    managed = _managed_keys()
+    return any(k in managed for k in policy)
+
+
+def _is_retired(key, value):
+    """True if `value` is exactly what an earlier version wrote for `key`."""
+    retired = {**RETIRED_POLICIES, **MAC_ONLY_RETIRED_POLICIES}
+    if key not in retired:
+        return False
+    expected = retired[key]
+    return type(value) is type(expected) and value == expected
+
 
 def _read_one_policy(plist_path):
-    """Read a single policy file (plist on macOS, JSON on Linux)."""
+    """Read a single policy file (plist on macOS, JSON on Linux).
+
+    Anything that is not a readable dict reads as empty.
+    """
     try:
         if IS_MAC:
             with open(plist_path, "rb") as f:
-                return plistlib.load(f)
+                data = plistlib.load(f)
         else:
             with open(plist_path, "r") as f:
-                return json.load(f)
+                data = json.load(f)
     except (FileNotFoundError, PermissionError):
         return {}
     except Exception:
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def load_existing_policy(installations=None):
@@ -1716,10 +1886,13 @@ def load_existing_policy(installations=None):
     With multi-channel installations, returns the first non-empty policy
     found (so the TUI's pre-check reflects an existing state when one
     exists). Falls back to legacy POLICY_FILE when no installations are
-    supplied.
+    supplied. On macOS a plist counts only if it holds a key SlimBrave
+    manages: the plist is shared, and keys another tool wrote are not an
+    existing SlimBrave policy (and give --export nothing to save).
     """
     if installations is None:
-        return _read_one_policy(POLICY_FILE)
+        data = _read_one_policy(POLICY_FILE)
+        return data if not IS_MAC or _holds_managed_key(data) else {}
 
     # On Linux all channels share POLICY_FILE; dedupe to avoid reading the
     # same file repeatedly.
@@ -1730,7 +1903,7 @@ def load_existing_policy(installations=None):
             continue
         seen.add(p)
         data = _read_one_policy(p)
-        if data:
+        if data and (not IS_MAC or _holds_managed_key(data)):
             return data
     return {}
 
@@ -1764,8 +1937,9 @@ def _build_policy(rows):
     if dns_mode in ("custom", "secure") and not dns_template:
         return None, "Secure/custom DNS requires a DoH template URL."
 
-    # "unmanaged" writes no DNS keys at all; since Apply fully overwrites
-    # the policy file, any previously-managed DNS policy is removed.
+    # "unmanaged" writes no DNS keys at all; since Apply replaces every key
+    # SlimBrave manages (_write_one_policy), any previously-managed DNS
+    # policy is removed.
     if dns_mode and dns_mode != "unmanaged":
         # "custom" maps to "secure" in the actual Chromium policy
         if dns_mode == "custom":
@@ -1781,18 +1955,165 @@ def _build_policy(rows):
 
 
 def _write_one_policy(plist_path, policy):
-    """Write a single policy file and return (ok, error_msg)."""
+    """Write a single policy file and return (ok, error_msg).
+
+    On macOS a channel's plist is shared with anything else that manages
+    Brave, so only SlimBrave's own keys are replaced: every key it does not
+    manage stays, except a retired one still holding the value an earlier
+    version wrote (_is_retired). The Linux slimbrave.json is SlimBrave's
+    own and is rewritten whole. Any directory created on the way is 0755
+    whatever the caller's umask: under sudo's union with a strict one (027)
+    a 0750 root directory would hide every policy from Brave, which runs
+    as the user.
+    """
     try:
-        os.makedirs(os.path.dirname(plist_path), exist_ok=True)
+        old_umask = os.umask(0o022)
+        try:
+            os.makedirs(os.path.dirname(plist_path), exist_ok=True)
+        finally:
+            os.umask(old_umask)
         if IS_MAC:
-            _atomic_write(plist_path, plistlib.dumps(policy), binary=True)
+            managed = _managed_keys()
+            merged = {k: v for k, v in _read_one_policy(plist_path).items()
+                      if k not in managed and not _is_retired(k, v)}
+            merged.update(policy)
+            _atomic_write(plist_path, plistlib.dumps(merged), binary=True)
         else:
             _atomic_write(plist_path, json.dumps(policy, indent=4))
     except PermissionError:
         return False, "Permission denied. Run as root."
     except OSError as e:
         return False, f"Failed to write policy: {e}"
+    except (TypeError, OverflowError) as e:
+        # A value another tool put in the plist that plistlib cannot write
+        # back (a binary-only type, an integer past 64 bits).
+        return False, f"Failed to write policy: {e}"
     return True, ""
+
+
+def _strip_managed(plist_path):
+    """Remove SlimBrave's keys from a shared macOS plist.
+
+    Drops every key SlimBrave manages and every retired key still holding
+    the value an earlier version wrote; whatever else is there is written
+    back, and a plist left with nothing in it is deleted. Returns
+    (changed, kept): whether the file changed, and how many keys it still
+    holds. A missing plist is (False, 0). Raises OSError when it cannot be
+    rewritten or deleted.
+    """
+    if not os.path.exists(plist_path):
+        return False, 0
+    data = _read_one_policy(plist_path)
+    managed = _managed_keys()
+    kept = {k: v for k, v in data.items() if k not in managed and not _is_retired(k, v)}
+    if not kept:
+        os.remove(plist_path)
+        return True, 0
+    if len(kept) == len(data):
+        return False, len(kept)
+    try:
+        payload = plistlib.dumps(kept)
+    except (TypeError, OverflowError) as e:
+        raise OSError(f"cannot rewrite {plist_path}: {e}") from e
+    _atomic_write(plist_path, payload, binary=True)
+    return True, len(kept)
+
+
+def _strip_uninstalled_channels(targets):
+    """On a full macOS Reset, also clear the channels that were not targeted.
+
+    A channel uninstalled since an earlier Apply keeps its plist in
+    /Library/Managed Preferences, and reinstalling it would bring the old
+    policy back. Returns [(path, label)] for each plist that changed.
+    """
+    targeted = {path for path, _label in targets}
+    touched = []
+    for ch in MAC_CHANNELS:
+        path = os.path.join(POLICY_DIR, f"{ch['bundle_id']}.plist")
+        if path in targeted:
+            continue
+        changed, _kept = _strip_managed(path)
+        if changed:
+            touched.append((path, ch["label"]))
+    return touched
+
+
+def _is_override(installations):
+    """True for the single synthetic target --policy-file builds."""
+    return bool(installations) and all(
+        i.get("channel") == "override" for i in installations)
+
+
+def _scope_conflict(installations, selected_ids):
+    """Labels of channels a scoped Apply or Reset would strip unasked.
+
+    While the SlimBrave Configuration Profile is installed, every Apply and
+    Reset removes the whole profile (_clear_persistence_artifacts), and the
+    profile covers every channel it was staged for. A channel left out of
+    the scope that still holds a SlimBrave policy (a managed key in its
+    plist) would lose it, so the caller refuses instead. Empty off macOS,
+    for a full scope, for the --policy-file override, and whenever
+    `profiles list` does not report the profile, which fails open to the
+    old behaviour.
+    """
+    if (not IS_MAC or selected_ids is None or not installations
+            or _is_override(installations)):
+        return []
+    managed = detect_managed_channel_ids(installations)
+    outside = [i["label"] for i in installations
+               if i["channel"] not in selected_ids and i["channel"] in managed]
+    if not outside or not _is_profile_installed():
+        return []
+    return outside
+
+
+def _scope_conflict_message(labels):
+    """The refusal Apply and Reset give for _scope_conflict's labels."""
+    if len(labels) == 1:
+        return f"{labels[0]} also has a SlimBrave policy; select it too, or Reset first."
+    return (f"{', '.join(labels)} also have a SlimBrave policy; "
+            "select them too, or Reset first.")
+
+
+def _unreadable_policy_dir(directory, stop="/etc"):
+    """Return (dir, mode) of a policy directory Brave cannot read, or None.
+
+    Brave reads its policy directory as the user, so on Linux every
+    directory below `stop` down to `directory` needs o+x, and `directory`
+    itself o+r to be listed. A version older than the umask fix, run under
+    a strict umask (027), created them 0750 as root. Returns the topmost
+    offender; None off POSIX, or for a directory not under `stop`.
+    """
+    if os.name != "posix":
+        return None
+    stop = os.path.abspath(stop)
+    d = os.path.abspath(directory)
+    chain = []
+    while d != stop:
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        chain.append(d)
+        d = parent
+    leaf = os.path.abspath(directory)
+    for d in reversed(chain):
+        try:
+            mode = stat.S_IMODE(os.stat(d).st_mode)
+        except OSError:
+            continue
+        need = stat.S_IXOTH | (stat.S_IROTH if d == leaf else 0)
+        if mode & need != need:
+            return d, mode
+    return None
+
+
+def _unreadable_dir_note(plist_path):
+    """The Apply-message sentence for _unreadable_policy_dir, or ''."""
+    found = _unreadable_policy_dir(os.path.dirname(plist_path))
+    if found is None:
+        return ""
+    d, mode = found
+    return f"Brave cannot read {d} (mode {mode:o}); run 'sudo chmod 755 {d}'"
 
 
 def _selected_channel_targets(installations, selected_ids=None):
@@ -1828,6 +2149,11 @@ def _bundle_id_for_plist(plist_path):
     return base[:-6] if base.endswith(".plist") else base
 
 
+# The profile the last persist-`on` Apply staged, for cli_import to print in
+# full (the TUI status line has no room for a temp path).
+_last_staged_profile = None
+
+
 def apply_policy(rows, installations=None, persist_mode=PERSIST_DEFAULT,
                  selected_channel_ids=None):
     """Write the policy with or without durable persistence.
@@ -1839,15 +2165,27 @@ def apply_policy(rows, installations=None, persist_mode=PERSIST_DEFAULT,
         on   Install an Apple Configuration Profile via System Settings
              so policies survive reboots. Requires a one-time GUI step.
 
-    Switching `on` ↔ `off` implicitly clears the previous artifact so
-    the on-disk state always matches the new mode.
+    On macOS every Apply except a --policy-file run first removes the
+    whole installed SlimBrave profile, whichever mode was used before, so
+    the on-disk state always matches the new mode. While that profile is
+    installed, a scope that leaves out a channel still holding a SlimBrave
+    policy is refused (_scope_conflict) before anything is touched. The
+    --policy-file override never touches the profile and takes only `off`.
     """
+    global _last_staged_profile
+    _last_staged_profile = None
     if not IS_MAC and persist_mode != "off":
         persist_mode = "off"
     if persist_mode not in PERSIST_MODES:
         return False, (
             f"Unknown persist mode '{persist_mode}'. "
             f"Valid: {', '.join(PERSIST_MODES)}."
+        )
+    override = _is_override(installations)
+    if override and persist_mode == "on":
+        return False, (
+            "Persist on cannot be used with --policy-file: a Configuration "
+            "Profile targets each channel's bundle, not a file."
         )
 
     policy, err = _build_policy(rows)
@@ -1862,13 +2200,19 @@ def apply_policy(rows, installations=None, persist_mode=PERSIST_DEFAULT,
     if not targets:
         return False, "No Brave channel selected. Check at least one channel."
 
+    conflict = _scope_conflict(installations, selected_channel_ids)
+    if conflict:
+        return False, _scope_conflict_message(conflict)
+
     # On macOS, drop any previously-installed profile so switching modes
     # is never additive — e.g. an `off` Apply after a previous `on` Apply
-    # should leave only the plist, not both.
-    if IS_MAC:
+    # should leave only the plist, not both. A --policy-file run writes
+    # one file and leaves the profile alone.
+    if IS_MAC and not override:
         _clear_persistence_artifacts()
 
     written_labels = []
+    unreadable = ""
 
     if persist_mode == "on":
         policy_by_bundle = {}
@@ -1880,20 +2224,20 @@ def apply_policy(rows, installations=None, persist_mode=PERSIST_DEFAULT,
                 written_labels.append(label)
         if not policy_by_bundle:
             return False, "No valid Brave channel bundle id found."
-        # Stage the profile *before* removing anything: _clear_persistence_
-        # artifacts above already dropped the installed profile, so a
-        # failure after the plists are gone would leave the machine with no
-        # policy at all.
-        ok, err = _install_profile_from_policy(policy_by_bundle)
+        # The installed profile is already gone (_clear_persistence_
+        # artifacts above). Staging before the plists are cleared only
+        # keeps them in force if staging fails.
+        ok, staged = _install_profile_from_policy(policy_by_bundle)
         if not ok:
-            return False, err
-        # Configuration Profile is cfprefsd's only forced source. Wipe
-        # any plist a prior `off` Apply left under /Library/Managed
-        # Preferences/ so cfprefsd doesn't see two competing sources
-        # for the same bundle.
+            return False, staged
+        _last_staged_profile = staged
+        # Configuration Profile is cfprefsd's only forced source. Clear
+        # SlimBrave's keys from any plist a prior `off` Apply left under
+        # /Library/Managed Preferences/ so cfprefsd doesn't see two
+        # competing sources for the same bundle; other keys stay.
         for plist_path, _label in targets:
             try:
-                os.remove(plist_path)
+                _strip_managed(plist_path)
             except OSError:
                 pass
     else:
@@ -1907,6 +2251,8 @@ def apply_policy(rows, installations=None, persist_mode=PERSIST_DEFAULT,
                 return False, f"{err}{scope}"
             if label:
                 written_labels.append(label)
+            if not IS_MAC and not unreadable:
+                unreadable = _unreadable_dir_note(plist_path)
         if IS_MAC:
             _flush_cfprefsd()
 
@@ -1914,20 +2260,24 @@ def apply_policy(rows, installations=None, persist_mode=PERSIST_DEFAULT,
         _selected_channel_targets(installations, selected_channel_ids)
         if installations else None
     )
-    return True, _post_apply_message(
+    msg = _post_apply_message(
         *repair_brave_prefs(repair_targets),
         labels=written_labels, persist_mode=persist_mode,
     )
+    # First, so the TUI's one status line shows it.
+    return True, f"{unreadable}. {msg}" if unreadable else msg
 
 
-def _post_apply_message(repaired, brave_running, labels=None,
+def _post_apply_message(repaired, failed, brave_running, labels=None,
                         persist_mode=PERSIST_DEFAULT):
     """Build the status message after a successful Apply."""
     scope = f" to {', '.join(labels)}" if labels else ""
     if persist_mode == "on":
+        # The state first: the TUI status line truncates near 76 columns.
         base = (
-            f"Profile generated{scope}. Finish in "
-            "System Settings > General > Device Management."
+            f"Profile staged{scope}. Those channels have no SlimBrave policy "
+            "until you install it in System Settings > General > Device "
+            "Management."
         )
     elif IS_MAC:
         base = (
@@ -1943,6 +2293,8 @@ def _post_apply_message(repaired, brave_running, labels=None,
     if repaired > 0 and not brave_running:
         prefs = f"pref{'s' if repaired != 1 else ''}"
         base += f" Cleaned {repaired} leaked profile {prefs}."
+    if failed:
+        base += " " + _scrub_failure_note(failed)
     if brave_running:
         base += (
             " Brave is running: any leaked profile prefs cleaned now will be "
@@ -1952,12 +2304,30 @@ def _post_apply_message(repaired, brave_running, labels=None,
     return base
 
 
-def reset_policy(rows, installations=None, selected_channel_ids=None):
+# What a Reset reports when `profiles remove` left the profile in place.
+PROFILE_STILL_INSTALLED = (
+    "Reset, but the Configuration Profile is still installed: remove it in "
+    "System Settings > General > Device Management."
+)
+# Appended to a --policy-file Apply on macOS while the profile is installed.
+PROFILE_STILL_APPLIES = (
+    " The SlimBrave Configuration Profile is still installed and still applies."
+)
+
+
+def reset_policy(rows, installations=None, selected_channel_ids=None,
+                 all_channels=False):
     """Reset all SlimBrave state: plists, profile, prefs leak.
 
-    Unconditionally tears down the Configuration Profile (if installed)
-    and every plist file, regardless of which mode was last used, so
-    --reset is always a clean slate.
+    Tears down the Configuration Profile (if installed) and SlimBrave's
+    keys in every targeted plist, regardless of which mode was last used,
+    so a Reset is always a clean slate; on macOS a plist is deleted only
+    when nothing else is left in it. While the profile is installed, a
+    scope that leaves out a channel still holding a SlimBrave policy is
+    refused first (_scope_conflict). `all_channels` (a full Reset) also
+    clears the plists of macOS channels that are no longer installed. A
+    --policy-file run leaves the profile alone. Returns False when the
+    profile is still installed afterwards.
     """
     if installations is None:
         targets = [(POLICY_FILE, "")]
@@ -1967,13 +2337,23 @@ def reset_policy(rows, installations=None, selected_channel_ids=None):
     if not targets:
         return False, "No Brave channel selected. Check at least one channel."
 
+    conflict = _scope_conflict(installations, selected_channel_ids)
+    if conflict:
+        return False, _scope_conflict_message(conflict)
+    override = _is_override(installations)
+
     cleared_labels = []
     try:
         for plist_path, label in targets:
-            if os.path.exists(plist_path):
+            if IS_MAC:
+                _strip_managed(plist_path)
+            elif os.path.exists(plist_path):
                 os.remove(plist_path)
             if label:
                 cleared_labels.append(label)
+        if IS_MAC and all_channels and not override:
+            for _path, label in _strip_uninstalled_channels(targets):
+                cleared_labels.append(f"{label} (not installed)")
         for row in rows:
             if row["type"] == ROW_FEATURE:
                 row["checked"] = False
@@ -1988,15 +2368,22 @@ def reset_policy(rows, installations=None, selected_channel_ids=None):
     except OSError as e:
         return False, f"Failed to reset: {e}"
 
+    still_installed = False
     if IS_MAC:
-        _clear_persistence_artifacts()
+        if not override:
+            _clear_persistence_artifacts()
         _flush_cfprefsd()
+        # Asked again rather than trusting the exit status: a non-zero one
+        # can also mean there was nothing to remove.
+        still_installed = not override and _is_profile_installed()
 
     repair_targets = (
         _selected_channel_targets(installations, selected_channel_ids)
         if installations else None
     )
-    repaired, running = repair_brave_prefs(repair_targets)
+    repaired, failed, running = repair_brave_prefs(repair_targets)
+    if still_installed:
+        return False, PROFILE_STILL_INSTALLED
     scope = f" for {', '.join(cleared_labels)}" if cleared_labels else ""
     msg = f"All settings reset{scope}. Restart Brave to see changes."
     if repaired > 0 and not running:
@@ -2004,6 +2391,8 @@ def reset_policy(rows, installations=None, selected_channel_ids=None):
             f"Reset{scope}; cleaned {repaired} leaked profile "
             f"pref{'s' if repaired != 1 else ''}. Restart Brave."
         )
+    if failed:
+        msg += " " + _scrub_failure_note(failed)
     if running:
         msg += (
             " Brave is running: any leaked profile prefs cleaned now will be "
@@ -2014,18 +2403,20 @@ def reset_policy(rows, installations=None, selected_channel_ids=None):
 
 
 def detect_managed_channel_ids(installations):
-    """Return the set of channel ids whose plist already holds a policy.
+    """Return the set of channel ids whose plist holds a SlimBrave policy.
 
     Used as the sticky default for the Apply-time channel prompt — so a
     user who previously managed Stable + Beta sees those two pre-ticked
-    and can press Enter to keep the same scope.
+    and can press Enter to keep the same scope — and by _scope_conflict.
+    A plist counts only if it holds a key SlimBrave manages: keys another
+    tool wrote neither pre-tick a channel nor block a scope.
     """
     if not installations:
         return set()
     managed = set()
     for inst in installations:
         existing = _read_one_policy(inst.get("plist_path") or "")
-        if existing:
+        if _holds_managed_key(existing):
             managed.add(inst["channel"])
     return managed
 
@@ -2138,7 +2529,8 @@ def _write_export(path, text):
     except PermissionError as e:
         home = _user_home_for_brave()
         if hasattr(os, "geteuid") and os.geteuid() != 0 and home:
-            # The TUI prompt does not expand ~, so the hint spells it out.
+            # The hint spells the home out in full, so it works the same
+            # pasted into a shell as typed at the TUI prompt.
             import pwd
             try:
                 who = pwd.getpwuid(os.getuid()).pw_name
@@ -3168,6 +3560,24 @@ def prompt_persist_mode(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
             return True, "off"
 
 
+def _expand_prompt_path(path):
+    """Expand a leading ~ in a path typed at the TUI's Import/Export prompt.
+
+    `~` and `~/...` mean the invoking user's home (_invoking_user), not
+    root's, falling back to os.path.expanduser when there is none;
+    `~name/...` goes through os.path.expanduser. Anything else is
+    returned unchanged.
+    """
+    if path == "~" or path.startswith("~/"):
+        home = _user_home_for_brave()
+        if home is None:
+            return os.path.expanduser(path)
+        return home if path == "~" else os.path.join(home, path[2:])
+    if path.startswith("~"):
+        return os.path.expanduser(path)
+    return path
+
+
 def main(stdscr, override_installations=None):
     """Main TUI event loop.
 
@@ -3496,7 +3906,9 @@ def main(stdscr, override_installations=None):
                         # channels) first, mechanism (persist on/off)
                         # second. Each prompt has a sticky default so a
                         # one-keystroke Enter-Enter Apply re-uses prior
-                        # state.
+                        # state. A --policy-file target is one file, which
+                        # a profile cannot stand in for: it is always off.
+                        override = _is_override(installations)
                         selected_ids = None
                         if installations and len(installations) > 1:
                             default_ids = (
@@ -3513,12 +3925,15 @@ def main(stdscr, override_installations=None):
                                 status_msg = "Apply cancelled."
                                 status_ok = True
                                 continue
-                        current = detect_persist_mode()
-                        ok, persist_mode = prompt_persist_mode(
-                            stdscr, rows, cursor_idx, scroll_offset, btn_idx,
-                            install_method, current, filter_text=filter_text,
-                            show_desc=show_desc,
-                        )
+                        if override:
+                            ok, persist_mode = True, "off"
+                        else:
+                            current = detect_persist_mode()
+                            ok, persist_mode = prompt_persist_mode(
+                                stdscr, rows, cursor_idx, scroll_offset, btn_idx,
+                                install_method, current, filter_text=filter_text,
+                                show_desc=show_desc,
+                            )
                         if not ok:
                             status_msg = "Apply cancelled."
                             status_ok = True
@@ -3528,6 +3943,8 @@ def main(stdscr, override_installations=None):
                                 persist_mode=persist_mode,
                                 selected_channel_ids=selected_ids,
                             )
+                            if override and status_ok and _is_profile_installed():
+                                status_msg += PROFILE_STILL_APPLIES
                     else:
                         status_ok, status_msg = apply_policy(rows, installations)
 
@@ -3541,7 +3958,11 @@ def main(stdscr, override_installations=None):
                          show_desc=show_desc)
                     confirm = stdscr.getch()
                     if confirm in (curses.KEY_ENTER, 10, 13):
-                        status_ok, status_msg = reset_policy(rows, installations)
+                        # The TUI's Reset covers every channel, so it also
+                        # clears the plists of uninstalled ones (macOS).
+                        status_ok, status_msg = reset_policy(
+                            rows, installations,
+                            all_channels=override_installations is None)
                     else:
                         status_msg = "Reset cancelled."
                         status_ok = True
@@ -3553,7 +3974,8 @@ def main(stdscr, override_installations=None):
                         "Import path (Esc=cancel)",
                         default="./Presets/", show_desc=show_desc)
                     if ok and path:
-                        status_ok, status_msg = import_settings(rows, path)
+                        status_ok, status_msg = import_settings(
+                            rows, _expand_prompt_path(path))
                     else:
                         status_msg = "Import cancelled."
                         status_ok = True
@@ -3565,7 +3987,8 @@ def main(stdscr, override_installations=None):
                         "Export path (Esc=cancel)",
                         default="./SlimBraveNeoSettings.json", show_desc=show_desc)
                     if ok and path:
-                        status_ok, status_msg = export_settings(rows, path)
+                        status_ok, status_msg = export_settings(
+                            rows, _expand_prompt_path(path))
                     else:
                         status_msg = "Export cancelled."
                         status_ok = True
@@ -3643,8 +4066,14 @@ def cli_import(path, installations, doh_templates="",
     if not ok:
         print(f"Error: {msg}", file=sys.stderr)
         return 1
+    if IS_MAC and _is_override(installations) and _is_profile_installed():
+        msg += PROFILE_STILL_APPLIES
     print(msg)
     if IS_MAC and persist_mode == "on":
+        # The status text has no room for it; the CLI prints the path in
+        # full, so the file can be found again if the hand-off is missed.
+        if _last_staged_profile:
+            print(f"Profile file: {_last_staged_profile}")
         # macOS 11+ disallows CLI-driven profile installs (see `man
         # profiles`); finish the step in System Settings.
         print(
@@ -3682,63 +4111,140 @@ def cli_export(path, installations):
     return 0
 
 
-def cli_reset(installations):
+def cli_reset(installations, all_channels=False):
     """Non-interactive: tear down every SlimBrave artifact and repair leaks.
 
-    Removes plist files, the Configuration Profile (if installed), and
-    repairs leaked Brave-profile prefs. Unconditional so a single
-    --reset always leaves a clean slate.
+    Clears SlimBrave's keys from each targeted policy file (on macOS a
+    plist is deleted only when nothing else is left in it; the Linux file
+    is SlimBrave's own and is deleted), removes the Configuration Profile
+    (if installed) and repairs leaked Brave-profile prefs, whichever mode
+    was used before, so a single --reset always leaves a clean slate.
+    `all_channels` (--channels auto) also clears the plists of macOS
+    channels that are no longer installed. A --policy-file run leaves the
+    profile alone. Returns 1 if the profile is still installed afterwards.
     """
     targets = _dedupe_plist_targets(installations)
     if not targets:
         print(f"No policy file found at {POLICY_FILE}")
         return 0
+    override = _is_override(installations)
     try:
         for plist_path, label in targets:
-            if os.path.exists(plist_path):
+            scope = f" ({label})" if label else ""
+            if not os.path.exists(plist_path):
+                print(f"No policy file found at {plist_path}{scope}")
+            elif not IS_MAC:
                 os.remove(plist_path)
-                print(
-                    f"Removed {plist_path}"
-                    + (f" ({label})" if label else "")
-                )
+                print(f"Removed {plist_path}{scope}")
             else:
-                print(
-                    f"No policy file found at {plist_path}"
-                    + (f" ({label})" if label else "")
-                )
+                changed, kept = _strip_managed(plist_path)
+                if not changed:
+                    print(f"No SlimBrave keys in {plist_path}{scope}")
+                elif kept:
+                    print(f"Removed SlimBrave keys from {plist_path}{scope}; "
+                          f"kept {kept} other key{'s' if kept != 1 else ''}")
+                else:
+                    print(f"Removed {plist_path}{scope}")
+        if IS_MAC and all_channels and not override:
+            for path, label in _strip_uninstalled_channels(targets):
+                print(f"Removed SlimBrave keys from {path} ({label}, not installed)")
     except OSError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
+    rc = 0
     if IS_MAC:
-        profile_was_installed = _is_profile_installed()
-        _clear_persistence_artifacts()
-        _flush_cfprefsd()
-        if profile_was_installed:
-            print(f"Removed Configuration Profile "
-                  f"({PERSIST_PROFILE_IDENTIFIER})")
+        if override:
+            _flush_cfprefsd()
+        else:
+            profile_was_installed = _is_profile_installed()
+            _clear_persistence_artifacts()
+            _flush_cfprefsd()
+            # Asked again rather than trusting the exit status: a non-zero
+            # one can also mean there was nothing to remove.
+            if _is_profile_installed():
+                print(f"Error: {PROFILE_STILL_INSTALLED}", file=sys.stderr)
+                rc = 1
+            elif profile_was_installed:
+                print(f"Removed Configuration Profile "
+                      f"({PERSIST_PROFILE_IDENTIFIER})")
 
-    repaired, running = repair_brave_prefs(installations)
+    repaired, failed, running = repair_brave_prefs(installations)
     if repaired > 0 and not running:
         print(
             f"Cleaned {repaired} leaked profile "
             f"pref{'s' if repaired != 1 else ''} from Brave's user profile."
         )
+    if failed:
+        print(f"Warning: {_scrub_failure_note(failed)}", file=sys.stderr)
     if running:
         print(
             "Note: Brave is running — any leaked profile prefs cleaned now "
             "will be overwritten when Brave next saves. Fully close Brave "
             "and run --reset again to make it stick."
         )
-    return 0
+    return rc
 
 
-def parse_args():
-    """Parse command-line arguments."""
+def _cli_scope_error(args, detected, selected):
+    """The CLI's refusal for a --channels scope _scope_conflict would block.
+
+    `detected` is every channel found, `selected` what --channels kept.
+    Returns the message __main__ prints before exiting 2, or None.
+    """
+    if args.policy_file is not None or (args.import_path is None and not args.reset):
+        return None
+    outside = _scope_conflict(detected, {i["channel"] for i in selected})
+    if not outside:
+        return None
+    one = len(outside) == 1
+    return (
+        f"Error: {', '.join(outside)} also hold{'s' if one else ''} a SlimBrave "
+        "policy, and with the Configuration Profile installed every Apply or "
+        f"Reset removes the whole profile. Add {'it' if one else 'them'} to "
+        "--channels, or run --reset first and then apply to "
+        f"{', '.join(i['label'] for i in selected)}."
+    )
+
+
+def _check_args(args):
+    """Return the error for a command line that cannot run, or None.
+
+    Checked before the root check, so a bad command line is refused
+    without sudo; __main__ exits 2 on any of them.
+    """
+    for flag, value in (("--import", args.import_path),
+                        ("--export", args.export_path),
+                        ("--policy-file", args.policy_file)):
+        if value == "":
+            return f"Error: {flag} needs a path."
+    # --doh-templates is only ever read by cli_import; --reset, --export and
+    # the TUI would drop it without a word.
+    if args.doh_templates and args.import_path is None:
+        return "Error: --doh-templates requires --import"
+    # --reset runs first, so an export after it would save nothing; and a
+    # failed export would not stop the reset that loses the policy.
+    if args.reset and args.export_path is not None:
+        return ("Error: --export cannot be combined with --reset. "
+                "Run --export first, then --reset.")
+    acting = (args.import_path is not None or args.export_path is not None
+              or args.reset)
+    if args.channels != "auto" and (args.policy_file is not None or not acting):
+        return ("Error: --channels applies only to --import, --export or "
+                "--reset, and not with --policy-file.")
+    if args.persist == "on" and args.policy_file is not None:
+        return ("Error: --persist on cannot be combined with --policy-file: "
+                "a Configuration Profile targets each channel's bundle, not a file.")
+    return None
+
+
+def parse_args(argv=None):
+    """Parse command-line arguments (sys.argv[1:] when argv is None)."""
     parser = argparse.ArgumentParser(
         prog="slimbrave",
         description="SlimBrave Neo - Brave Browser debloater for Linux and macOS",
-        epilog="Run without arguments to launch the interactive TUI.",
+        epilog=("Run without arguments to launch the interactive TUI. "
+                "--reset runs before --import; --export runs last."),
     )
     parser.add_argument(
         "--import", dest="import_path", metavar="PATH",
@@ -3778,10 +4284,10 @@ def parse_args():
             "on macOS 13+) or 'on' (install a Configuration Profile via "
             "System Settings; durable, Apple-recommended). When omitted, "
             "reuse whatever's currently installed; falls back to 'off' "
-            "if nothing is. Linux accepts only 'off'."
+            "if nothing is, or with --policy-file. Linux accepts only 'off'."
         ),
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -3791,17 +4297,16 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-    # --doh-templates is only ever read by cli_import; --reset, --export and
-    # the TUI would drop it without a word.
-    if args.doh_templates and not args.import_path:
-        print("Error: --doh-templates requires --import", file=sys.stderr)
+    error = _check_args(args)
+    if error:
+        print(error, file=sys.stderr)
         sys.exit(2)
 
     # Override policy file path if requested. This is a single-target
     # override that bypasses channel detection — useful for tests and for
     # legacy callers that always wrote to one file.
     override_installations = None
-    if args.policy_file:
+    if args.policy_file is not None:
         if not _is_allowed_policy_file(args.policy_file):
             if IS_MAC:
                 rule = "com.brave.Browser[.beta|.nightly].plist"
@@ -3826,7 +4331,8 @@ if __name__ == "__main__":
             prefs_path=_channel_prefs_path(default_channel["user_data_dir"]),
         )]
 
-    is_cli = args.import_path or args.export_path or args.reset
+    is_cli = (args.import_path is not None or args.export_path is not None
+              or args.reset)
 
     if os.geteuid() != 0:
         print("SlimBrave Neo must be run as root.")
@@ -3852,24 +4358,37 @@ if __name__ == "__main__":
                 print(f"Warning: {w}", file=sys.stderr)
             for n in brave_info.get("notes", []):
                 print(f"Note: {n}", file=sys.stderr)
+            # Before any action: with the profile installed, an Apply or
+            # Reset scoped away from a channel that holds a SlimBrave
+            # policy would strip that channel too.
+            error = _cli_scope_error(args, brave_info["installations"], installations)
+            if error:
+                print(error, file=sys.stderr)
+                sys.exit(2)
 
         # Resolve --persist: when omitted, reuse whichever mode is
         # currently installed (matches TUI's sticky default) so a
         # re-run never silently demotes a profile back to plist-only.
+        # A --policy-file target is one file, so it is always off.
         persist_mode = args.persist
         if persist_mode is None:
-            persist_mode = detect_persist_mode() if IS_MAC else PERSIST_DEFAULT
+            if args.policy_file is not None:
+                persist_mode = "off"
+            else:
+                persist_mode = detect_persist_mode() if IS_MAC else PERSIST_DEFAULT
 
         # Accumulate so a later success cannot mask an earlier failure
         # (e.g. --reset failing followed by a clean --import).
         rc = 0
         if args.reset:
-            rc = max(rc, cli_reset(installations))
-        if args.import_path:
+            rc = max(rc, cli_reset(
+                installations,
+                all_channels=override_installations is None and args.channels == "auto"))
+        if args.import_path is not None:
             rc = max(rc, cli_import(args.import_path, installations,
                                     doh_templates=args.doh_templates or "",
                                     persist_mode=persist_mode))
-        if args.export_path:
+        if args.export_path is not None:
             rc = max(rc, cli_export(args.export_path, installations))
         sys.exit(rc)
 

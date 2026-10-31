@@ -170,10 +170,12 @@ the last check can still redirect it.
 
 **Reset is scoped to this tool's own keys.** It removes only the policy names
 SlimBrave Neo manages, in both scopes, and the two DNS values. Apply and Reset
-also remove six names older versions wrote and this one no longer offers
+also remove ten names older versions wrote and this one no longer offers
 (`AlternateErrorPagesEnabled`, `DNSInterceptionChecksEnabled`,
-`MediaRecommendationsEnabled`, `SafeBrowsingExtendedReportingEnabled`,
-`SafeSitesFilterBehavior`, `ShoppingListEnabled`), and only while each still holds the value
+`EnableDoNotTrack`, `FeedbackSurveysEnabled`, `IPFSEnabled`,
+`MediaRecommendationsEnabled`, `PromotionsEnabled`,
+`SafeBrowsingExtendedReportingEnabled`, `SafeSitesFilterBehavior`,
+`ShoppingListEnabled`), and only while each still holds the value
 SlimBrave wrote, so an upgrade does not leave a retired policy in force. It does not
 delete the `...\Policies\BraveSoftware\Brave` key itself and does not touch
 other values inside it — a group-policy `ExtensionInstallForcelist`,
@@ -188,7 +190,8 @@ actions report how many they skipped.
 ### Linux — `slimbrave-linux.py`
 
 Root is needed for one file: `/etc/brave/policies/managed/slimbrave.json`
-(mode `0644`, written atomically). That single file is the entire policy
+(mode `0644`, written atomically and fsynced; any directory it creates is
+`0755` whatever the caller's umask). That single file is the entire policy
 footprint — every Brave channel reads it, because brave-core hardcodes the
 directory. `--policy-file` can point elsewhere, but only to a `slimbrave*.json`
 file directly inside `/etc/brave/policies/managed` or
@@ -234,8 +237,13 @@ The Shields-exception scrub and Export work as on Linux, with the same
 privilege drop; the scrub covers
 `~/Library/Application Support/BraveSoftware/<channel>/<profile>/Preferences`.
 
-`--reset` removes the plists it wrote and removes the Configuration Profile by
-identifier. No other managed preference is touched.
+`--reset` removes the keys it manages from each channel's plist (and the
+retired names above, plus `BackgroundModeEnabled`, each only while it holds
+the value an older version wrote). On a full reset
+that covers every channel SlimBrave Neo knows, installed or not. It deletes a
+plist only when nothing else is left in it, and removes the Configuration
+Profile by identifier. Apply also keeps every key it does not manage, and a
+`--policy-file` run never touches the profile.
 
 ### How to undo everything
 

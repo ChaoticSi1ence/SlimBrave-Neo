@@ -191,6 +191,25 @@ def test_ps1_retired_policies_are_rejected_and_unwritten():
             f"{name}: its Considered and rejected row does not name the {value} the table deletes")
 
 
+def test_mac_retired_keys_are_unwritten_rejected_and_documented():
+    """slimbrave-mac.py deletes leftovers from the shared macOS plist only by
+    value, so none may be a key any script writes; each is a Considered and
+    rejected row; and the project description and SECURITY.md name them with
+    the values that are deleted, the macOS-only one included."""
+    rejected = _section("Considered and rejected — do not add")
+    project = _section("What the project does")
+    security = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    for key, value in MAC_DARWIN.RETIRED_POLICIES.items():
+        assert key not in WRITTEN, f"{key} retired but still written"
+        assert f"`{key}`" in rejected, f"{key} not in Considered and rejected"
+        assert f"`{key}` {int(value)}" in project, f"{key} {int(value)} not in What the project does"
+        assert f"`{key}`" in security, f"{key} not named in SECURITY.md"
+    mac_rows = {r.get("key") for r in MAC_DARWIN.build_rows()}
+    for key, value in MAC_DARWIN.MAC_ONLY_RETIRED_POLICIES.items():
+        assert key not in mac_rows, f"{key} retired on macOS but written there"
+        assert f"`{key}` {str(value).lower()}" in project, key
+
+
 def test_no_script_offers_a_row_with_no_effect_in_brave():
     """A key inert everywhere it is offered does not ship; platform caveats
     such as '(no effect on Linux builds)' stay legal."""

@@ -18,6 +18,7 @@ import pathlib
 import plistlib
 import random
 import re
+import socket
 import stat
 import sys
 import textwrap
@@ -768,7 +769,7 @@ def test_repair_as_root_without_an_invoking_user_scrubs_nothing(mod, monkeypatch
     prefs.parent.mkdir()
     prefs.write_text(json.dumps(LEAKED_PREFS))
     assert mod._repair_one_prefs(str(prefs)) == 0
-    assert mod._repair_user_data_dir(str(prefs)) == 0
+    assert mod._repair_user_data_dir(str(prefs)) == [0, 0]
     assert forks == [] and scrubbed == []
 
 
@@ -797,12 +798,103 @@ def test_repair_lists_profiles_in_the_child_and_forks_once(mod, monkeypatch, tmp
     monkeypatch.setattr(os, "listdir", watching_listdir)
     inst = {"prefs_path": str(user_data / "Default" / "Preferences")}
     # two records on one user-data dir still mean one drop
-    assert mod.repair_brave_prefs([inst, dict(inst)]) == (4, False)
+    assert mod.repair_brave_prefs([inst, dict(inst)]) == (4, {}, False)
     assert forks == [1]
     assert str(user_data) not in listed
     for profile in ("Default", "Profile 1"):
         after = json.loads((user_data / profile / "Preferences").read_text())
         assert after["profile"]["content_settings"]["exceptions"]["braveShields"] == {}
+
+
+@pytest.mark.parametrize("content", [
+    '{"profile": null}', "[]", '{"profile": {"content_settings": []}}', b"\xff",
+], ids=["null-profile", "top-level-list", "list-content-settings", "not-utf-8"])
+def test_scrub_survives_malformed_prefs(mod, monkeypatch, tmp_path, content):
+    """Valid JSON in the wrong shape, or bytes that are not UTF-8, is not a
+    file holding our entries: nothing to clean, no failure, no traceback
+    after the policy is already written."""
+    monkeypatch.delenv("SUDO_USER", raising=False)
+    monkeypatch.setattr(mod, "_is_brave_running", lambda *a: False)
+    prefs = tmp_path / "Brave-Browser" / "Default" / "Preferences"
+    prefs.parent.mkdir(parents=True)
+    if isinstance(content, bytes):
+        prefs.write_bytes(content)
+    else:
+        prefs.write_text(content, encoding="utf-8")
+    assert mod.repair_brave_prefs([{"prefs_path": str(prefs)}]) == (0, {}, False)
+
+
+def _two_profiles_one_locked(tmp_path):
+    """Default can be cleaned; Profile 1 holds the entries in a folder its
+    owner cannot write, so its rewrite fails."""
+    user_data = tmp_path / "Brave-Browser"
+    for profile in ("Default", "Profile 1"):
+        (user_data / profile).mkdir(parents=True)
+        (user_data / profile / "Preferences").write_text(json.dumps(LEAKED_PREFS))
+    (user_data / "Profile 1").chmod(0o500)
+    return user_data
+
+
+@posix_only
+def test_scrub_names_the_profiles_it_could_not_clean(mod, monkeypatch, tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root writes the locked folder anyway")
+    monkeypatch.delenv("SUDO_USER", raising=False)
+    monkeypatch.setattr(mod, "_is_brave_running", lambda *a: False)
+    user_data = _two_profiles_one_locked(tmp_path)
+    unreadable = tmp_path / "Brave-Browser-Beta" / "Default" / "Preferences"
+    unreadable.parent.mkdir(parents=True)
+    unreadable.write_text(json.dumps(LEAKED_PREFS))
+    unreadable.chmod(0o000)
+    try:
+        result = mod.repair_brave_prefs([
+            {"prefs_path": str(user_data / "Default" / "Preferences")},
+            {"prefs_path": str(unreadable)},
+        ])
+    finally:
+        (user_data / "Profile 1").chmod(0o700)
+        unreadable.chmod(0o600)
+    beta = str(unreadable.parent.parent)
+    assert result == (2, {str(user_data): 1, beta: 1}, False)
+    note = f"Failed to clean 2 profiles; check ownership of {user_data}, {beta}."
+    assert mod._scrub_failure_note(result[1]) == note
+    assert note in mod._post_apply_message(*result, labels=["Stable"])
+    assert mod._scrub_failure_note({str(user_data): 1}) == (
+        f"Failed to clean 1 profile; check ownership of {user_data}.")
+    assert mod._scrub_failure_note({}) == ""
+
+
+@needs_fork
+def test_scrub_failures_come_back_from_the_dropped_child(mod, monkeypatch, tmp_path):
+    """The child replies [removed, failed], so a failure it meets as the
+    user reaches the parent's message."""
+    if os.geteuid() == 0:
+        pytest.skip("root writes the locked folder anyway")
+    _fake_root_dropping_to_self(mod, monkeypatch, tmp_path / "drop.log")
+    monkeypatch.setattr(mod, "_is_brave_running", lambda *a: False)
+    user_data = _two_profiles_one_locked(tmp_path)
+    try:
+        result = mod.repair_brave_prefs(
+            [{"prefs_path": str(user_data / "Default" / "Preferences")}])
+    finally:
+        (user_data / "Profile 1").chmod(0o700)
+    assert result == (2, {str(user_data): 1}, False)
+
+
+def test_reset_names_the_profiles_it_could_not_clean(mod, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(mod, "IS_MAC", False, raising=False)
+    monkeypatch.setattr(mod, "repair_brave_prefs",
+                        lambda *a, **k: (0, {"/home/u/.config/BraveSoftware/Brave-Browser": 2}, False))
+    plist = tmp_path / "slimbrave.json"
+    plist.write_text("{}", encoding="utf-8")
+    inst = [{"channel": "stable", "label": "Stable", "plist_path": str(plist)}]
+    note = ("Failed to clean 2 profiles; check ownership of "
+            "/home/u/.config/BraveSoftware/Brave-Browser.")
+    ok, msg = mod.reset_policy(mod.build_rows(), inst)
+    assert ok and msg.endswith(note)
+    plist.write_text("{}", encoding="utf-8")
+    assert mod.cli_reset(inst) == 0
+    assert f"Warning: {note}" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
@@ -854,6 +946,106 @@ def test_atomic_write_failure_keeps_original(mod, tmp_path, monkeypatch):
     assert list(tmp_path.glob(".slimbrave.*")) == []
 
 
+def test_atomic_write_fsyncs_before_replace(mod, tmp_path, monkeypatch):
+    """The data reaches the disk before the rename makes it the file, so a
+    crash leaves the old file or the new one, never an empty one."""
+    events = []
+    real_fsync, real_replace = os.fsync, os.replace
+
+    def fsync(fd):
+        events.append("fsync")
+        return real_fsync(fd)
+
+    def replace(src, dst):
+        events.append("replace")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(os, "replace", replace)
+    mod._atomic_write(str(tmp_path / "policy.json"), "{}")
+    assert "replace" in events and events.index("fsync") < events.index("replace")
+    if os.name == "posix":
+        # and the directory once the rename is done
+        assert events == ["fsync", "replace", "fsync"]
+
+
+def test_atomic_write_interrupt_leaves_no_temp(mod, tmp_path, monkeypatch):
+    def interrupted(src, dst):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(os, "replace", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        mod._atomic_write(str(tmp_path / "policy.json"), "{}")
+    assert list(tmp_path.glob(".slimbrave.*")) == []
+
+
+def test_atomic_write_survives_a_directory_it_cannot_fsync(mod, tmp_path, monkeypatch):
+    real_open = os.open
+    dirs = []
+
+    def no_directories(path, flags, *args, **kwargs):
+        if os.path.isdir(path):
+            dirs.append(os.fspath(path))
+            raise PermissionError("no directory fsync here")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", no_directories)
+    target = tmp_path / "policy.json"
+    mod._atomic_write(str(target), '{"a": 1}')
+    assert target.read_text(encoding="utf-8") == '{"a": 1}'
+    assert dirs == ([str(tmp_path)] if os.name == "posix" else [])
+
+
+@posix_only
+def test_policy_dirs_created_0755_under_strict_umask(mod, tmp_path):
+    """sudo keeps a strict caller umask (027, or 077 here); the directories
+    Brave has to enter as the user are still created 0755."""
+    target = tmp_path / "a" / "b" / "c" / "slimbrave.json"
+    old = os.umask(0o077)
+    try:
+        ok, err = mod._write_one_policy(str(target), {})
+        after = os.umask(0o077)
+    finally:
+        os.umask(old)
+    assert ok, err
+    assert after == 0o077  # put back
+    for d in (tmp_path / "a", tmp_path / "a" / "b", tmp_path / "a" / "b" / "c"):
+        assert stat.S_IMODE(d.stat().st_mode) == 0o755, d
+
+
+@posix_only
+def test_unreadable_policy_dir_is_found(mod, tmp_path):
+    top, leaf = tmp_path / "brave", tmp_path / "brave" / "managed"
+    leaf.mkdir(parents=True)
+    leaf.chmod(0o755)
+    top.chmod(0o750)
+    try:
+        assert mod._unreadable_policy_dir(str(leaf), stop=str(tmp_path)) == (str(top), 0o750)
+        top.chmod(0o755)
+        assert mod._unreadable_policy_dir(str(leaf), stop=str(tmp_path)) is None
+        leaf.chmod(0o711)  # enterable, but Brave could not list it
+        assert mod._unreadable_policy_dir(str(leaf), stop=str(tmp_path)) == (str(leaf), 0o711)
+        # only directories below `stop` are judged
+        assert mod._unreadable_policy_dir(str(leaf), stop=str(tmp_path / "other")) is None
+    finally:
+        top.chmod(0o755)
+        leaf.chmod(0o755)
+
+
+def test_linux_apply_leads_with_an_unreadable_policy_dir(mod, tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "IS_MAC", False, raising=False)
+    monkeypatch.setattr(mod, "repair_brave_prefs", lambda *a, **k: (0, {}, False))
+    monkeypatch.setattr(mod, "_unreadable_policy_dir",
+                        lambda directory, stop="/etc": ("/etc/brave", 0o750))
+    inst = [{"channel": "stable", "label": "Stable",
+             "plist_path": str(tmp_path / "slimbrave.json")}]
+    ok, msg = mod.apply_policy(mod.build_rows(), inst)
+    assert ok
+    # The command is quoted so the joining ". " is not copied with it.
+    assert msg.startswith("Brave cannot read /etc/brave (mode 750); run 'sudo chmod 755 "
+                          "/etc/brave'. Settings applied to Stable.")
+
+
 # ---------------------------------------------------------------------------
 # --channels filtering
 # ---------------------------------------------------------------------------
@@ -897,6 +1089,88 @@ def test_filter_installations_reports_empty_match(mod, channels):
     assert filtered is None
     assert "No installed Brave channel matches --channels nightly" in err
     assert "Detected: stable" in err
+
+
+# ---------------------------------------------------------------------------
+# Command line: flags that cannot go together are refused before anything
+# runs, and before the root check, with exit status 2
+# ---------------------------------------------------------------------------
+
+ALLOWED_POLICY = "/etc/brave/policies/managed/slimbrave.json"
+
+
+@pytest.mark.parametrize("argv,error", [
+    (["--export", "b.json", "--reset"],
+     "Error: --export cannot be combined with --reset. Run --export first, then --reset."),
+    (["--import", ""], "Error: --import needs a path."),
+    (["--export", ""], "Error: --export needs a path."),
+    (["--policy-file", "", "--reset"], "Error: --policy-file needs a path."),
+    (["--channels", "beta"],
+     "Error: --channels applies only to --import, --export or --reset, and not with --policy-file."),
+    (["--channels", "beta", "--policy-file", ALLOWED_POLICY, "--import", "x.json"],
+     "Error: --channels applies only to --import, --export or --reset, and not with --policy-file."),
+    (["--doh-templates", "https://dns.example/dns-query", "--reset"],
+     "Error: --doh-templates requires --import"),
+])
+def test_check_args_refuses(mod, argv, error):
+    assert mod._check_args(mod.parse_args(argv)) == error
+
+
+@pytest.mark.parametrize("argv", [
+    [],
+    ["--policy-file", ALLOWED_POLICY],
+    ["--channels", "beta", "--import", "x.json"],
+    ["--channels", "stable", "--reset"],
+    ["--reset", "--import", "x.json"],
+    ["--import", "x.json", "--export", "y.json"],
+    ["--policy-file", ALLOWED_POLICY, "--import", "x.json"],
+])
+def test_check_args_accepts(mod, argv):
+    assert mod._check_args(mod.parse_args(argv)) is None
+
+
+def test_check_args_refuses_persist_on_with_a_policy_file():
+    plist = "/Library/Managed Preferences/com.brave.Browser.plist"
+    args = MAC_DARWIN.parse_args(["--policy-file", plist, "--persist", "on", "--import", "x.json"])
+    assert MAC_DARWIN._check_args(args) == (
+        "Error: --persist on cannot be combined with --policy-file: a Configuration "
+        "Profile targets each channel's bundle, not a file.")
+    args = MAC_DARWIN.parse_args(["--policy-file", plist, "--persist", "off", "--import", "x.json"])
+    assert MAC_DARWIN._check_args(args) is None
+
+
+@pytest.mark.parametrize("script", ["slimbrave-linux.py", "slimbrave-mac.py"])
+def test_bad_flags_exit_2_without_root(script, tmp_path):
+    """The check runs before the root check, so it needs no sudo."""
+    import subprocess
+    result = subprocess.run(
+        [sys.executable, str(ROOT / script), "--export", "b.json", "--reset"],
+        cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 2
+    assert "--export cannot be combined with --reset" in result.stderr
+    assert "must be run as root" not in result.stdout
+    assert not (tmp_path / "b.json").exists()
+
+
+@posix_only
+def test_prompt_path_tilde_is_the_invoking_users_home(mod, monkeypatch):
+    _fake_passwd(monkeypatch, {"alice": 1000})
+    monkeypatch.setenv("SUDO_USER", "alice")
+    assert mod._expand_prompt_path("~/x.json") == "/home/alice/x.json"
+    assert mod._expand_prompt_path("~") == "/home/alice"
+    assert mod._expand_prompt_path("./x.json") == "./x.json"
+    assert mod._expand_prompt_path("/srv/x.json") == "/srv/x.json"
+    real_expanduser = os.path.expanduser
+    monkeypatch.setattr(os.path, "expanduser",
+                        lambda p: "/home/bob" + p[4:] if p.startswith("~bob") else real_expanduser(p))
+    assert mod._expand_prompt_path("~bob/x.json") == "/home/bob/x.json"
+
+
+@pytest.mark.parametrize("script", ["slimbrave-linux.py", "slimbrave-mac.py"])
+def test_tui_import_and_export_expand_the_prompt_path(script):
+    src = (ROOT / script).read_text(encoding="utf-8")
+    for action in ("import_settings", "export_settings"):
+        assert re.search(action + r"\(\s*rows, _expand_prompt_path\(path\)\)", src), (script, action)
 
 
 def test_selected_channel_targets_is_mac_only():
@@ -1001,12 +1275,393 @@ def test_profile_stage_dir_stays_root_owned(monkeypatch, tmp_path):
     monkeypatch.setattr(MAC_DARWIN.subprocess, "run", recorder)
     monkeypatch.setattr(os, "chown", no_chown)
     monkeypatch.setenv("SUDO_USER", me)
-    assert MAC_DARWIN._install_profile_from_policy({"com.brave.Browser": {}}) == (True, "")
+    ok, staged = MAC_DARWIN._install_profile_from_policy({"com.brave.Browser": {}})
     stage, = tmp_path.glob("slimbrave-neo-*")
     assert stat.S_IMODE(stage.stat().st_mode) == 0o755
     profile = stage / "slimbrave-neo-policy.mobileconfig"
     assert stat.S_IMODE(profile.stat().st_mode) == 0o644
+    # the hand-off succeeded, so it reports where the profile is staged
+    assert ok and staged == str(profile)
     assert calls[0][:4] == ["/usr/bin/sudo", "-u", me, "/usr/bin/open"]
+
+
+@posix_only
+def test_mac_app_search_follows_the_invoking_user_under_su(monkeypatch):
+    """A plain `su` keeps USER and sets no SUDO_USER: the per-user
+    Applications folder searched is still the caller's, not root's."""
+    _fake_passwd(monkeypatch, {"alice": 1000})
+    monkeypatch.delenv("SUDO_USER", raising=False)
+    monkeypatch.setenv("USER", "alice")
+    assert MAC_DARWIN._mac_app_search_paths("Brave Browser.app") == [
+        "/Applications/Brave Browser.app", "/home/alice/Applications/Brave Browser.app"]
+
+
+# ---------------------------------------------------------------------------
+# macOS Apply and Reset against a faked Mac
+#
+# Every program slimbrave-mac.py runs goes through subprocess.run, so one
+# fake answers for the Mac: `profiles list` reports the SlimBrave profile
+# while `installed` is set, `profiles remove` takes it away (unless it
+# fails), and `open`, `killall` and `pgrep` answer as configured. Each argv
+# is recorded. The managed-preferences folder and the temp dir are moved
+# under tmp_path.
+# ---------------------------------------------------------------------------
+
+
+class _FakeMac:
+    def __init__(self):
+        self.calls = []
+        self.installed = False
+        self.list_rc = 0
+        self.remove_rc = 0
+        self.open_rc = 0
+        self.open_error = None
+
+    def run(self, cmd, **kwargs):
+        cmd = list(cmd)
+        self.calls.append(cmd)
+        rc, out = 0, b""
+        if cmd[:2] == ["/usr/bin/profiles", "list"]:
+            listed = ([{"ProfileIdentifier": MAC_DARWIN.PERSIST_PROFILE_IDENTIFIER}]
+                      if self.installed else [])
+            rc, out = self.list_rc, plistlib.dumps({"_computerlevel": listed})
+        elif cmd[:2] == ["/usr/bin/profiles", "remove"]:
+            rc = self.remove_rc
+            if rc == 0:
+                self.installed = False
+        elif "/usr/bin/open" in cmd and cmd[-1].endswith(".mobileconfig"):
+            if self.open_error is not None:
+                raise self.open_error
+            rc = self.open_rc
+        elif cmd[0] in MAC_DARWIN.PGREP_PATHS:
+            rc = 1
+        return type("R", (), {"returncode": rc, "stdout": out})()
+
+    def ran(self, *prefix):
+        return [c for c in self.calls if c[:len(prefix)] == list(prefix)]
+
+    def plist(self, channel):
+        return self.dir / (_mac_channel(channel)["bundle_id"] + ".plist")
+
+    def staged(self):
+        return sorted(self.temp.glob("slimbrave-neo-*/slimbrave-neo-policy.mobileconfig"))
+
+
+def _mac_channel(channel_id):
+    return next(c for c in MAC_DARWIN.MAC_CHANNELS if c["id"] == channel_id)
+
+
+@pytest.fixture
+def mac(monkeypatch, tmp_path):
+    import tempfile
+    box = _FakeMac()
+    box.dir = tmp_path / "Managed Preferences"
+    box.temp = tmp_path / "tmp"
+    box.dir.mkdir()
+    box.temp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(box.temp))
+    monkeypatch.setattr(MAC_DARWIN.subprocess, "run", box.run)
+    monkeypatch.setattr(MAC_DARWIN, "POLICY_DIR", str(box.dir))
+    monkeypatch.setattr(MAC_DARWIN, "POLICY_FILE", str(box.dir / "com.brave.Browser.plist"))
+    return box
+
+
+def _mac_installs(box, *ids):
+    return [MAC_DARWIN._make_installation(_mac_channel(cid), app_path="",
+                                          plist_path=str(box.plist(cid)), prefs_path=None)
+            for cid in ids]
+
+
+def _mac_override(box):
+    return [MAC_DARWIN._make_installation(
+        {**MAC_DARWIN.MAC_CHANNELS[0], "id": "override", "label": "Override", "bundle_id": ""},
+        plist_path=str(box.plist("stable")), prefs_path=None)]
+
+
+def _put_plist(path, data):
+    path.write_bytes(plistlib.dumps(data))
+
+
+def _get_plist(path):
+    return plistlib.loads(path.read_bytes())
+
+
+def _mac_rows(*ticked):
+    rows = MAC_DARWIN.build_rows()
+    for name in ticked:
+        _check_feature(MAC_DARWIN, rows, name)
+    return rows
+
+
+# C08: the plist is shared, so Apply and Reset touch only SlimBrave's keys.
+
+def test_mac_apply_and_reset_keep_keys_they_do_not_manage(mac, capsys):
+    stable, = _mac_installs(mac, "stable")
+    _put_plist(mac.plist("stable"), {
+        "URLBlocklist": ["x"], "BraveRewardsDisabled": True,
+        "SafeSitesFilterBehavior": 1, "PromotionsEnabled": False, "EnableDoNotTrack": 1,
+    })
+    ok, msg = MAC_DARWIN.apply_policy(_mac_rows("Disable Tor"), [stable], persist_mode="off")
+    assert ok, msg
+    # Rewards unticked and two leftovers holding what an old version wrote
+    # go; the foreign list stays, and so does an int 1 where SlimBrave
+    # wrote the bool true.
+    assert _get_plist(mac.plist("stable")) == {
+        "URLBlocklist": ["x"], "EnableDoNotTrack": 1, "TorDisabled": True}
+    ok, msg = MAC_DARWIN.reset_policy(_mac_rows(), [stable])
+    assert ok, msg
+    assert _get_plist(mac.plist("stable")) == {"URLBlocklist": ["x"], "EnableDoNotTrack": 1}
+    # a plist holding only SlimBrave keys goes altogether
+    _put_plist(mac.plist("stable"), {"TorDisabled": True, "EnableDoNotTrack": True})
+    ok, msg = MAC_DARWIN.reset_policy(_mac_rows(), [stable])
+    assert ok and not mac.plist("stable").exists()
+    # --reset says which it did
+    _put_plist(mac.plist("stable"), {"TorDisabled": True, "URLBlocklist": ["x"], "Foo": 1})
+    assert MAC_DARWIN.cli_reset([stable]) == 0
+    out = capsys.readouterr().out
+    assert f"Removed SlimBrave keys from {mac.plist('stable')} (Stable); kept 2 other keys" in out
+    _put_plist(mac.plist("stable"), {"TorDisabled": True})
+    assert MAC_DARWIN.cli_reset([stable]) == 0
+    assert f"Removed {mac.plist('stable')} (Stable)" in capsys.readouterr().out
+
+
+def test_mac_a_value_slimbrave_never_wrote_survives(mac):
+    stable, = _mac_installs(mac, "stable")
+    _put_plist(mac.plist("stable"), {"SafeSitesFilterBehavior": 0})
+    ok, msg = MAC_DARWIN.apply_policy(_mac_rows(), [stable], persist_mode="off")
+    assert ok, msg
+    assert _get_plist(mac.plist("stable")) == {"SafeSitesFilterBehavior": 0}
+    ok, msg = MAC_DARWIN.reset_policy(_mac_rows(), [stable])
+    assert ok, msg
+    assert _get_plist(mac.plist("stable")) == {"SafeSitesFilterBehavior": 0}
+
+
+def test_mac_background_mode_is_retired_on_macos_only():
+    assert MAC_DARWIN._is_retired("BackgroundModeEnabled", False)
+    assert not MAC_DARWIN._is_retired("BackgroundModeEnabled", True)
+    assert not MAC_DARWIN._is_retired("EnableDoNotTrack", 1)
+    assert MAC_DARWIN._is_retired("EnableDoNotTrack", True)
+    rows = {r.get("key") for r in MAC_DARWIN.build_rows()}
+    assert not set(MAC_DARWIN.MAC_ONLY_RETIRED_POLICIES) & rows
+    if sys.platform.startswith("linux"):
+        # where a row still writes it, it is a managed key, not a leftover
+        assert "BackgroundModeEnabled" in MAC_MOD._managed_keys()
+
+
+def test_retired_lists_agree():
+    """slimbrave-mac.py and SlimBrave.ps1 delete the same leftovers, each
+    only while it holds the value an old version wrote."""
+    ps1 = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    block = re.search(r"\$script:retiredPolicies = \[ordered\]@\{(.*?)\n\}", ps1, re.S)
+    table = {k: int(v) for k, v in re.findall(r'"(\w+)"\s*=\s*(\d+)', block.group(1))}
+    assert table == {k: int(v) for k, v in MAC_DARWIN.RETIRED_POLICIES.items()}
+    assert MAC_DARWIN.RETIRED_POLICIES == MAC_MOD.RETIRED_POLICIES
+
+
+def test_mac_foreign_keys_are_not_a_slimbrave_policy(mac, capsys):
+    stable, beta = _mac_installs(mac, "stable", "beta")
+    _put_plist(mac.plist("stable"), {"URLBlocklist": ["x"]})
+    _put_plist(mac.plist("beta"), {"URLBlocklist": ["x"], "TorDisabled": True})
+    assert MAC_DARWIN.detect_managed_channel_ids([stable, beta]) == {"beta"}
+    assert MAC_DARWIN.load_existing_policy([stable]) == {}
+    assert MAC_DARWIN.load_existing_policy([stable, beta])["TorDisabled"] is True
+    assert MAC_DARWIN.cli_export(str(mac.temp / "out.json"), [stable]) == 1
+    assert "No existing policy found." in capsys.readouterr().err
+
+
+def test_linux_policy_file_is_still_rewritten_whole(mod, tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "IS_MAC", False, raising=False)
+    monkeypatch.setattr(mod, "repair_brave_prefs", lambda *a, **k: (0, {}, False))
+    path = tmp_path / "slimbrave.json"
+    path.write_text(json.dumps({"URLBlocklist": ["x"], "EnableDoNotTrack": True}))
+    inst = [{"channel": "stable", "label": "Stable", "plist_path": str(path)}]
+    ok, msg = mod.apply_policy(mod.build_rows(), inst)
+    assert ok, msg
+    assert json.loads(path.read_text(encoding="utf-8")) == {}
+
+
+# C06: with the profile installed, a scope that leaves out a channel holding
+# a SlimBrave policy is refused before the profile is removed.
+
+@pytest.mark.parametrize("persist", ["on", "off"])
+def test_partial_apply_with_profile_installed_is_refused(mac, persist):
+    mac.installed = True
+    stable, beta = _mac_installs(mac, "stable", "beta")
+    _put_plist(mac.plist("stable"), {"BraveRewardsDisabled": True})
+    ok, msg = MAC_DARWIN.apply_policy(_mac_rows(), [stable, beta], persist_mode=persist,
+                                      selected_channel_ids={"beta"})
+    assert not ok
+    assert msg == "Stable also has a SlimBrave policy; select it too, or Reset first."
+    assert mac.ran("/usr/bin/profiles", "remove") == []
+    assert mac.staged() == [] and not mac.plist("beta").exists()
+
+
+def test_partial_apply_names_every_channel_it_would_strip(mac):
+    mac.installed = True
+    installs = _mac_installs(mac, "stable", "beta", "nightly")
+    for channel in ("stable", "nightly"):
+        _put_plist(mac.plist(channel), {"TorDisabled": True})
+    ok, msg = MAC_DARWIN.apply_policy(_mac_rows(), installs, persist_mode="off",
+                                      selected_channel_ids={"beta"})
+    assert not ok
+    assert msg == "Stable, Nightly also have a SlimBrave policy; select them too, or Reset first."
+
+
+def test_partial_apply_ignores_a_channel_without_policy(mac):
+    mac.installed = True
+    stable, beta = _mac_installs(mac, "stable", "beta")
+    ok, msg = MAC_DARWIN.apply_policy(_mac_rows("Disable Tor"), [stable, beta],
+                                      persist_mode="off", selected_channel_ids={"stable"})
+    assert ok, msg
+    assert _get_plist(mac.plist("stable")) == {"TorDisabled": True}
+
+
+def test_partial_reset_with_profile_installed_is_refused(mac):
+    mac.installed = True
+    stable, beta = _mac_installs(mac, "stable", "beta")
+    _put_plist(mac.plist("stable"), {"BraveRewardsDisabled": True})
+    ok, msg = MAC_DARWIN.reset_policy(_mac_rows(), [stable, beta], selected_channel_ids={"beta"})
+    assert not ok and msg.startswith("Stable also has a SlimBrave policy")
+    assert _get_plist(mac.plist("stable")) == {"BraveRewardsDisabled": True}
+    assert mac.ran("/usr/bin/profiles", "remove") == []
+
+
+def test_full_scope_apply_with_profile_installed_behaves_as_before(mac):
+    mac.installed = True
+    stable, beta = _mac_installs(mac, "stable", "beta")
+    _put_plist(mac.plist("stable"), {"BraveRewardsDisabled": True})
+    ok, msg = MAC_DARWIN.apply_policy(_mac_rows("Disable Tor"), [stable, beta], persist_mode="on",
+                                      selected_channel_ids={"stable", "beta"})
+    assert ok, msg
+    assert mac.ran("/usr/bin/profiles", "remove")
+    staged, = mac.staged()
+    payloads = _get_plist(staged)["PayloadContent"]
+    assert [list(p["PayloadContent"])[0] for p in payloads] == [
+        "com.brave.Browser", "com.brave.Browser.beta"]
+    # the profile carries the policy now; the old plist's SlimBrave keys went
+    assert not mac.plist("stable").exists()
+
+
+def test_scope_guard_fails_open_when_profiles_list_fails(mac):
+    mac.installed, mac.list_rc = True, 1
+    stable, beta = _mac_installs(mac, "stable", "beta")
+    _put_plist(mac.plist("stable"), {"BraveRewardsDisabled": True})
+    ok, msg = MAC_DARWIN.apply_policy(_mac_rows(), [stable, beta], persist_mode="off",
+                                      selected_channel_ids={"beta"})
+    assert ok, msg
+
+
+def test_cli_scope_check_refuses_before_any_action(mac):
+    mac.installed = True
+    stable, beta = _mac_installs(mac, "stable", "beta")
+    _put_plist(mac.plist("stable"), {"BraveRewardsDisabled": True})
+
+    def error(*argv, selected=(beta,)):
+        return MAC_DARWIN._cli_scope_error(MAC_DARWIN.parse_args(list(argv)),
+                                           [stable, beta], list(selected))
+
+    expected = (
+        "Error: Stable also holds a SlimBrave policy, and with the Configuration "
+        "Profile installed every Apply or Reset removes the whole profile. Add it to "
+        "--channels, or run --reset first and then apply to Beta.")
+    assert error("--import", "x.json", "--channels", "beta") == expected
+    assert error("--reset", "--channels", "beta") == expected
+    assert error("--export", "x.json", "--channels", "beta") is None
+    assert error("--import", "x.json", selected=(stable, beta)) is None
+    mac.list_rc = 1
+    assert error("--import", "x.json", "--channels", "beta") is None
+    src = (ROOT / "slimbrave-mac.py").read_text(encoding="utf-8")
+    main = src[src.index('if __name__ == "__main__":'):]
+    assert main.index("_cli_scope_error(") < main.index("cli_reset(")
+
+
+# C07: a failed hand-off is reported with the staged path.
+
+@pytest.mark.parametrize("failure", ["exit", "timeout"])
+def test_failed_profile_hand_off_is_reported_with_the_staged_path(mac, failure):
+    import subprocess
+    if failure == "exit":
+        mac.open_rc = 1
+    else:
+        mac.open_error = subprocess.TimeoutExpired("open", 15)
+    stable, = _mac_installs(mac, "stable")
+    _put_plist(mac.plist("stable"), {"TorDisabled": True})
+    ok, msg = MAC_DARWIN.apply_policy(_mac_rows("Disable Tor"), [stable], persist_mode="on")
+    staged, = mac.staged()
+    assert not ok
+    assert msg.startswith("Could not hand the profile to System Settings (")
+    assert f"It is staged at {staged}; double-click it" in msg
+    assert ("timed out" if failure == "timeout" else "exit status 1") in msg
+    assert staged.exists()
+    # staging failed, so the plist stays in force
+    assert _get_plist(mac.plist("stable")) == {"TorDisabled": True}
+
+
+def test_profile_hand_off_says_the_channels_wait_for_approval(mac, capsys):
+    stable, = _mac_installs(mac, "stable")
+    ok, msg = MAC_DARWIN.apply_policy(_mac_rows("Disable Tor"), [stable], persist_mode="on")
+    assert ok
+    assert msg.startswith("Profile staged to Stable. Those channels have no SlimBrave policy "
+                          "until you install it in System Settings > General > Device Management.")
+    config = mac.temp / "config.json"
+    config.write_text(json.dumps({"Features": {"TorDisabled": True}}))
+    assert MAC_DARWIN.cli_import(str(config), [stable], persist_mode="on") == 0
+    staged = MAC_DARWIN._last_staged_profile
+    assert staged and pathlib.Path(staged) in mac.staged()
+    out = capsys.readouterr().out
+    assert f"Profile file: {staged}\n" in out
+    assert out.index("Profile file: ") < out.index("Finish in System Settings")
+
+
+# C09: --policy-file never touches the profile; a Reset that leaves it
+# installed says so; a full Reset also clears uninstalled channels.
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_policy_file_override_never_touches_the_profile(mac, installed):
+    mac.installed = installed
+    override = _mac_override(mac)
+    ok, msg = MAC_DARWIN.apply_policy(_mac_rows("Disable Tor"), override, persist_mode="off")
+    assert ok, msg
+    ok, msg = MAC_DARWIN.reset_policy(_mac_rows(), override, all_channels=True)
+    assert ok, msg
+    assert mac.ran("/usr/bin/profiles") == []
+    assert mac.ran("/usr/bin/killall", "cfprefsd")  # still flushed
+    ok, msg = MAC_DARWIN.apply_policy(_mac_rows("Disable Tor"), override, persist_mode="on")
+    assert not ok
+    assert mac.staged() == []
+
+
+def test_reset_that_leaves_the_profile_installed_says_so(mac, capsys):
+    mac.installed, mac.remove_rc = True, 1
+    stable, = _mac_installs(mac, "stable")
+    ok, msg = MAC_DARWIN.reset_policy(_mac_rows(), [stable])
+    assert not ok and msg == MAC_DARWIN.PROFILE_STILL_INSTALLED
+    assert "still installed" in msg
+    assert MAC_DARWIN.cli_reset([stable]) == 1
+    captured = capsys.readouterr()
+    assert "Removed Configuration Profile" not in captured.out
+    assert "still installed" in captured.err
+    mac.remove_rc = 0
+    assert MAC_DARWIN.cli_reset([stable]) == 0
+    assert "Removed Configuration Profile" in capsys.readouterr().out
+    assert MAC_DARWIN._remove_profile() is True
+
+
+def test_full_reset_clears_channels_that_are_no_longer_installed(mac, capsys):
+    stable, = _mac_installs(mac, "stable")
+    _put_plist(mac.plist("beta"), {"TorDisabled": True})
+    _put_plist(mac.plist("nightly"), {"TorDisabled": True, "URLBlocklist": ["x"]})
+    ok, msg = MAC_DARWIN.reset_policy(_mac_rows(), [stable])
+    assert ok and mac.plist("beta").exists()  # not a full reset
+    ok, msg = MAC_DARWIN.reset_policy(_mac_rows(), [stable], all_channels=True)
+    assert ok, msg
+    assert "Beta (not installed)" in msg and "Nightly (not installed)" in msg
+    assert not mac.plist("beta").exists()
+    assert _get_plist(mac.plist("nightly")) == {"URLBlocklist": ["x"]}
+    _put_plist(mac.plist("beta"), {"TorDisabled": True})
+    assert MAC_DARWIN.cli_reset([stable], all_channels=True) == 0
+    assert (f"Removed SlimBrave keys from {mac.plist('beta')} (Beta, not installed)"
+            in capsys.readouterr().out)
 
 
 # ---------------------------------------------------------------------------
@@ -1209,6 +1864,76 @@ def test_running_check_without_pgrep(mod, monkeypatch):
     stable = mod._make_installation(mod.LINUX_CHANNELS[0], plist_path="/x", prefs_path=None)
     assert mod._is_brave_running([stable]) is False
     assert tried == list(mod.PGREP_PATHS)
+
+
+def test_detect_beta_only_deb_layout(mod, monkeypatch):
+    """A Beta-only deb or rpm registers /usr/bin/brave-browser as an
+    alternative for its own launcher (Chromium's postinst, which brave-core
+    keeps), so the stable probe finds a Brave and nothing is wrong: found,
+    no warning, and only the Beta record."""
+    _fake_linux_box(mod, monkeypatch, on_path={"brave-browser", "brave-browser-beta"},
+                    dirs={"/home/u/.config/BraveSoftware/Brave-Browser-Beta"})
+    info = mod.detect_brave()
+    assert info["found"] is True and info["warnings"] == []
+    assert [i["channel"] for i in info["installations"]] == ["beta"]
+
+
+def _locked_profile(tmp_path, target):
+    """A profile whose SingletonLock points at `target`, as Chromium leaves it."""
+    user_data = tmp_path / "Brave-Browser"
+    (user_data / "Default").mkdir(parents=True)
+    os.symlink(target, user_data / "SingletonLock")
+    return {"prefs_path": str(user_data / "Default" / "Preferences"), "process_name": "brave"}
+
+
+@posix_only
+@pytest.mark.parametrize("exe,running", [
+    ("/usr/bin/bash", False),
+    ("/opt/brave.com/brave/brave (deleted)", True),
+])
+def test_a_lock_on_this_host_counts_only_for_a_brave_binary(mod, monkeypatch, tmp_path, exe, running):
+    """A crash leaves the lock behind and the pid can be reused: on Linux
+    the holder must still be a brave binary, as Chromium checks it."""
+    inst = _locked_profile(tmp_path, f"{socket.gethostname()}-4242")
+    real_readlink, real_isdir = os.readlink, os.path.isdir
+    monkeypatch.setattr(os, "readlink", lambda p, *a, **k: (
+        exe if os.fspath(p) == "/proc/4242/exe" else real_readlink(p, *a, **k)))
+    monkeypatch.setattr(os.path, "isdir", lambda p: p == "/proc/self" or real_isdir(p))
+    monkeypatch.setattr(mod, "_pid_is_alive", lambda pid: pid == 4242)
+    monkeypatch.setattr(mod, "_pgrep", lambda name, uid=None: 1)
+    assert mod._singleton_lock_pid(inst["prefs_path"]) == (socket.gethostname(), 4242)
+    assert mod._is_brave_running([inst]) is running
+
+
+@posix_only
+def test_a_lock_from_another_host_counts_as_running(mod, monkeypatch, tmp_path):
+    """The profile is in use on that host (a shared home); Chromium treats
+    it the same way."""
+    inst = _locked_profile(tmp_path, "otherhost-1")
+    monkeypatch.setattr(socket, "gethostname", lambda: "thishost")
+    monkeypatch.setattr(mod, "_pgrep", lambda *a, **k: pytest.fail("the lock decides"))
+    assert mod._is_brave_running([inst]) is True
+
+
+@posix_only
+def test_pgrep_looks_only_at_the_invoking_users_processes(mod, monkeypatch):
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append(list(cmd))
+        return type("R", (), {"returncode": 1})()
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    stable = mod._make_installation(mod.LINUX_CHANNELS[0], plist_path="/x", prefs_path=None)
+    _fake_passwd(monkeypatch, {"alice": 1000})
+    monkeypatch.setenv("SUDO_USER", "alice")
+    assert mod._is_brave_running([stable]) is False
+    assert seen == [["/usr/bin/pgrep", "-u", "1000", "-x", "brave"]]
+    seen.clear()
+    monkeypatch.delenv("SUDO_USER")
+    monkeypatch.delenv("USER", raising=False)
+    assert mod._is_brave_running([stable]) is False
+    assert seen == [["/usr/bin/pgrep", "-x", "brave"]]
 
 
 def test_subprocess_argv0_is_absolute():
@@ -2732,7 +3457,7 @@ def test_collapse_state_survives_sync_rows_with_policy(mod):
 def test_collapse_state_survives_reset_policy(mod, tmp_path, monkeypatch):
     """reset_policy unchecks every row and deletes the policy file; the
     prefs repair is stubbed so nothing here goes near a real profile."""
-    monkeypatch.setattr(mod, "repair_brave_prefs", lambda *a, **k: (0, False))
+    monkeypatch.setattr(mod, "repair_brave_prefs", lambda *a, **k: (0, {}, False))
     plist = tmp_path / "policy.json"
     plist.write_text(json.dumps({"BraveRewardsDisabled": True}))
     installations = [{"channel": "stable", "label": "Stable",

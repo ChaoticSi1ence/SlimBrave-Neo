@@ -27,6 +27,8 @@ import json
 import locale
 import os
 import shutil
+import socket
+import stat
 import subprocess
 import sys
 import textwrap
@@ -236,6 +238,12 @@ def _atomic_write(path, data, *, binary=False, mode=0o644):
     target directory entry without following a symlink that happened to
     exist there. Fixes two classes of root footgun at once: symlink
     races and partial-state writes if the process is killed mid-write.
+
+    The data is fsynced before the rename, as Chromium's ImportantFileWriter
+    does, so a crash or power cut leaves the old file or the new one, never
+    an empty one: ext4's rename heuristic misses a freshly created file and
+    XFS has none. The directory is fsynced afterwards where POSIX allows it,
+    on a best-effort basis.
     """
     directory = os.path.dirname(path) or "."
     fd, tmp = tempfile.mkstemp(prefix=".slimbrave.", suffix=".tmp", dir=directory)
@@ -253,13 +261,28 @@ def _atomic_write(path, data, *, binary=False, mode=0o644):
                 os.fchmod(f.fileno(), mode)
             else:
                 os.chmod(tmp, mode)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, path)
-    except Exception:
+    except BaseException:
+        # BaseException, so a Ctrl+C mid-write leaves no temp file either.
         try:
             os.unlink(tmp)
         except OSError:
             pass
         raise
+    if os.name == "posix":
+        # Makes the rename itself durable. Outside the cleanup above: the
+        # file is already in place, so a directory that cannot be opened or
+        # synced fails nothing.
+        try:
+            dir_fd = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
 
 # ---------------------------------------------------------------------------
 # Brave browser detection
@@ -1010,7 +1033,7 @@ def _pid_is_alive(pid):
 
 
 def _singleton_lock_pid(prefs_path):
-    """Return the pid holding a profile's Chromium SingletonLock, or None.
+    """Return (host, pid) from a profile's Chromium SingletonLock, or None.
 
     Chromium symlinks <user-data-dir>/SingletonLock to "<hostname>-<pid>"
     for as long as the profile is open. This is the only running-check that
@@ -1024,8 +1047,36 @@ def _singleton_lock_pid(prefs_path):
         target = os.readlink(os.path.join(user_data, "SingletonLock"))
     except OSError:
         return None
-    pid_part = target.rsplit("-", 1)[-1]
-    return int(pid_part) if pid_part.isdigit() else None
+    host, sep, pid_part = target.rpartition("-")
+    if not sep or not pid_part.isdigit():
+        return None
+    return host, int(pid_part)
+
+
+def _lock_holder_is_running(host, pid):
+    """True if a SingletonLock's holder still counts as a running Brave.
+
+    A lock taken on another host counts: the profile is in use there (a
+    shared home), and Chromium treats it the same way. On this host the
+    pid has to be alive, and on Linux it also has to be a Brave binary,
+    Chromium's own IsChromeProcess test: a lock a crash left behind can
+    name a pid some other program has since been given. Every Brave build
+    on Linux, Origin included, runs a binary named brave. macOS has no
+    procfs, so there a live pid is enough.
+    """
+    if host != socket.gethostname():
+        return True
+    if not _pid_is_alive(pid):
+        return False
+    if not os.path.isdir("/proc/self"):
+        return True
+    try:
+        exe = os.readlink(f"/proc/{pid}/exe")
+    except OSError:
+        return False
+    if exe.endswith(" (deleted)"):
+        exe = exe[:-len(" (deleted)")]
+    return os.path.basename(exe) == "brave"
 
 
 # pgrep by absolute path, never through PATH: sudo can pass the caller's
@@ -1035,12 +1086,13 @@ def _singleton_lock_pid(prefs_path):
 PGREP_PATHS = ("/usr/bin/pgrep", "/bin/pgrep")
 
 
-def _pgrep(name):
-    """Return the exit status of `pgrep -x name`, or None with no pgrep."""
+def _pgrep(name, uid=None):
+    """Return the exit status of `pgrep [-u uid] -x name`, or None with no pgrep."""
+    args = ["-x", name] if uid is None else ["-u", str(uid), "-x", name]
     for exe in PGREP_PATHS:
         try:
             return subprocess.run(
-                [exe, "-x", name],
+                [exe, *args],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             ).returncode
         except FileNotFoundError:
@@ -1049,24 +1101,31 @@ def _pgrep(name):
 
 
 def _is_brave_running(installations=None):
-    """True if any of the listed Brave installations have a live process."""
+    """True if any of the listed Brave installations have a live process.
+
+    The process search is limited to the invoking user's processes
+    (_invoking_user): theirs is the profile the scrub rewrites, and another
+    account's Brave cannot overwrite it.
+    """
     if installations is None:
         names = ["brave"]
     else:
         for inst in installations:
-            pid = _singleton_lock_pid(inst.get("prefs_path"))
-            if pid is not None and _pid_is_alive(pid):
+            holder = _singleton_lock_pid(inst.get("prefs_path"))
+            if holder is not None and _lock_holder_is_running(*holder):
                 return True
         names = [i["process_name"] for i in installations if i.get("process_name")]
         if not names:
             names = ["brave"]
 
+    identity = _sudo_user_identity()
+    uid = identity[1] if identity else None
     for name in names:
         # A name longer than comm's 15-char cap can only ever be a false
         # negative, so don't spend a process asking.
         if len(name) > 15:
             continue
-        rc = _pgrep(name)
+        rc = _pgrep(name, uid)
         if rc is None:
             return False
         if rc == 0:
@@ -1145,15 +1204,15 @@ def _run_as_invoking_user(fn, *args, default):
         return default
 
 
-def _scrub_as_invoking_user(scrub, path):
-    """Run a prefs scrub as the invoking user; 0 when there is none.
+def _scrub_as_invoking_user(scrub, path, default):
+    """Run a prefs scrub as the invoking user; `default` when there is none.
 
     As root with nobody to drop to (a root login, `su -`), nothing is
     scrubbed: rewriting a home directory as root is what the drop avoids.
     """
     if getattr(os, "geteuid", lambda: -1)() == 0 and _sudo_user_identity() is None:
-        return 0
-    return _run_as_invoking_user(scrub, path, default=0)
+        return default
+    return _run_as_invoking_user(scrub, path, default=default)
 
 
 def _repair_one_prefs(pref_path):
@@ -1163,44 +1222,65 @@ def _repair_one_prefs(pref_path):
     doing the read-modify-write as root would follow a symlinked
     `Default`/`Profile *` into a file root owns and then hand it over.
     Fork and drop to the invoking user's uid/gid instead — the child can
-    only reach what that user could already reach. Returns the number of
-    entries removed (0 on any failure, so a broken drop repairs nothing
-    rather than repairing as root).
+    only reach what that user could already reach. Returns what
+    _scrub_one_prefs does (0 when the drop fails, so a broken drop repairs
+    nothing rather than repairing as root).
     """
-    return _scrub_as_invoking_user(_scrub_one_prefs, pref_path)
+    return _scrub_as_invoking_user(_scrub_one_prefs, pref_path, 0)
 
 
 def _repair_user_data_dir(default_prefs_path):
     """Scrub every profile of one user-data dir in a single drop.
 
     The child lists the profiles as well, so root never reads a directory
-    inside the user's home. Returns the number of entries removed.
+    inside the user's home. Returns [removed, failed] (_scrub_user_data_dir).
     """
-    return _scrub_as_invoking_user(_scrub_user_data_dir, default_prefs_path)
+    return _scrub_as_invoking_user(_scrub_user_data_dir, default_prefs_path, [0, 0])
 
 
 def _scrub_user_data_dir(default_prefs_path):
-    """List a user-data dir's profiles and scrub each, as the caller."""
-    return sum(_scrub_one_prefs(p) for p in _profile_prefs_paths(default_prefs_path))
+    """List a user-data dir's profiles and scrub each, as the caller.
+
+    Returns [removed, failed]: the entries removed, and the number of
+    profiles whose Preferences could not be read or rewritten. A list, so
+    the reply from the dropped child decodes to the same value.
+    """
+    removed = failed = 0
+    for path in _profile_prefs_paths(default_prefs_path):
+        count = _scrub_one_prefs(path)
+        if count < 0:
+            failed += 1
+        else:
+            removed += count
+    return [removed, failed]
 
 
 def _scrub_one_prefs(pref_path):
-    """Remove SlimBrave's Shields-disabled exceptions from one prefs file."""
+    """Remove SlimBrave's Shields-disabled exceptions from one prefs file.
+
+    Returns the number of exception entries removed: 0 if the file is
+    missing, is not JSON (or not UTF-8), or holds none of them; -1 if it
+    exists but cannot be read, or holds them and cannot be rewritten.
+    """
     if not pref_path or not os.path.isfile(pref_path):
         return 0
 
     try:
         with open(pref_path, "r", encoding="utf-8") as f:
             prefs = json.load(f)
-    except (OSError, json.JSONDecodeError):
+    except ValueError:
+        # JSONDecodeError and UnicodeDecodeError: not a file Brave could
+        # load either, so there is nothing of ours to remove.
         return 0
+    except OSError:
+        return -1
 
-    bs = (
-        prefs.get("profile", {})
-             .get("content_settings", {})
-             .get("exceptions", {})
-             .get("braveShields")
-    )
+    # Walk with type checks: valid JSON can still hold a null or a list
+    # where Brave keeps an object.
+    node = prefs
+    for key in ("profile", "content_settings", "exceptions"):
+        node = node.get(key) if isinstance(node, dict) else None
+    bs = node.get("braveShields") if isinstance(node, dict) else None
     if not isinstance(bs, dict) or not bs:
         return 0
 
@@ -1221,7 +1301,7 @@ def _scrub_one_prefs(pref_path):
             mode=original_mode,
         )
     except OSError:
-        return 0
+        return -1
 
     return removed
 
@@ -1229,13 +1309,16 @@ def _scrub_one_prefs(pref_path):
 def repair_brave_prefs(installations=None):
     """Remove the leaked Shields exceptions across all given channels.
 
-    Returns (removed_count, brave_was_running).
+    Returns (removed_count, failed, brave_was_running), where `failed` maps
+    each user-data dir to the number of its profiles that could not be
+    cleaned (_scrub_failure_note words it).
     """
     if installations is None:
         installations = [{"prefs_path": _channel_prefs_path(LINUX_CHANNELS[0]["user_data_dir"])}]
 
     running = _is_brave_running(installations)
     total = 0
+    failed = {}
     seen = set()
     for inst in installations:
         prefs_path = inst.get("prefs_path")
@@ -1246,8 +1329,20 @@ def repair_brave_prefs(installations=None):
         if user_data in seen:
             continue
         seen.add(user_data)
-        total += _repair_user_data_dir(prefs_path)
-    return (total, running)
+        removed, not_cleaned = _repair_user_data_dir(prefs_path)
+        total += removed
+        if not_cleaned:
+            failed[user_data] = not_cleaned
+    return (total, failed, running)
+
+
+def _scrub_failure_note(failed):
+    """The sentence naming profiles the scrub could not clean, or ''."""
+    if not failed:
+        return ""
+    n = sum(failed.values())
+    return (f"Failed to clean {n} profile{'s' if n != 1 else ''}; "
+            f"check ownership of {', '.join(failed)}.")
 
 
 # ---------------------------------------------------------------------------
@@ -1256,14 +1351,18 @@ def repair_brave_prefs(installations=None):
 
 
 def _read_one_policy(plist_path):
-    """Read a single JSON policy file."""
+    """Read a single JSON policy file.
+
+    Anything that is not a readable dict reads as empty.
+    """
     try:
         with open(plist_path, "r") as f:
-            return json.load(f)
+            data = json.load(f)
     except (FileNotFoundError, PermissionError):
         return {}
     except Exception:
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def load_existing_policy(installations=None):
@@ -1331,15 +1430,66 @@ def _build_policy(rows):
 
 
 def _write_one_policy(plist_path, policy):
-    """Write a single JSON policy file and return (ok, error_msg)."""
+    """Write a single JSON policy file and return (ok, error_msg).
+
+    The file is SlimBrave's own and is rewritten whole. Any directory
+    created on the way is 0755 whatever the caller's umask: under sudo's
+    union with a strict one (027) a 0750 root directory would hide every
+    policy from Brave, which runs as the user.
+    """
     try:
-        os.makedirs(os.path.dirname(plist_path), exist_ok=True)
+        old_umask = os.umask(0o022)
+        try:
+            os.makedirs(os.path.dirname(plist_path), exist_ok=True)
+        finally:
+            os.umask(old_umask)
         _atomic_write(plist_path, json.dumps(policy, indent=4))
     except PermissionError:
         return False, "Permission denied. Run as root."
     except OSError as e:
         return False, f"Failed to write policy: {e}"
     return True, ""
+
+
+def _unreadable_policy_dir(directory, stop="/etc"):
+    """Return (dir, mode) of a policy directory Brave cannot read, or None.
+
+    Brave reads its policy directory as the user, so on Linux every
+    directory below `stop` down to `directory` needs o+x, and `directory`
+    itself o+r to be listed. A version older than the umask fix, run under
+    a strict umask (027), created them 0750 as root. Returns the topmost
+    offender; None off POSIX, or for a directory not under `stop`.
+    """
+    if os.name != "posix":
+        return None
+    stop = os.path.abspath(stop)
+    d = os.path.abspath(directory)
+    chain = []
+    while d != stop:
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        chain.append(d)
+        d = parent
+    leaf = os.path.abspath(directory)
+    for d in reversed(chain):
+        try:
+            mode = stat.S_IMODE(os.stat(d).st_mode)
+        except OSError:
+            continue
+        need = stat.S_IXOTH | (stat.S_IROTH if d == leaf else 0)
+        if mode & need != need:
+            return d, mode
+    return None
+
+
+def _unreadable_dir_note(plist_path):
+    """The Apply-message sentence for _unreadable_policy_dir, or ''."""
+    found = _unreadable_policy_dir(os.path.dirname(plist_path))
+    if found is None:
+        return ""
+    d, mode = found
+    return f"Brave cannot read {d} (mode {mode:o}); run 'sudo chmod 755 {d}'"
 
 
 def _dedupe_plist_targets(installations):
@@ -1372,6 +1522,7 @@ def apply_policy(rows, installations=None):
         return False, "No Brave channel selected."
 
     written_labels = []
+    unreadable = ""
     for plist_path, label in targets:
         ok, err = _write_one_policy(plist_path, policy)
         if not ok:
@@ -1379,14 +1530,18 @@ def apply_policy(rows, installations=None):
             return False, f"{err}{scope}"
         if label:
             written_labels.append(label)
+        if not unreadable:
+            unreadable = _unreadable_dir_note(plist_path)
 
-    return True, _post_apply_message(
+    msg = _post_apply_message(
         *repair_brave_prefs(installations if installations else None),
         labels=written_labels,
     )
+    # First, so the TUI's one status line shows it.
+    return True, f"{unreadable}. {msg}" if unreadable else msg
 
 
-def _post_apply_message(repaired, brave_running, labels=None):
+def _post_apply_message(repaired, failed, brave_running, labels=None):
     """Build the status message after a successful Apply or Reset."""
     scope = f" to {', '.join(labels)}" if labels else ""
     base = f"Settings applied{scope}. Restart Brave to see changes."
@@ -1398,6 +1553,8 @@ def _post_apply_message(repaired, brave_running, labels=None):
             f"Applied{scope}; cleaned {repaired} leaked profile "
             f"pref{'s' if repaired != 1 else ''}. Restart Brave."
         )
+    if failed:
+        base += " " + _scrub_failure_note(failed)
     if brave_running:
         base += (
             " Brave is running: any leaked profile prefs cleaned now will be "
@@ -1438,7 +1595,7 @@ def reset_policy(rows, installations=None):
     except OSError as e:
         return False, f"Failed to reset: {e}"
 
-    repaired, running = repair_brave_prefs(installations if installations else None)
+    repaired, failed, running = repair_brave_prefs(installations if installations else None)
     scope = f" for {', '.join(cleared_labels)}" if cleared_labels else ""
     msg = f"All settings reset{scope}. Restart Brave to see changes."
     if repaired > 0 and not running:
@@ -1446,6 +1603,8 @@ def reset_policy(rows, installations=None):
             f"Reset{scope}; cleaned {repaired} leaked profile "
             f"pref{'s' if repaired != 1 else ''}. Restart Brave."
         )
+    if failed:
+        msg += " " + _scrub_failure_note(failed)
     if running:
         msg += (
             " Brave is running: any leaked profile prefs cleaned now will be "
@@ -1546,7 +1705,8 @@ def _write_export(path, text):
     except PermissionError as e:
         home = _user_home_for_brave()
         if hasattr(os, "geteuid") and os.geteuid() != 0 and home:
-            # The TUI prompt does not expand ~, so the hint spells it out.
+            # The hint spells the home out in full, so it works the same
+            # pasted into a shell as typed at the TUI prompt.
             import pwd
             try:
                 who = pwd.getpwuid(os.getuid()).pw_name
@@ -2413,6 +2573,24 @@ def prompt_text_input(stdscr, rows, cursor_idx, scroll_offset, btn_idx,
             cur += 1
 
 
+def _expand_prompt_path(path):
+    """Expand a leading ~ in a path typed at the TUI's Import/Export prompt.
+
+    `~` and `~/...` mean the invoking user's home (_invoking_user), not
+    root's, falling back to os.path.expanduser when there is none;
+    `~name/...` goes through os.path.expanduser. Anything else is
+    returned unchanged.
+    """
+    if path == "~" or path.startswith("~/"):
+        home = _user_home_for_brave()
+        if home is None:
+            return os.path.expanduser(path)
+        return home if path == "~" else os.path.join(home, path[2:])
+    if path.startswith("~"):
+        return os.path.expanduser(path)
+    return path
+
+
 def main(stdscr, override_installations=None):
     """Main TUI event loop."""
     curses.curs_set(0)
@@ -2747,7 +2925,8 @@ def main(stdscr, override_installations=None):
                         "Import path (Esc=cancel)",
                         default="./Presets/", show_desc=show_desc)
                     if ok and path:
-                        status_ok, status_msg = import_settings(rows, path)
+                        status_ok, status_msg = import_settings(
+                            rows, _expand_prompt_path(path))
                     else:
                         status_msg = "Import cancelled."
                         status_ok = True
@@ -2759,7 +2938,8 @@ def main(stdscr, override_installations=None):
                         "Export path (Esc=cancel)",
                         default="./SlimBraveNeoSettings.json", show_desc=show_desc)
                     if ok and path:
-                        status_ok, status_msg = export_settings(rows, path)
+                        status_ok, status_msg = export_settings(
+                            rows, _expand_prompt_path(path))
                     else:
                         status_msg = "Export cancelled."
                         status_ok = True
@@ -2864,12 +3044,14 @@ def cli_reset(installations):
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    repaired, running = repair_brave_prefs(installations)
+    repaired, failed, running = repair_brave_prefs(installations)
     if repaired > 0 and not running:
         print(
             f"Cleaned {repaired} leaked profile "
             f"pref{'s' if repaired != 1 else ''} from Brave's user profile."
         )
+    if failed:
+        print(f"Warning: {_scrub_failure_note(failed)}", file=sys.stderr)
     if running:
         print(
             "Note: Brave is running — any leaked profile prefs cleaned now "
@@ -2904,12 +3086,41 @@ def _filter_installations_by_channels(installations, channel_spec):
     return filtered, ""
 
 
-def parse_args():
-    """Parse command-line arguments."""
+def _check_args(args):
+    """Return the error for a command line that cannot run, or None.
+
+    Checked before the root check, so a bad command line is refused
+    without sudo; __main__ exits 2 on any of them.
+    """
+    for flag, value in (("--import", args.import_path),
+                        ("--export", args.export_path),
+                        ("--policy-file", args.policy_file)):
+        if value == "":
+            return f"Error: {flag} needs a path."
+    # --doh-templates is only ever read by cli_import; --reset, --export and
+    # the TUI would drop it without a word.
+    if args.doh_templates and args.import_path is None:
+        return "Error: --doh-templates requires --import"
+    # --reset runs first, so an export after it would save nothing; and a
+    # failed export would not stop the reset that loses the policy.
+    if args.reset and args.export_path is not None:
+        return ("Error: --export cannot be combined with --reset. "
+                "Run --export first, then --reset.")
+    acting = (args.import_path is not None or args.export_path is not None
+              or args.reset)
+    if args.channels != "auto" and (args.policy_file is not None or not acting):
+        return ("Error: --channels applies only to --import, --export or "
+                "--reset, and not with --policy-file.")
+    return None
+
+
+def parse_args(argv=None):
+    """Parse command-line arguments (sys.argv[1:] when argv is None)."""
     parser = argparse.ArgumentParser(
         prog="slimbrave",
         description="SlimBrave Neo - Brave Browser debloater",
-        epilog="Run without arguments to launch the interactive TUI.",
+        epilog=("Run without arguments to launch the interactive TUI. "
+                "--reset runs before --import; --export runs last."),
     )
     parser.add_argument(
         "--import", dest="import_path", metavar="PATH",
@@ -2939,7 +3150,7 @@ def parse_args():
             "Linux always writes a single shared policy file."
         ),
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -2949,14 +3160,13 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-    # --doh-templates is only ever read by cli_import; --reset, --export and
-    # the TUI would drop it without a word.
-    if args.doh_templates and not args.import_path:
-        print("Error: --doh-templates requires --import", file=sys.stderr)
+    error = _check_args(args)
+    if error:
+        print(error, file=sys.stderr)
         sys.exit(2)
 
     override_installations = None
-    if args.policy_file:
+    if args.policy_file is not None:
         if not _is_allowed_policy_file(args.policy_file):
             print(
                 "--policy-file must be a slimbrave*.json file directly inside one of: "
@@ -2974,7 +3184,8 @@ if __name__ == "__main__":
             prefs_path=_channel_prefs_path(default_channel["user_data_dir"]),
         )]
 
-    is_cli = args.import_path or args.export_path or args.reset
+    is_cli = (args.import_path is not None or args.export_path is not None
+              or args.reset)
 
     if os.geteuid() != 0:
         print("SlimBrave Neo must be run as root.")
@@ -3005,10 +3216,10 @@ if __name__ == "__main__":
         rc = 0
         if args.reset:
             rc = max(rc, cli_reset(installations))
-        if args.import_path:
+        if args.import_path is not None:
             rc = max(rc, cli_import(args.import_path, installations,
                                     doh_templates=args.doh_templates or ""))
-        if args.export_path:
+        if args.export_path is not None:
             rc = max(rc, cli_export(args.export_path, installations))
         sys.exit(rc)
 
