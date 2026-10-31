@@ -156,9 +156,10 @@ Shields" is unticked, so every Apply and Reset removes them as a guard.
 
 **Reset is scoped to this tool's own keys.** It removes only the policy names
 SlimBrave Neo manages, in both scopes, and the two DNS values. Apply and Reset
-also remove three names older versions wrote and this one no longer offers
-(`MediaRecommendationsEnabled`, `SafeBrowsingExtendedReportingEnabled`,
-`SafeSitesFilterBehavior`), and only while each still holds the value
+also remove six names older versions wrote and this one no longer offers
+(`AlternateErrorPagesEnabled`, `DNSInterceptionChecksEnabled`,
+`MediaRecommendationsEnabled`, `SafeBrowsingExtendedReportingEnabled`,
+`SafeSitesFilterBehavior`, `ShoppingListEnabled`), and only while each still holds the value
 SlimBrave wrote, so an upgrade does not leave a retired policy in force. It does not
 delete the `...\Policies\BraveSoftware\Brave` key itself and does not touch
 other values inside it — a group-policy `ExtensionInstallForcelist`,

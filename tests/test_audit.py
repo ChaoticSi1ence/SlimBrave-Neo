@@ -148,3 +148,42 @@ def test_ledger_names_the_key_sections():
 
 def test_no_diary_markers():
     assert not re.search(r"Stale as of|^### 20\d\d|Read at:", AUDIT, re.MULTILINE)
+
+
+def test_ps1_retired_policies_are_rejected_and_unwritten():
+    """A key the scripts drop goes to Considered and rejected and into the
+    PS1's retired table, which deletes the value earlier versions wrote; the
+    row names that value, so the two cannot drift apart."""
+    ps1 = (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
+    block = re.search(r"\$script:retiredPolicies = \[ordered\]@\{(.*?)\n\}", ps1, re.S)
+    assert block, "retired table missing"
+    retired = re.findall(r'"(\w+)"\s*=\s*(\d+)', block.group(1))
+    assert retired
+    for name, value in retired:
+        assert _rejected_match(name), f"{name} retired but not in Considered and rejected"
+        assert name not in WRITTEN, f"{name} retired but still written"
+        why = [row["Why not"] for _header, rows in REJECTED_TABLES for row in rows
+               if name in _keys_in(row["Key(s)"])]
+        assert any(f"delete a leftover `{value}` it wrote" in w for w in why), (
+            f"{name}: its Considered and rejected row does not name the {value} the table deletes")
+
+
+def test_no_script_offers_a_row_with_no_effect_in_brave():
+    """A key inert everywhere it is offered does not ship; platform caveats
+    such as '(no effect on Linux builds)' stay legal."""
+    for name in ("SlimBrave.ps1", "slimbrave-linux.py", "slimbrave-mac.py"):
+        assert "(no effect in Brave)" not in (ROOT / name).read_text(encoding="utf-8"), name
+
+
+def test_lock_only_rows_say_what_brave_already_does():
+    """A lock-only row's description names Brave's own default, so the UI
+    never claims the key starts something Brave already does."""
+    descs = {}
+    for cat in LINUX_MOD.CATEGORIES:
+        for feat in cat["features"]:
+            descs.setdefault(feat["key"], []).append(feat.get("desc", ""))
+    locks = sorted(k for k, row in KEY_ROWS.items()
+                   if k in WRITTEN and row.get("Notes", "").lower().startswith("lock only"))
+    assert locks, "no row is marked lock only"
+    missing = [k for k in locks if not any("Brave already" in d for d in descs.get(k, []))]
+    assert missing == [], missing

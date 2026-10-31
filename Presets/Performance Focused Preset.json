@@ -17,9 +17,7 @@
         "BraveSpeedreaderEnabled": false,
         "BackgroundModeEnabled": false,
         "HighEfficiencyModeEnabled": true,
-        "HardwareAccelerationModeEnabled": true,
         "EnableMediaRouter": false,
-        "ShoppingListEnabled": false,
         "DefaultBrowserSettingEnabled": false,
         "BraveWaybackMachineEnabled": false,
         "BraveLocalAIEnabled": false

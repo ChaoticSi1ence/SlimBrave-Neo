@@ -506,9 +506,9 @@ CATEGORIES = [
     {
         "name": "Telemetry & Reporting",
         "features": [
-            {"name": "Disable Metrics Reporting", "key": "MetricsReportingEnabled", "value": False, "desc": "Stops Brave from sending anonymous usage statistics and crash reports to Brave's servers."},
+            {"name": "Disable Metrics Reporting", "key": "MetricsReportingEnabled", "value": False, "desc": "Stops Brave from uploading crash reports: locks 'Automatically send diagnostic reports' off, hides the prompt after a crash and blocks Send now on brave://crashes. Beta and Nightly turn it on by default; on Release the welcome page pre-ticks it. P3A and the usage ping have their own rows."},
 
-            {"name": "Disable URL Data Collection", "key": "UrlKeyedAnonymizedDataCollectionEnabled", "value": False, "desc": "Stops URL-keyed anonymized data collection, which reports the URLs you visit to improve suggestion and safety features."},
+            {"name": "Disable URL Data Collection", "key": "UrlKeyedAnonymizedDataCollectionEnabled", "value": False, "desc": "Locks 'Make searches and browsing better' (URL-keyed anonymized data collection) off. Brave already ships it off; its only switch, the hidden Privacy Guide at brave://settings/privacy/guide, goes away once any policy is set. This also overrides an opt-in made there earlier."},
 
             {"name": "Disable P3A Analytics", "key": "BraveP3AEnabled", "value": False, "desc": "Disables P3A (Privacy-Preserving Product Analytics), Brave's anonymized product usage telemetry."},
 
@@ -535,33 +535,29 @@ CATEGORIES = [
 
             {"name": "Disable Password Leak Detection", "key": "PasswordLeakDetectionEnabled", "value": False, "desc": "Locks off the online check of your credentials against known breach lists, which runs after you sign in to a site and when you edit a saved login. Brave already ships it off; this keeps it off."},
 
-            {"name": "Disable Browser Sign-in", "key": "BrowserSignin", "value": 0, "desc": "Brave has no Google sign-in for the browser itself; in Brave this locks off 'Allow Google login for extensions' (brave://settings/extensions), which Brave already ships off. Brave Account sign-in is not affected. Takes effect after a restart."},
+            {"name": "Disable Browser Sign-in", "key": "BrowserSignin", "value": 0, "desc": "Brave has no Google browser sign-in; this locks 'Allow Google login for extensions' (brave://settings/extensions) off, as Brave already ships it. Extensions can still open Google's sign-in popup via chrome.identity. Brave Account is not affected. Takes effect after a restart."},
 
-            {"name": "Enable Global Privacy Control", "key": "BraveGlobalPrivacyControlEnabled", "value": True, "desc": "Sends the GPC signal with every request, telling sites not to sell or share your data. Legally binding in some regions (e.g. under CCPA)."},
+            {"name": "Enable Global Privacy Control", "key": "BraveGlobalPrivacyControlEnabled", "value": True, "desc": "Brave already sends the Global Privacy Control signal (asking sites not to sell or share your data) on every request and has no setting for it; this keeps it on if Adblock-Only mode (English UI only) is turned on. Works even where Shields are down."},
 
-            {"name": "Enable De-AMP", "key": "BraveDeAmpEnabled", "value": True, "desc": "Skips Google AMP pages and loads the publisher's original page instead."},
+            {"name": "Enable De-AMP", "key": "BraveDeAmpEnabled", "value": True, "desc": "Keeps De-AMP on: Google AMP pages are skipped for the publisher's original page. Brave already does this by default; this locks the Settings toggle and stops Adblock-Only mode from turning it off."},
 
-            {"name": "Enable Debouncing", "key": "BraveDebouncingEnabled", "value": True, "desc": "Skips known tracking redirects and navigates straight to the final destination URL."},
+            {"name": "Enable Debouncing", "key": "BraveDebouncingEnabled", "value": True, "desc": "Keeps debouncing on: known tracking redirects are skipped and you go straight to the final URL. Brave already does this by default; this locks the Settings toggle and stops Adblock-Only mode from turning it off."},
 
-            {"name": "Strip Tracking URL Parameters", "key": "BraveTrackingQueryParametersFilteringEnabled", "value": True, "desc": "Removes known tracking parameters (fbclid, gclid, mc_eid, ...) from URLs before they load."},
+            {"name": "Strip Tracking URL Parameters", "key": "BraveTrackingQueryParametersFilteringEnabled", "value": True, "desc": "Brave already strips known tracking parameters (fbclid, gclid, mc_eid, ...) from URLs and has no setting for it; this keeps stripping on if Adblock-Only mode (English UI only) is turned on. Needs Shields up."},
 
-            {"name": "Reduce Language Fingerprinting", "key": "BraveReduceLanguageEnabled", "value": True, "desc": "Reports a generic language configuration to sites, making your browser harder to fingerprint."},
+            {"name": "Reduce Language Fingerprinting", "key": "BraveReduceLanguageEnabled", "value": True, "desc": "Brave already does this by default; this locks its Settings toggle on. Sites get only your first language in the Accept-Language header and, on Windows, macOS and a few Linux distros, only a standard font list. Needs Shields up and fingerprinting protection on."},
 
             {"name": "Disable WebRTC IP Leak", "key": "WebRtcIPHandling", "value": "disable_non_proxied_udp", "desc": "Restricts WebRTC to proxied connections so video/voice calls can't expose your real IP address behind a VPN or proxy."},
 
             {"name": "Disable QUIC Protocol", "key": "QuicAllowed", "value": False, "desc": "Disables QUIC (HTTP/3) for web requests so they use TCP (HTTP/2 or HTTP/1.1). Useful when a firewall or filter can't inspect QUIC; may slightly slow some Google sites. WebRTC calls and WebTransport still use UDP."},
 
-            {"name": "Disable Network Prediction (Prefetch)", "key": "NetworkPredictionOptions", "value": 2, "desc": "Stops Brave from fetching pages ahead of your click when a site's speculation rules or prerender hints ask for it, and from pre-connecting to your search engine. Brave already defaults to this; the policy locks it."},
+            {"name": "Disable Network Prediction (Prefetch)", "key": "NetworkPredictionOptions", "value": 2, "desc": "Stops Brave from fetching pages ahead of your click when a site's speculation rules or prerender hints ask for it, and from pre-connecting to your search engine. Brave already defaults to this; the policy locks it against Sync and extensions."},
 
-            {"name": "Block Third Party Cookies", "key": "BlockThirdPartyCookies", "value": True, "desc": "Blocks cookies set by domains other than the site you are visiting. Can break some embedded logins."},
+            {"name": "Block Third Party Cookies", "key": "BlockThirdPartyCookies", "value": True, "desc": "Brave already blocks third-party cookies by default; this locks that, so the global 'Allow all cookies' choice in Shields settings, extensions, Sync and Adblock-Only mode can't turn it off. Per-site Shields exceptions still work, e.g. for an embedded login that breaks."},
 
             {"name": "Block Payment Method Probing", "key": "PaymentMethodQueryEnabled", "value": False, "desc": "Stops sites from learning whether you have payment methods saved: canMakePayment() always answers yes and hasEnrolledInstrument() always answers no, so neither reveals anything."},
 
-            {"name": "Disable Alternate Error Pages (no effect in Brave)", "key": "AlternateErrorPagesEnabled", "value": False, "desc": "No effect in Brave: Brave never runs the web-service helper for navigation errors that this setting controls, and keeps captive-portal (Wi-Fi sign-in page) detection on either way. Kept as a lock; Brave already ships it off."},
-
             {"name": "Block Remote Debugging", "key": "RemoteDebuggingAllowed", "value": False, "desc": "Blocks the remote debugging port and pipe, the interface automation tools use to drive the browser and read your cookies and logged-in sessions. Disable Developer Tools does not cover this. Breaks Puppeteer, Playwright and the brave://inspect remote-debugging toggle. No restart needed."},
-
-            {"name": "Disable DNS Interception Probes (no effect in Brave)", "key": "DNSInterceptionChecksEnabled", "value": False, "desc": "No effect in Brave: Chromium has not made these three random-hostname lookups by default since version 97. They run only when the IntranetRedirectBehavior policy is set to 3, which SlimBrave never writes. Kept as a lock in case that changes."},
 
             {"name": "Require HTTPS for Basic Auth", "key": "BasicAuthOverHttpEnabled", "value": False, "desc": "Refuses HTTP Basic authentication over plain HTTP so your username and password are never sent in the clear. Breaks logins on legacy routers, printers and other appliances that only serve HTTP, and plain-HTTP proxies that use Basic authentication."},
 
@@ -577,7 +573,7 @@ CATEGORIES = [
 
             {"name": "Location Access", "key": "DefaultGeolocationSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK, "desc": "Sets the default for reading your physical location. Block removes the prompt entirely, so maps and delivery sites will need the location typed manually; Ask keeps the prompt."},
 
-            {"name": "Motion Sensors", "key": "DefaultSensorsSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK, "desc": "Sets the default for motion and orientation sensors, a known fingerprinting vector. Blocking rarely breaks anything on desktop."},
+            {"name": "Motion Sensors", "key": "DefaultSensorsSetting", "value": 2, "choices": CHOICES_ALLOW_ASK_BLOCK, "desc": "Motion and orientation sensors are a fingerprinting vector, and Brave already blocks them by default. Block locks that: neither the settings page nor a per-site exception, even one made earlier, can allow them. Ask and Allow loosen Brave's default."},
 
             {"name": "WebUSB Access", "key": "DefaultWebUsbGuardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK, "desc": "Sets the default for sites talking to USB devices. Block removes the prompt and breaks web-based hardware wallets (Ledger, Trezor) and in-browser firmware flashers; Ask keeps the prompt. Chromium has no Allow state for this key."},
 
@@ -621,7 +617,7 @@ CATEGORIES = [
 
             {"name": "Disable Brave AI Chat", "key": "BraveAIChatEnabled", "value": False, "desc": "Disables Leo, Brave's built-in AI assistant, and removes it from the sidebar and address bar."},
 
-            {"name": "Disable Local AI (On-Device Models, Brave 1.94+, off by default on Release)", "key": "BraveLocalAIEnabled", "value": False, "desc": "Stops Brave from downloading and running on-device AI models and from building an AI index of your browsing history. Separate from Brave AI Chat - disabling Leo does not cover this. Off by default on Release (on in Nightly and half of Beta); this keeps it off if Brave or you turn it on. Needs Brave 1.94 or newer; older versions ignore the key. Takes effect after a browser restart."},
+            {"name": "Disable Local AI (On-Device Models, Brave 1.94+, off by default on Release)", "key": "BraveLocalAIEnabled", "value": False, "desc": "Stops Brave from downloading and running on-device AI models and from building an AI index of your browsing history; disabling Leo does not cover this. Off by default on Release (on in Nightly and half of Beta); this keeps it off if Brave or you turn it on. Takes effect after a restart."},
 
             {"name": "Disable Brave Shields", "key": "BraveShieldsDisabledForUrls", "value": ["https://*", "http://*"], "group": "shields", "desc": "Turns Shields OFF for every site: no ad blocking, no tracker blocking. Every Shields & Content Protection row, Strip Tracking URL Parameters and Reduce Language Fingerprinting then do nothing; De-AMP, Debouncing and Global Privacy Control keep working. Almost nobody wants this - it exists for kiosk/testing setups. Mutually exclusive with Force Shields On."},
 
@@ -658,7 +654,7 @@ CATEGORIES = [
 
             {"name": "Force HTTPS Upgrades (Strict; not enforced on Brave's HTTPS-First rollout)", "key": "DefaultBraveHttpsUpgradeSetting", "value": 2, "desc": "Always upgrades connections to HTTPS; sites that can't serve it show a warning instead of falling back to HTTP. Not enforced where Brave moved to Chromium's HTTPS-First mode (Beta, Nightly, part of Release), which it only presets once; Limit or Disable Variations keeps it enforced."},
 
-            {"name": "Cap Referrers (Strict Origin)", "key": "DefaultBraveReferrersSetting", "value": 2, "group": "referrers", "desc": "Caps the Referer header at the origin for cross-origin requests, locked as managed policy. Mutually exclusive with Allow Permissive Referrers."},
+            {"name": "Cap Referrers (Strict Origin)", "key": "DefaultBraveReferrersSetting", "value": 2, "group": "referrers", "desc": "Caps the Referer header at the origin for cross-origin requests, as Brave already does by default, and locks it: per-site exceptions stop applying, including any Brave's compatibility list adds to fix sites. Mutually exclusive with Allow Permissive Referrers."},
 
             {"name": "Allow Permissive Referrers (unsafe-url)", "key": "DefaultBraveReferrersSetting", "value": 1, "group": "referrers", "desc": "Sends your full referring URL cross-origin when a site requests it. Compatibility escape hatch only - this weakens privacy and is excluded from every preset. Mutually exclusive with Cap Referrers."},
 
@@ -669,20 +665,17 @@ CATEGORIES = [
     {
         "name": "Performance & Bloat",
         "features": [
-            {"name": "Disable Background Mode", "key": "BackgroundModeEnabled", "value": False, "desc": "Stops Brave from keeping background processes running after the last window is closed."},
+            {"name": "Disable Background Mode", "key": "BackgroundModeEnabled", "value": False, "desc": "Stops Brave from staying open in the background after its last window closes, which it does only while an installed extension asks to run in the background. Without one, the policy only locks off 'Continue running background apps when Brave is closed' (brave://settings/system)."},
 
             {"name": "Enable Memory Saver", "key": "HighEfficiencyModeEnabled", "value": True, "desc": "Forces Memory Saver on: inactive tabs are discarded to free RAM and reload when you return to them."},
 
-            {"name": "Force Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": True, "group": "hwaccel", "desc": "Pins GPU hardware acceleration on so rendering and video decode stay off the CPU. Takes effect after a browser restart."},
+            {"name": "Force Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": True, "group": "hwaccel", "desc": "Brave already has 'Use graphics acceleration when available' on; this locks it on, so it can't be turned off in Settings to work around GPU glitches. The GPU blocklist or repeated GPU crashes can still force software rendering. Takes effect after a browser restart."},
 
             {"name": "Disable Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": False, "group": "hwaccel", "desc": "Forces GPU acceleration off. This is a departure from Brave's default and costs rendering performance and battery, so use it only when the GPU path is itself the problem: flickering or artifacts from a faulty driver, a VM or RDP session with no usable GPU, or corruption while screen sharing. Takes effect after a browser restart."},
 
             {"name": "Disable Media Router (Cast)", "key": "EnableMediaRouter", "value": False, "desc": "Disables the Google Cast media router and its background device discovery on the local network. Takes effect after a browser restart. On a profile first opened under this policy, Cast stays off after it is removed until the Media Router toggle in brave://settings/extensions is turned back on and Brave restarted."},
 
-
-            {"name": "Disable Shopping List (no effect in Brave)", "key": "ShoppingListEnabled", "value": False, "desc": "Locks the price-tracking shopping list off. No effect in Brave: the feature is switched off and needs a Google sign-in Brave does not have. Kept as a lock in case that changes."},
-
-            {"name": "Always Open PDF Externally", "key": "AlwaysOpenPdfExternally", "value": True, "desc": "Downloads PDF files and opens them in your system PDF viewer instead of the built-in viewer."},
+            {"name": "Always Open PDF Externally", "key": "AlwaysOpenPdfExternally", "value": True, "desc": "Downloads PDF files instead of showing them in Brave's built-in viewer; nothing opens them until you do. Sites can tell the viewer is off, and fingerprinting protection does not hide it, which makes you easier to fingerprint."},
 
             {"name": "Disable Translate", "key": "TranslateEnabled", "value": False, "desc": "Disables the built-in page translation feature and its popup prompts."},
 
@@ -696,7 +689,7 @@ CATEGORIES = [
 
             {"name": "Disable Developer Tools", "key": "DeveloperToolsAvailability", "value": 2, "desc": "Blocks DevTools (F12) and extension debugging everywhere, and turns extension Developer mode off (no Load unpacked). Don't enable this if you do web development."},
 
-            {"name": "Disable Wayback Machine", "key": "BraveWaybackMachineEnabled", "value": False, "desc": "Stops Brave from offering an archive.org snapshot when a page returns 404."},
+            {"name": "Disable Wayback Machine", "key": "BraveWaybackMachineEnabled", "value": False, "desc": "Stops Brave from offering an archive.org snapshot when a page is missing or fails (404, 408, 410, 451 and some 5xx errors), including the offer Brave can pop up on its own."},
 
         ],
     },
@@ -1635,7 +1628,7 @@ def desc_pane_lines(max_x):
     """Text lines the pane needs at this width.
 
     What the longest description wraps to at this width, up to
-    DESC_PANE_MAX_LINES: four lines at 80 columns, where five of the
+    DESC_PANE_MAX_LINES: four lines at 80 columns, where four of the
     descriptions still end in an ellipsis; three from about 140, where none
     does. Sized by the content rather than by a constant so a wider
     terminal gives the list its rows back.

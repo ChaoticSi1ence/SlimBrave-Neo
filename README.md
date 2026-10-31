@@ -86,7 +86,7 @@ Requires Administrator privileges; the script re-launches itself elevated. It op
 
 **Search reads the descriptions, not just the names.** The box in the header matches titles, policy keys, category names *and* the description text, so typing `passwords` surfaces "Require HTTPS for Basic Auth" even though its title never says the word, and `telemetry` returns the whole reporting section. Several words narrow the results, plurals match singulars, punctuation is ignored on both sides, and title matches rank above prose matches.
 
-**A sidebar splits the policies into seven categories** — or skip it entirely: **All Options** lists all 76 in one scroll with section headers, for anyone who would rather not navigate.
+**A sidebar splits the policies into seven categories** — or skip it entirely: **All Options** lists all 73 in one scroll with section headers, for anyone who would rather not navigate.
 
 **Presets are cards.** Each shows what it does and how many policies it sets. Loading one only fills in the controls; nothing reaches the registry until you press Apply Settings, so you can change your mind first. The presets are embedded in `SlimBrave.ps1` itself, so they work for the one-liner download above with no `Presets/` directory on disk.
 
@@ -229,8 +229,8 @@ After applying, restart Brave and verify at `brave://policy`.
 <details>
 <summary><strong>Telemetry & Reporting</strong></summary>
 
-- Disable Metrics Reporting (needs a restart)
-- Disable URL Data Collection
+- Disable Metrics Reporting (crash reports; Brave sends no usage statistics through it. On by default in Beta and Nightly, and pre-ticked on Release's first-run welcome page; needs a restart)
+- Disable URL Data Collection (Brave already ships "Make searches and browsing better" off; this locks it and overrides an earlier opt-in in the hidden Privacy Guide)
 - Disable P3A Analytics
 - Disable Stats Ping
 - Limit Variations to Critical Fixes, or Disable Variations / Griffin Experiments outright (mutually exclusive). Griffin is the remote seed Brave fetches to flip features in a browser that is already installed; "Limit" admits only studies Brave marks critical — currently none, so today the two behave alike — while "Disable" would also refuse a kill switch Brave marks critical later. Either refuses studies, not the download (the seed is still fetched), and takes effect after a browser restart.
@@ -245,20 +245,18 @@ After applying, restart Brave and verify at `brave://policy`.
 - Disable Autofill (Addresses & Credit Cards) — Chromium deprecated both policies in version 156 in favour of `AutofillSettings`, which does not work in Brave yet; Brave still applies them, and `brave://policy` lists them as Deprecated
 - Disable Password Manager (stops offering to save or generate passwords; passwords already saved still autofill)
 - Disable Password Leak Detection (the online breach-list check run on your credentials after you sign in to a site and on saved logins you edit; Brave already ships it off, and the key locks it)
-- Disable Browser Sign-in (Brave has no Google browser sign-in, so in Brave this locks off "Allow Google login for extensions"; Brave Account sign-in is not affected; needs a restart)
-- Enable Global Privacy Control
-- Enable De-AMP (strip Google AMP wrappers)
-- Enable Debouncing (skip known tracking redirect hops)
-- Strip Tracking URL Parameters
-- Reduce Language Fingerprinting
+- Disable Browser Sign-in (Brave has no Google browser sign-in; this locks "Allow Google login for extensions" off, as Brave already ships it, though extensions can still open Google's sign-in popup through `chrome.identity`; Brave Account sign-in is not affected; needs a restart)
+- Enable Global Privacy Control (Brave already sends it and has no setting for it; the key keeps it on under Adblock-Only mode, which only an English UI offers)
+- Enable De-AMP (skip Google AMP pages; on by default, this locks it on)
+- Enable Debouncing (skip known tracking redirect hops; on by default, this locks it on)
+- Strip Tracking URL Parameters (Brave already strips them and has no setting for it; the key keeps stripping on under Adblock-Only mode, English UI only; needs Shields up)
+- Reduce Language Fingerprinting (Brave already has it on; the key locks its Settings toggle; needs Shields up and fingerprinting protection on)
 - Disable WebRTC IP Leak
 - Disable QUIC Protocol (web requests fall back from HTTP/3 to TCP; applies live, but turning QUIC back on needs a restart; WebRTC calls and WebTransport still use UDP)
-- Disable Network Prediction (no prefetching of pages a site's speculation rules or prerender hints ask for, no background connection to your search engine; Brave already defaults to this, and the key locks it)
-- Block Third Party Cookies
+- Disable Network Prediction (no prefetching of pages a site's speculation rules or prerender hints ask for, no background connection to your search engine; Brave already defaults to this, and the key locks it against Sync and extensions)
+- Block Third Party Cookies (Brave already blocks them; the key stops the global "Allow all cookies" choice in Shields settings, extensions, Sync and Adblock-Only mode turning that off; per-site Shields exceptions still work)
 - Block Payment Method Probing (`canMakePayment` always answers yes and `hasEnrolledInstrument` always no, so sites can't learn whether you have saved payment methods)
-- Disable Alternate Error Pages (no effect in Brave — Brave never runs the web-service error helper and keeps captive-portal detection on regardless; kept as a lock)
 - Block Remote Debugging (closes the CDP port and pipe automation tools drive the browser through — "Disable Developer Tools" does not cover it; breaks Puppeteer, Playwright and the `brave://inspect` remote-debugging toggle, while inspecting local tabs keeps working; no restart needed)
-- Disable DNS Interception Probes (no effect in Brave — Chromium stopped making these three random-hostname lookups by default in version 97; they run only when the `IntranetRedirectBehavior` policy is set to 3, so this is a lock)
 - Require HTTPS for Basic Auth (breaks logins on legacy HTTP-only routers, printers and appliances, and plain-HTTP proxies that use Basic authentication)
 
 </details>
@@ -277,7 +275,7 @@ Content-setting defaults sites are granted. These rows are **not checkboxes** �
 
 - Web Notifications — *Allow / Ask / Block*
 - Location Access — *Allow / Ask / Block*; Block removes the prompt outright, so maps and delivery sites need an address typed by hand, and Ask is the middle ground
-- Motion Sensors — *Allow / Ask / Block*; a fingerprinting vector, and blocking rarely breaks anything on desktop
+- Motion Sensors — *Allow / Ask / Block*; a fingerprinting vector Brave already blocks by default, so Block locks that (per-site exceptions included) and Ask or Allow loosen it
 - WebUSB Access — *Ask / Block*; Block breaks Ledger/Trezor web wallets and in-browser firmware flashers
 - Web Serial Access — *Ask / Block*; Block breaks in-browser microcontroller programming tools
 - WebHID Access — *Ask / Block*; Block may break security keys and gamepad configurators that use WebHID rather than WebAuthn, and cuts Brave Wallet's own Ledger hardware-wallet connection
@@ -331,28 +329,27 @@ Pin Brave's own protection defaults as managed policy so they can't be weakened 
 - Cap Referrers (Strict Origin) / Allow Permissive Referrers (mutually exclusive — both unchecked leaves referrer behavior unmanaged)
 - Forget First-Party Storage on Close
 
-> **Note on referrers:** with no referrer policy applied, Brave still caps cross-origin referrers by default, but you can loosen it per-site by lowering Shields on that site. "Allow Permissive Referrers" makes the loosening global as managed policy (`DefaultBraveReferrersSetting: 1`) — sites that request `unsafe-url` get your full referring URL cross-origin. It exists for compatibility with sites that break under capped referrers; it weakens privacy and is deliberately excluded from every preset.
+> **Note on referrers:** with no referrer policy applied, Brave still caps cross-origin referrers by default, but you can loosen it per-site by lowering Shields on that site. "Allow Permissive Referrers" makes the loosening global as managed policy (`DefaultBraveReferrersSetting: 1`) — sites that request `unsafe-url` get your full referring URL cross-origin. It exists for compatibility with sites that break under capped referrers; it weakens privacy and is deliberately excluded from every preset. Cap Referrers locks Brave's default and voids per-site referrer exceptions, including any Brave's compatibility list adds to fix sites; lowering Shields on a site still lifts the cap there.
 
-> **Note on Ad Block Only Mode:** Brave 1.96 offers this mode on desktop when its interface language is English, from the Shields panel or Brave's Shields settings; it stays off until you turn it on. Turned on, it applies Brave's own lower-priority policies that keep ad blocking but allow third-party cookies, drop HTTPS upgrades to Standard and switch off fingerprinting protection, referrer capping, forget-on-close, De-AMP, debouncing, tracking-parameter stripping, language-fingerprinting reduction and GPC. Wherever SlimBrave Neo writes one of those keys, its mandatory value wins and `brave://policy` shows a conflict warning if the two values differ; keys you leave unmanaged take the mode's value. (A macOS `--policy-file` under `/Library/Preferences` is read as recommended, not mandatory, and loses.) The mode also trims Brave's built-in filter lists to its default ones, which no policy can undo; custom filters and subscriptions keep working.
+> **Note on Adblock-Only mode:** Brave 1.96 offers this mode on desktop when its interface language is English, from the Shields panel or Brave's Shields settings; it stays off until you turn it on. Turned on, it applies Brave's own lower-priority policies that keep ad blocking but allow third-party cookies, drop HTTPS upgrades to Standard and switch off fingerprinting protection, referrer capping, forget-on-close, De-AMP, debouncing, tracking-parameter stripping, language-fingerprinting reduction and GPC. Wherever SlimBrave Neo writes one of those keys, its mandatory value wins and `brave://policy` shows a conflict warning if the two values differ; keys you leave unmanaged take the mode's value. (A macOS `--policy-file` under `/Library/Preferences` is read as recommended, not mandatory, and loses.) The mode also trims Brave's built-in filter lists to its default ones, which no policy can undo; custom filters and subscriptions keep working.
 
 </details>
 
 <details>
 <summary><strong>Performance & Bloat</strong></summary>
 
-- Disable Background Mode (Windows/Linux only — the policy doesn't exist on macOS)
+- Disable Background Mode (Windows/Linux only — the policy doesn't exist on macOS; it changes behaviour only while an installed extension asks to run in the background, and otherwise just locks the System setting)
 - Enable Memory Saver (discard inactive tabs to free RAM)
-- Force Hardware Acceleration (keeps rendering and video decode on the GPU) / Disable Hardware Acceleration (a troubleshooting lever for a faulty GPU driver, a VM or RDP session, or screen-sharing corruption; in no preset) — mutually exclusive; needs a restart
+- Force Hardware Acceleration (locks on "Use graphics acceleration when available", which Brave already has on; the GPU blocklist still applies) / Disable Hardware Acceleration (a troubleshooting lever for a faulty GPU driver, a VM or RDP session, or screen-sharing corruption) — mutually exclusive, in no preset; needs a restart
 - Disable Media Router (Cast, including its background LAN device discovery; needs a restart)
-- Disable Shopping List (no effect in Brave — the feature is off and needs a Google sign-in Brave doesn't have; kept as a lock)
-- Always Open PDF Externally
+- Always Open PDF Externally (PDFs download and open only when you open them; sites can tell the viewer is off, which makes you easier to fingerprint, so no preset sets it)
 - Disable Translate
 - Disable Spellcheck (all of it, offline included — mutually exclusive with Disable Enhanced Spell Check)
 - Disable Search Suggestions
 - Disable Printing
 - Disable Default Browser Prompt (Brave's first-run welcome page still offers *Set as default*; with this key on, clicking it crashes Brave — choose *Skip*)
 - Disable Developer Tools
-- Disable Wayback Machine
+- Disable Wayback Machine (also stops the offer bubble Brave can pop up on its own after a missing page or server error)
 
 </details>
 
@@ -394,7 +391,7 @@ Import/export uses the same JSON format as the Windows PowerShell version. Confi
 <details>
 <summary><strong>How presets behave</strong></summary>
 
-A preset is a starting point, not a verdict — import it, untick whatever you don't want, then Apply. Maximum Privacy, Balanced Privacy, Performance Focused and Developer turn off Background Mode (Strict Parental Controls and Brave Origin leave it alone); that policy is Windows/Linux only, so on macOS the key is skipped and the rest of the preset applies unchanged. None of the presets ships "Disable Safe Browsing", "Allow Permissive Referrers", or the two mutually-exclusive Shields overrides. A few rows the presets carry do nothing in current Brave and are kept as locks: Alternate Error Pages, Shopping List and DNS Interception Probes have no effect in Brave, Playlist is off by default on Release and Beta, and Local AI on Release. The Features lists above say why for each.
+A preset is a starting point, not a verdict — import it, untick whatever you don't want, then Apply. Maximum Privacy, Balanced Privacy, Performance Focused and Developer turn off Background Mode (Strict Parental Controls and Brave Origin leave it alone); that policy is Windows/Linux only, so on macOS the key is skipped and the rest of the preset applies unchanged. None of the presets ships "Disable Safe Browsing", "Allow Permissive Referrers", or the two mutually-exclusive Shields overrides. Rows that would have no effect in Brave are not offered. Some rows the presets carry change nothing on a default Release install: Playlist is off by default on Release and Beta, Local AI on Release, and rows such as Global Privacy Control, De-AMP and Block Third Party Cookies lock a default Brave already has, so a settings toggle, Adblock-Only mode or a change of default can't undo it. The Features lists above say which.
 
 </details>
 
@@ -403,13 +400,13 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 
 - **Telemetry:** Turns off every reporting channel — metrics, URL-keyed data collection, P3A analytics, and the daily stats ping.
 - **Safe Browsing:** Left **on** (Chromium removed extended reporting in version 145, so no key is needed for it). Brave proxies Safe Browsing lookups through its own servers, so Google never learns who made them, and switching the protection off would cost you phishing and malware interstitials for essentially no privacy gain — the "Disable Safe Browsing (security downgrade)" toggle is there if you disagree, but no preset sets it.
-- **Privacy:** Disables autofill (addresses and cards), password saving (passwords already saved still autofill), leak detection, browser sign-in, WebRTC IP exposure, QUIC, network prediction and alternate error pages (a lock only in Brave); blocks third-party cookies, payment-method probing, web notifications, location access, and motion sensors; enables Global Privacy Control, De-AMP, debouncing, tracking-parameter stripping, and reduced language fingerprinting. (Location Access is set to Block, not Ask — maps and delivery sites need addresses typed manually; drop the "Location Access" row to Ask, or to Not managed, if that is too strict.)
+- **Privacy:** Disables autofill (addresses and cards), password saving (passwords already saved still autofill), leak detection, browser sign-in, WebRTC IP exposure, QUIC and network prediction; blocks third-party cookies, payment-method probing, web notifications, location access, and motion sensors; enables Global Privacy Control, De-AMP, debouncing, tracking-parameter stripping, and reduced language fingerprinting. (Location Access is set to Block, not Ask — maps and delivery sites need addresses typed manually; drop the "Location Access" row to Ask, or to Not managed, if that is too strict.)
 - **Brave Features:** Kills Rewards, Wallet, VPN, AI Chat, News, Talk, Playlist, Speedreader, Web Discovery, Tor, Sync, Email Aliases, and the Wayback Machine prompt.
 - **Shields:** Pins ad blocking, fingerprinting protection, strict HTTPS, capped referrers, and forget-on-close storage as managed policy.
-- **Performance and bloat — read this one before applying.** It goes well past "background processes": background mode, Cast device discovery, and the shopping list (a lock only in Brave) are off, and so are **developer tools, printing, the built-in PDF viewer** (PDFs download and open in your system viewer instead), **translation, spellcheck, search suggestions, and the default-browser prompt**. If you need devtools or printing, use the Developer preset, or untick those rows in the Performance & Bloat section before Apply.
+- **Performance and bloat — read this one before applying.** It goes well past "background processes": background mode and Cast device discovery are off, and so are **developer tools, printing, translation, spellcheck, search suggestions, and the default-browser prompt**. If you need devtools or printing, use the Developer preset, or untick those rows in the Performance & Bloat section before Apply.
 - **DNS:** Left unmanaged. Forcing DoH off would hand every DNS query to your ISP in cleartext, while forcing DoH on concentrates that visibility at the DoH provider — which trade-off is right depends on who you distrust more, so the preset leaves the choice to you (set it manually in the DNS section if you have a preference).
 - **Note:** No longer forces incognito-only browsing (earlier versions set `IncognitoModeAvailability: 2`, which silently disabled history, persistent logins, and most extensions). Forget-on-close storage covers the privacy goal; the Force Incognito toggle is still available manually.
-- **New in 2.1:** on-device AI off, the DNS interception probes locked off (no effect in Brave, which no longer runs them), remote debugging blocked (the `--remote-debugging-port` cookie-theft vector `DeveloperToolsAvailability` never covered), Basic Auth refused over cleartext HTTP, the sideload-extension channel closed, and variations limited to critical fixes only — Brave's A/B seed stops flipping features; only studies Brave marks critical would still arrive, and today none applies.
+- **New in 2.1:** on-device AI off, remote debugging blocked (the `--remote-debugging-port` cookie-theft vector `DeveloperToolsAvailability` never covered), Basic Auth refused over cleartext HTTP, the sideload-extension channel closed, and variations limited to critical fixes only — Brave's A/B seed stops flipping features; only studies Brave marks critical would still arrive, and today none applies.
 - **Deliberately not set:** the WebUSB / Web Serial / WebHID / Local Fonts / Multi-Screen dropdowns stay *Not managed* — blocking them breaks hardware wallets, flashers and some security keys. Flip them to Block yourself for the full lockdown.
 - **Best for:** Paranoid users, journalists, activists, or anyone who wants Brave as private as possible — provided they read the performance bullet first.
 
@@ -419,12 +416,12 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 <summary><strong>Balanced Privacy Preset</strong></summary>
 
 - **Telemetry:** Same four reporting channels as Maximum Privacy — metrics, URL-keyed collection, P3A, stats ping. Safe Browsing protection itself stays on.
-- **Privacy:** Blocks third-party cookies, payment-method probing, network prediction and alternate error pages (a lock only in Brave); enables Global Privacy Control, De-AMP, debouncing, tracking-parameter stripping, and reduced language fingerprinting; disables **QUIC** (all traffic falls back to TCP) and restricts **WebRTC** to proxied connections, which can break in-browser video and voice calls. Credit-card autofill is off, but address autofill and the password manager are deliberately kept.
+- **Privacy:** Blocks third-party cookies, payment-method probing and network prediction; enables Global Privacy Control, De-AMP, debouncing, tracking-parameter stripping, and reduced language fingerprinting; disables **QUIC** (all traffic falls back to TCP) and restricts **WebRTC** to proxied connections, which can break in-browser video and voice calls. Credit-card autofill is off, but address autofill and the password manager are deliberately kept.
 - **Accounts:** Browser sign-in and **Brave Sync** are both disabled, so bookmarks, history and settings stop syncing across your devices. Untick "Disable Sync" and "Disable Browser Sign-in" before Apply if you rely on a sync chain.
 - **Brave Features:** Disables Rewards, Wallet, VPN, AI Chat, News, Talk, Web Discovery, and **Tor** (the "New private window with Tor" option disappears).
-- **Performance:** Turns off background mode, the shopping list (a lock only in Brave), and the default-browser prompt.
+- **Performance:** Turns off background mode and the default-browser prompt.
 - **DNS:** Uses automatic DoH (DNS-over-HTTPS through your system resolver's provider when it offers it, falling back to plain DNS on error).
-- **New in 2.1:** locks off the enhanced-spellcheck web service (already off in Brave) while keeping offline spellcheck working — the exact balanced trade — plus on-device AI off, DNS interception probes locked off (no effect in Brave), remote debugging blocked, cleartext Basic Auth refused, sideloaded extensions blocked (your own extensions keep working), and variations limited to critical fixes.
+- **New in 2.1:** locks off the enhanced-spellcheck web service (already off in Brave) while keeping offline spellcheck working — the exact balanced trade — plus on-device AI off, remote debugging blocked, cleartext Basic Auth refused, sideloaded extensions blocked (your own extensions keep working), and variations limited to critical fixes.
 - **Best for:** Most users who want privacy but still need convenience features — the password manager, address autofill, and Shields left at Brave's own defaults.
 
 </details>
@@ -435,7 +432,7 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 - **Telemetry:** Blocks metrics reporting, P3A analytics, and the daily stats ping (Safe Browsing stays untouched).
 - **Privacy:** The three no-cost speedups only — De-AMP, debouncing, and tracking-parameter stripping. Nothing else in Privacy & Security is touched.
 - **Brave Features:** Disables Rewards, Wallet, VPN, AI Chat, News, Talk, Playlist, Speedreader, Web Discovery, and the Wayback Machine prompt to declutter the browser.
-- **Performance:** Forces Memory Saver and hardware acceleration on; kills background mode, Cast device discovery, the shopping list (a lock only in Brave), and the default-browser prompt. Network prediction is left unmanaged; Brave already ships it off (never predict) and clears a user change each time the profile loads, so it stays off across restarts unless Brave Sync restores a value.
+- **Performance:** Forces Memory Saver on; kills background mode, Cast device discovery and the default-browser prompt. Network prediction is left unmanaged; Brave already ships it off (never predict) and clears a user change each time the profile loads, so it stays off across restarts unless Brave Sync restores a value.
 - **DNS:** Automatic DoH for a balance of speed and security.
 - **New in 2.1:** on-device AI off — off by default on Release, but Nightly and about half of Beta download a local model at launch and any Brave 1.94+ can build an AI index of your history once the feature is on; keeping that kind of background weight off is this preset's job.
 - **Best for:** Users who want a faster, cleaner Brave without extreme privacy tweaks.
@@ -446,12 +443,12 @@ A preset is a starting point, not a verdict — import it, untick whatever you d
 <summary><strong>Developer Preset</strong></summary>
 
 - **Telemetry:** Blocks all four reporting channels (metrics, URL-keyed collection, P3A, stats ping).
-- **Privacy:** Locks the DNS interception probes and alternate error pages off; neither has any effect in Brave (Chromium no longer runs the probes by default, and Brave never shows a suggestion page). Nothing else in Privacy & Security is touched.
+- **Privacy:** Nothing in Privacy & Security is touched.
 - **Brave Features:** Disables Rewards, Wallet, VPN, AI Chat (Leo), News, and Talk.
-- **Kept on purpose:** developer tools, printing, spellcheck, the built-in PDF viewer, QUIC, and Sync — the things the other presets take away and a developer needs back.
-- **Performance:** Turns off background mode, the shopping list (a lock only in Brave), and the default-browser prompt.
+- **Kept on purpose:** developer tools, printing, spellcheck, QUIC, and Sync — the things the other presets take away and a developer needs back.
+- **Performance:** Turns off background mode and the default-browser prompt.
 - **DNS:** Automatic DoH (default secure DNS).
-- **New in 2.1:** variations pinned to critical fixes (a browser that doesn't reshuffle its features under your tests), on-device AI off, DNS interception probes locked off (Chromium no longer makes those lookups by default, so this is a lock), and the enhanced-spellcheck web service off while offline spellcheck stays.
+- **New in 2.1:** variations pinned to critical fixes (a browser that doesn't reshuffle its features under your tests), on-device AI off, and the enhanced-spellcheck web service off while offline spellcheck stays.
 - **Remote debugging deliberately stays available.** Blocking it would break Puppeteer, Playwright and the `brave://inspect` remote-debugging toggle — the tools this preset exists to keep working.
 - **Best for:** Developers who need dev tools and a working network stack but still want telemetry and Brave's monetised features out of the way.
 

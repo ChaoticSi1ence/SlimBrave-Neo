@@ -1581,6 +1581,18 @@ def test_maximum_privacy_preset_never_forces_incognito(mod):
     assert "IncognitoModeAvailability" not in policy
 
 
+def test_maximum_privacy_preset_keeps_the_pdf_viewer(mod):
+    # Deliberately dropped: with the viewer off, navigator.plugins goes empty
+    # and pdfViewerEnabled false outside Brave's farbling, which undoes the
+    # preset's own fingerprinting pin for no privacy gain (AUDIT.md).
+    preset = ROOT / "Presets" / "Maximum Privacy Preset.json"
+    rows = mod.build_rows()
+    ok, msg = mod.import_settings(rows, str(preset))
+    assert ok, msg
+    policy, _ = mod._build_policy(rows)
+    assert "AlwaysOpenPdfExternally" not in policy
+
+
 # ---------------------------------------------------------------------------
 # SlimBrave.ps1 embedded presets <-> Presets/*.json
 #
@@ -1694,8 +1706,15 @@ def test_ps1_embedded_preset_names_match_files():
 #
 # Revised deliberately in the v2.1.0 preset curation: the post-v1.9.5
 # toggles were folded into the presets whose promises they fit, and each
-# pin below was updated in the same commit. A pin change outside such a
-# deliberate curation is the drift this table exists to catch.
+# pin below was updated in the same commit. Revised again in v2.4.0:
+# ShoppingListEnabled, AlternateErrorPagesEnabled and
+# DNSInterceptionChecksEnabled left every preset when the scripts dropped
+# them as inert (AUDIT.md, Considered and rejected), the lock-only
+# HardwareAccelerationModeEnabled left Performance Focused, and
+# AlwaysOpenPdfExternally left Maximum Privacy (its empty plugin list
+# undoes the preset's fingerprinting pin); those pins changed in the same
+# commit. A pin change outside such a deliberate curation is the drift
+# this table exists to catch.
 #
 # Captured by loading the v1.9.5 scripts (git tag v1.9.5) and running
 # import_settings + _build_policy over the presets as they ship. The values
@@ -1705,7 +1724,6 @@ def test_ps1_embedded_preset_names_match_files():
 
 V195_PRESET_POLICIES = {
     "Balanced Privacy Preset": {
-        "AlternateErrorPagesEnabled": False,
         "AutofillCreditCardEnabled": False,
         "BackgroundModeEnabled": False,
         "BasicAuthOverHttpEnabled": False,
@@ -1728,7 +1746,6 @@ V195_PRESET_POLICIES = {
         "BraveWebDiscoveryEnabled": False,
         "BrowserSignin": 0,
         "ChromeVariations": 1,
-        "DNSInterceptionChecksEnabled": False,
         "DefaultBrowserSettingEnabled": False,
         "DnsOverHttpsMode": "automatic",
         "MetricsReportingEnabled": False,
@@ -1736,7 +1753,6 @@ V195_PRESET_POLICIES = {
         "PaymentMethodQueryEnabled": False,
         "QuicAllowed": False,
         "RemoteDebuggingAllowed": False,
-        "ShoppingListEnabled": False,
         "SpellCheckServiceEnabled": False,
         "SyncDisabled": True,
         "TorDisabled": True,
@@ -1744,7 +1760,6 @@ V195_PRESET_POLICIES = {
         "WebRtcIPHandling": "disable_non_proxied_udp",
     },
     "Developer Preset": {
-        "AlternateErrorPagesEnabled": False,
         "BackgroundModeEnabled": False,
         "BraveAIChatEnabled": False,
         "BraveLocalAIEnabled": False,
@@ -1756,17 +1771,13 @@ V195_PRESET_POLICIES = {
         "BraveVPNDisabled": True,
         "BraveWalletDisabled": True,
         "ChromeVariations": 1,
-        "DNSInterceptionChecksEnabled": False,
         "DefaultBrowserSettingEnabled": False,
         "DnsOverHttpsMode": "automatic",
         "MetricsReportingEnabled": False,
-        "ShoppingListEnabled": False,
         "SpellCheckServiceEnabled": False,
         "UrlKeyedAnonymizedDataCollectionEnabled": False,
     },
     "Maximum Privacy Preset": {
-        "AlternateErrorPagesEnabled": False,
-        "AlwaysOpenPdfExternally": True,
         "AutofillAddressEnabled": False,
         "AutofillCreditCardEnabled": False,
         "BackgroundModeEnabled": False,
@@ -1793,7 +1804,6 @@ V195_PRESET_POLICIES = {
         "BraveWebDiscoveryEnabled": False,
         "BrowserSignin": 0,
         "ChromeVariations": 1,
-        "DNSInterceptionChecksEnabled": False,
         "DefaultBraveAdblockSetting": 2,
         "DefaultBraveFingerprintingV2Setting": 3,
         "DefaultBraveHttpsUpgradeSetting": 2,
@@ -1815,7 +1825,6 @@ V195_PRESET_POLICIES = {
         "QuicAllowed": False,
         "RemoteDebuggingAllowed": False,
         "SearchSuggestEnabled": False,
-        "ShoppingListEnabled": False,
         "SpellcheckEnabled": False,
         "SyncDisabled": True,
         "TorDisabled": True,
@@ -1844,10 +1853,8 @@ V195_PRESET_POLICIES = {
         "DefaultBrowserSettingEnabled": False,
         "DnsOverHttpsMode": "automatic",
         "EnableMediaRouter": False,
-        "HardwareAccelerationModeEnabled": True,
         "HighEfficiencyModeEnabled": True,
         "MetricsReportingEnabled": False,
-        "ShoppingListEnabled": False,
     },
     "Strict Parental Controls Preset": {
         "BraveAIChatEnabled": False,
