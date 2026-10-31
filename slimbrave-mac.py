@@ -890,9 +890,9 @@ CATEGORIES = [
 
             {"name": "Force Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": True, "group": "hwaccel", "desc": "Brave already has 'Use graphics acceleration when available' on; this locks it on, so it can't be turned off in Settings to work around GPU glitches. The GPU blocklist or repeated GPU crashes can still force software rendering. Takes effect after a browser restart."},
 
-            {"name": "Disable Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": False, "group": "hwaccel", "desc": "Forces GPU acceleration off. This is a departure from Brave's default and costs rendering performance and battery, so use it only when the GPU path is itself the problem: flickering or artifacts from a faulty driver, a VM or RDP session with no usable GPU, or corruption while screen sharing. Takes effect after a browser restart."},
+            {"name": "Disable Hardware Acceleration", "key": "HardwareAccelerationModeEnabled", "value": False, "group": "hwaccel", "desc": "Forces GPU acceleration off, unlike Brave's default, costing rendering speed and battery. Use it only when the GPU path is the problem: flicker or artifacts from a faulty driver, a VM or RDP session with no usable GPU, or corruption while screen sharing. Takes effect after a browser restart."},
 
-            {"name": "Disable Media Router (Cast)", "key": "EnableMediaRouter", "value": False, "desc": "Disables the Google Cast media router and its background device discovery on the local network. Takes effect after a browser restart. On a profile first opened under this policy, Cast stays off after it is removed until the Media Router toggle in brave://settings/extensions is turned back on and Brave restarted."},
+            {"name": "Disable Media Router (Cast)", "key": "EnableMediaRouter", "value": False, "desc": "Disables Google Cast and its background device discovery on the local network. Takes effect after a browser restart. A profile first opened under this policy keeps Cast off after it is lifted, until the Media Router toggle in brave://settings/extensions is back on and Brave restarted."},
 
             {"name": "Always Open PDF Externally", "key": "AlwaysOpenPdfExternally", "value": True, "desc": "Downloads PDF files instead of showing them in Brave's built-in viewer; nothing opens them until you do. Sites can tell the viewer is off, and fingerprinting protection does not hide it, which makes you easier to fingerprint."},
 
@@ -2848,10 +2848,9 @@ def desc_pane_lines(max_x):
     """Text lines the pane needs at this width.
 
     What the longest description wraps to at this width, up to
-    DESC_PANE_MAX_LINES: four lines at 80 columns, where two of the
-    descriptions still end in an ellipsis; three from about 120, where none
-    does. Sized by the content rather than by a constant so a wider
-    terminal gives the list its rows back.
+    DESC_PANE_MAX_LINES: four lines at 80 columns, where every description
+    fits whole; three from about 110. Sized by the content rather than by a
+    constant so a wider terminal gives the list its rows back.
     """
     if max_x not in _desc_pane_lines:
         width = max(1, (max_x - 1) - 4)

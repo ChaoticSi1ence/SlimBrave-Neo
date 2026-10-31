@@ -203,7 +203,7 @@ The Shields-exception scrub runs over
 user (resolved from `SUDO_USER`, else from `USER`, as a plain `su` leaves it;
 never root's home), plus the Flatpak profile under
 `~/.var/app/com.brave.Browser` when present. It is done in a forked child that
-drops to that user's uid/gid first, profile listing included, so the scrub
+drops to that user's groups, gid and uid first, profile listing included, so the scrub
 never follows a path component inside someone's home as root. With no non-root
 invoking user (a root login), nothing is scrubbed.
 

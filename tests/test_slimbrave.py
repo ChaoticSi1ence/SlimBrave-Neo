@@ -1623,7 +1623,7 @@ def _mac_rows(*ticked):
     return rows
 
 
-# C08: the plist is shared, so Apply and Reset touch only SlimBrave's keys.
+# The plist is shared, so Apply and Reset touch only SlimBrave's keys.
 
 def test_mac_apply_and_reset_keep_keys_they_do_not_manage(mac, capsys):
     stable, = _mac_installs(mac, "stable")
@@ -1710,7 +1710,7 @@ def test_linux_policy_file_is_still_rewritten_whole(mod, tmp_path, monkeypatch):
     assert json.loads(path.read_text(encoding="utf-8")) == {}
 
 
-# C06: with the profile installed, a scope that leaves out a channel holding
+# With the profile installed, a scope that leaves out a channel holding
 # a SlimBrave policy is refused before the profile is removed.
 
 @pytest.mark.parametrize("persist", ["on", "off"])
@@ -1805,7 +1805,7 @@ def test_cli_scope_check_refuses_before_any_action(mac):
     assert main.index("_cli_scope_error(") < main.index("cli_reset(")
 
 
-# C07: a failed hand-off is reported with the staged path.
+# A failed hand-off is reported with the staged path.
 
 @pytest.mark.parametrize("failure", ["exit", "timeout"])
 def test_failed_profile_hand_off_is_reported_with_the_staged_path(mac, failure):
@@ -1843,7 +1843,7 @@ def test_profile_hand_off_says_the_channels_wait_for_approval(mac, capsys):
     assert out.index("Profile file: ") < out.index("Finish in System Settings")
 
 
-# C09: --policy-file never touches the profile; a Reset that leaves it
+# --policy-file never touches the profile; a Reset that leaves it
 # installed says so; a full Reset also clears uninstalled channels.
 
 @pytest.mark.parametrize("installed", [False, True])
@@ -3143,7 +3143,7 @@ def test_ps1_embedded_preset_names_match_files():
 # ShoppingListEnabled, AlternateErrorPagesEnabled and
 # DNSInterceptionChecksEnabled left every preset when the scripts dropped
 # them as inert (AUDIT.md, Considered and rejected), the lock-only
-# HardwareAccelerationModeEnabled left Performance Focused, and
+# HardwareAccelerationModeEnabled left Performance Focused,
 # AlwaysOpenPdfExternally left Maximum Privacy (its empty plugin list
 # undoes the preset's fingerprinting pin), ChromeVariations left
 # Balanced Privacy and Developer (AUDIT ChromeVariations row), and Maximum
@@ -5045,15 +5045,24 @@ def test_build_rows_carries_the_description_onto_every_setting_row(mod):
 
 
 def test_pane_lines_follow_the_longest_description_at_that_width(mod):
-    # At 80 columns the two longest descriptions want five lines; the pane
-    # stops at four and they end in an ellipsis. At 100 they still want
-    # four. From about 120 columns nothing needs more than three, and the
-    # list gets a row back.
+    # At 80 and 100 columns the longest descriptions want four lines, which
+    # the pane holds whole. From about 110 columns nothing needs more than
+    # three, and the list gets a row back.
     assert mod.desc_pane_lines(80) == 4
     assert mod.desc_pane_lines(100) == 4
     assert mod.desc_pane_lines(120) == 3
     assert mod.desc_pane_lines(140) == 3
     assert mod.desc_pane_lines(20) == mod.DESC_PANE_MAX_LINES
+    # From 80 columns up no description ends in an ellipsis: each fits 300
+    # characters, four lines at 80 columns (75 of text) and three at 140
+    # (135 of text). The PS1 Tips are held too, since the GUI shows the
+    # same text and one row is the PS1's alone.
+    texts = [f["desc"] for cat in mod.CATEGORIES for f in cat["features"]]
+    texts += list(_ps1_tips().values())
+    for text in texts:
+        assert len(text) <= 300, text
+        assert len(textwrap.wrap(text, 75, break_on_hyphens=False)) <= 4, text
+        assert len(textwrap.wrap(text, 135, break_on_hyphens=False)) <= 3, text
 
 
 def test_layout_budgets_the_rows_and_drops_the_pane_when_cramped(mod):
@@ -5156,7 +5165,7 @@ def test_the_pane_flag_reaches_every_frame_and_d_toggles_it(mod):
     """A draw() or viewport_rows() call that forgets show_desc paints the
     old layout for one frame - the list jumps - so every call site passes
     it, and `d` is the key that flips it."""
-    text = open(mod.__file__, encoding="utf-8").read()
+    text = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
     live = re.sub(r"(?m)^\s*#.*$", "", text)
     draws = list(_call_spans(live, "draw"))
     assert len(draws) >= 3, "draw() call sites went missing"
