@@ -461,17 +461,20 @@ def test_import_takes_a_falsy_template_as_none(mod, tmp_path, tmpl):
     assert mod.get_dns_mode(rows) == "unmanaged"
 
 
-@pytest.mark.parametrize("text", [
-    "[" * 100000 + "]" * 100000,
-    '{"Features": {"ChromeVariations": ' + "1" * 5000 + "}}",
+@pytest.mark.parametrize("text, expected", [
+    # Whether this nesting raises RecursionError depends on the machine's
+    # stack (Python 3.14+ guards recursion by stack size), so it is either
+    # unreadable or parses to a top-level list; both must be refused.
+    ("[" * 100000 + "]" * 100000, ("Invalid JSON", "expected a JSON object")),
+    ('{"Features": {"ChromeVariations": ' + "1" * 5000 + "}}", ("Invalid JSON",)),
 ], ids=["deep-nesting", "5000-digit-integer"])
-def test_import_reports_json_it_cannot_read_instead_of_raising(mod, tmp_path, text):
+def test_import_reports_json_it_cannot_read_instead_of_raising(mod, tmp_path, text, expected):
     path = tmp_path / "bad.json"
     path.write_text(text)
     rows = _preticked_rows(mod)
     ok, msg = mod.import_settings(rows, str(path))
     assert ok is False
-    assert "Invalid JSON" in msg
+    assert any(e in msg for e in expected), msg
     _assert_untouched(mod, rows)
 
 
