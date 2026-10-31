@@ -68,9 +68,13 @@ MAC_DARWIN = _load_as_darwin("slimbrave_mac_darwin", "slimbrave-mac.py")
 PRESETS = sorted((ROOT / "Presets").glob("*.json"))
 
 # Keys presets may contain that are deliberately absent on some platforms;
-# the import silently skips them there. BackgroundModeEnabled has no macOS
-# support in Chromium (see AUDIT.md), so the mac script doesn't expose it.
-PLATFORM_OMITTED_KEYS = {"BackgroundModeEnabled"}
+# the import silently skips them there. BackgroundModeEnabled and
+# NetworkServiceSandboxEnabled are chrome.win / chrome.linux only in
+# Chromium (see AUDIT.md), so the mac script exposes them only when it runs
+# on Linux. DynamicCodeSettings is chrome.win only, so SlimBrave.ps1 alone
+# offers it and neither Python script has the row.
+PLATFORM_OMITTED_KEYS = {"BackgroundModeEnabled", "NetworkServiceSandboxEnabled",
+                         "DynamicCodeSettings"}
 
 
 @pytest.fixture(params=MODULES, ids=["linux", "mac"])
@@ -231,6 +235,7 @@ def test_export_import_round_trip(mod, tmp_path):
     rows = mod.build_rows()
     _check_feature(mod, rows, "Force Incognito Mode")       # multi-value key, value 2
     _check_feature(mod, rows, "Force Shields On (All Sites)")  # list value
+    _check_feature(mod, rows, "Block Local Network Access")    # list value outside Shields
     _check_feature(mod, rows, "Disable Brave Rewards")
     _set_dns(mod, rows, "custom", "https://dns.example/dns-query")
     expected = _checked_policy_pairs(mod, rows)
@@ -1228,15 +1233,18 @@ def test_ps1_feature_table_matches_python(mod):
 # These eight keys used to be plain checkboxes that wrote a hardcoded 2
 # (block) when ticked and nothing when unticked, which threw away the
 # "Ask" state Chromium supports. They are now choice rows.
+# DefaultClipboardSetting joined later, as a choice row from the start.
 #
 # The table below is written out per key on purpose rather than sharing two
 # aliases the way the scripts do: the enum is NOT uniform, and a test that
 # reuses the scripts' own grouping cannot notice a key being moved into the
 # wrong group. Allow (1) is a legal member of the notifications,
 # geolocation and sensors enums only. For the three guard settings and for
-# local fonts / window management, Chromium has no Allow state at all and
-# rejects value 1 — offering it there is the trap this feature exists to
-# avoid, so it gets its own assertion below.
+# local fonts / window management / clipboard, Allow is not a schema
+# member: a 1 is dropped for the three guard settings and applied as a
+# managed Allow for local fonts, window management and clipboard. Offering
+# it there is the trap this feature exists to avoid, so it gets its own
+# assertion below.
 # ---------------------------------------------------------------------------
 
 EXPECTED_CHOICES = {
@@ -1258,15 +1266,17 @@ EXPECTED_CHOICES = {
         ("Not managed", None), ("Ask", 3), ("Block", 2)],
     "DefaultWindowManagementSetting": [
         ("Not managed", None), ("Ask", 3), ("Block", 2)],
+    "DefaultClipboardSetting": [
+        ("Not managed", None), ("Ask", 3), ("Block", 2)],
 }
 
-# The five keys whose enum has no Allow member. Derived from the table
+# The six keys whose enum has no Allow member. Derived from the table
 # above so the two can never disagree, then pinned by count.
 ASK_BLOCK_ONLY_KEYS = sorted(
     key for key, choices in EXPECTED_CHOICES.items()
     if 1 not in [value for _, value in choices]
 )
-assert len(ASK_BLOCK_ONLY_KEYS) == 5, ASK_BLOCK_ONLY_KEYS
+assert len(ASK_BLOCK_ONLY_KEYS) == 6, ASK_BLOCK_ONLY_KEYS
 
 
 def _choice_rows(mod, rows):
@@ -1279,7 +1289,7 @@ def _selected_label(row):
 
 
 def test_choice_rows_are_exactly_the_documented_keys(mod):
-    """A ninth choice row, or one of the eight demoted back to a checkbox,
+    """A tenth choice row, or one of the nine demoted back to a checkbox,
     fails here rather than silently changing what the GUI offers."""
     rows = mod.build_rows()
     assert set(_choice_rows(mod, rows)) == set(EXPECTED_CHOICES)
@@ -1302,8 +1312,10 @@ def test_choice_rows_offer_exactly_the_legal_values(mod):
 
 def test_ask_block_only_keys_never_offer_allow(mod):
     """Spelled out separately from the table comparison because this is the
-    one mistake that would look plausible: Chromium rejects value 1 on
-    these five keys, so a row offering it writes a policy Brave drops."""
+    one mistake that would look plausible: on these six keys a 1 is dropped
+    for the three guard settings and applied as a managed Allow for local
+    fonts, window management and clipboard, so a row offering it writes a
+    policy Brave either ignores or turns into a grant for every site."""
     rows = _choice_rows(mod, mod.build_rows())
     for key in ASK_BLOCK_ONLY_KEYS:
         values = [value for _, value in rows[key]["choices"]]
@@ -1391,7 +1403,7 @@ def test_choice_key_absent_from_config_is_not_managed(mod, tmp_path, key):
     assert key not in policy
 
 
-# Values no choice row may accept. 1 is listed for the five Ask/Block-only
+# Values no choice row may accept. 1 is listed for the six Ask/Block-only
 # keys specifically: it is a legal member of the *other* three enums, so a
 # row that quietly shares the wrong choices list would accept it here.
 # True is included because `True == 1` in Python — a JSON `true` must not
@@ -1411,8 +1423,10 @@ ILLEGAL_CHOICE_CASES = (
 def test_illegal_choice_value_is_rejected_and_named(mod, tmp_path, key, bad):
     """An illegal value leaves the row unmanaged and says so.
 
-    Writing it through would hand Brave a policy it rejects, and doing that
-    silently would look identical to "not managed" in the UI.
+    Writing it through would hand Brave a policy it ignores or misapplies
+    (a 1 on local fonts, window management or clipboard becomes a managed
+    Allow), and doing that silently would look identical to "not managed"
+    in the UI.
     """
     cfg = _write_config(tmp_path, "bad.json", {key: bad})
     rows = mod.build_rows()
@@ -1718,8 +1732,11 @@ def test_ps1_embedded_preset_names_match_files():
 # them as inert (AUDIT.md, Considered and rejected), the lock-only
 # HardwareAccelerationModeEnabled left Performance Focused, and
 # AlwaysOpenPdfExternally left Maximum Privacy (its empty plugin list
-# undoes the preset's fingerprinting pin), and ChromeVariations left
-# Balanced Privacy and Developer (AUDIT ChromeVariations row); those pins
+# undoes the preset's fingerprinting pin), ChromeVariations left
+# Balanced Privacy and Developer (AUDIT ChromeVariations row), and Maximum
+# Privacy gained the new engine and process-isolation hardening
+# (XSLTEnabled, DefaultJavaScriptOptimizerSetting, SitePerProcess,
+# OriginKeyedProcessesEnabled, NetworkServiceSandboxEnabled); those pins
 # changed in the same commit. A pin change outside such a deliberate
 # curation is the drift this table exists to catch.
 #
@@ -1816,6 +1833,7 @@ V195_PRESET_POLICIES = {
         "DefaultBraveRemember1PStorageSetting": 2,
         "DefaultBrowserSettingEnabled": False,
         "DefaultGeolocationSetting": 2,
+        "DefaultJavaScriptOptimizerSetting": 2,
         "DefaultNotificationsSetting": 2,
         "DefaultSensorsSetting": 2,
         "DeveloperToolsAvailability": 2,
@@ -1823,6 +1841,8 @@ V195_PRESET_POLICIES = {
         "EnableMediaRouter": False,
         "MetricsReportingEnabled": False,
         "NetworkPredictionOptions": 2,
+        "NetworkServiceSandboxEnabled": True,
+        "OriginKeyedProcessesEnabled": True,
         "PasswordLeakDetectionEnabled": False,
         "PasswordManagerEnabled": False,
         "PaymentMethodQueryEnabled": False,
@@ -1830,12 +1850,14 @@ V195_PRESET_POLICIES = {
         "QuicAllowed": False,
         "RemoteDebuggingAllowed": False,
         "SearchSuggestEnabled": False,
+        "SitePerProcess": True,
         "SpellcheckEnabled": False,
         "SyncDisabled": True,
         "TorDisabled": True,
         "TranslateEnabled": False,
         "UrlKeyedAnonymizedDataCollectionEnabled": False,
         "WebRtcIPHandling": "disable_non_proxied_udp",
+        "XSLTEnabled": False,
     },
     "Performance Focused Preset": {
         "BackgroundModeEnabled": False,
@@ -2273,6 +2295,7 @@ FILTER_EXPECTED = [
     "Block Third Party Cookies",
     "Block Payment Method Probing",
     "Block Remote Debugging",
+    "Block Local Network Access",
     "Access Controls",
     "Block All Extensions",
     "Block Sideloaded (External) Extensions",
@@ -3272,14 +3295,40 @@ def test_every_python_row_carries_the_ps1_description(mod):
                 )
 
 
-def test_the_mac_scripts_linux_only_row_carries_its_description():
-    """slimbrave-mac.py inserts BackgroundModeEnabled at import time when it
-    runs on Linux, outside the table literal - so the parity test above only
-    meets that row on a Linux runner. Pin it by text, on every platform."""
-    text = (ROOT / "slimbrave-mac.py").read_text(encoding="utf-8")
-    m = re.search(r'"key": "BackgroundModeEnabled", "value": False,\s*"desc": "([^"]*)"\}\)', text)
-    assert m, "the Linux-only BackgroundModeEnabled row has no description"
-    assert m.group(1) == _ps1_tips()[("BackgroundModeEnabled", 0)]
+def _features(module):
+    return [f for cat in module.CATEGORIES for f in cat["features"]]
+
+
+@pytest.mark.parametrize("key,value", [("BackgroundModeEnabled", 0),
+                                       ("NetworkServiceSandboxEnabled", 1)])
+def test_the_mac_scripts_linux_only_rows_carry_their_descriptions(key, value):
+    """slimbrave-mac.py adds the chrome.win / chrome.linux rows at import
+    time when it runs on Linux, outside the table literal - so the parity
+    test above only meets them on a Linux runner. Import the file as Linux
+    on every platform, and check that the macOS copy leaves them out."""
+    on_linux = _load_as("linux", "slimbrave_mac_linux", "slimbrave-mac.py")
+    row = next((f for f in _features(on_linux) if f["key"] == key), None)
+    assert row, f"slimbrave-mac.py on Linux has no {key} row"
+    ps1_name = next(name for name, k in _ps1_feature_rows() if k == key)
+    assert row["name"] == ps1_name
+    assert row["desc"] == _ps1_tips()[(key, value)]
+    assert not any(f["key"] == key for f in _features(MAC_DARWIN))
+    # Inserted where slimbrave-linux.py lists it, so the two TUIs match.
+    def keys(module):
+        return [[f["key"] for f in cat["features"]] for cat in module.CATEGORIES]
+    assert keys(on_linux) == keys(LINUX_MOD)
+
+
+def test_dynamic_code_settings_is_offered_by_the_ps1_alone():
+    """DynamicCodeSettings is chrome.win only (AUDIT.md), so SlimBrave.ps1 is
+    the one script that offers it; neither Python script may grow the row,
+    on any platform."""
+    rows = _ps1_feature_rows()
+    assert rows[("Block Dynamic Code in the Browser Process", "DynamicCodeSettings")][0] == 1
+    on_linux = _load_as("linux", "slimbrave_mac_linux", "slimbrave-mac.py")
+    for module in (LINUX_MOD, MAC_MOD, MAC_DARWIN, on_linux):
+        assert not any(f["key"] == "DynamicCodeSettings" for f in _features(module)), (
+            module.__name__)
 
 
 def test_the_mac_scripts_vpn_row_says_it_does_nothing_on_linux():

@@ -1,14 +1,16 @@
 """AUDIT.md is the project's schema for what may be written and why.
 
 These tests parse its tables and hold the three scripts to them, the same
-way test_slimbrave.py holds the three scripts to each other. A failure here
-means the document and the code disagree; the source they both cite decides
-which one is wrong.
+way test_slimbrave.py holds the three scripts to each other. "Written" means
+every key either Python module builds a row for plus every key in
+SlimBrave.ps1's feature table, so a row only the PS1 offers is held to the
+document too. A failure here means the document and the code disagree; the
+source they both cite decides which one is wrong.
 """
 
 import re
 
-from test_slimbrave import LINUX_MOD, MAC_MOD, ROOT
+from test_slimbrave import LINUX_MOD, MAC_DARWIN, MAC_MOD, ROOT, _ps1_feature_rows
 
 AUDIT = (ROOT / "AUDIT.md").read_text(encoding="utf-8")
 GLYPHS = ("✅", "⚠️", "⛔", "❌", "💀", "🕓")
@@ -79,7 +81,8 @@ def _written(mod):
     return keys | {"DnsOverHttpsMode", "DnsOverHttpsTemplates"}
 
 
-WRITTEN = _written(LINUX_MOD) | _written(MAC_MOD)
+PS1_ROWS = _ps1_feature_rows()
+WRITTEN = _written(LINUX_MOD) | _written(MAC_MOD) | {key for _, key in PS1_ROWS}
 
 
 def _rejected_match(key):
@@ -127,11 +130,23 @@ def test_origin_builtin_keys_are_exactly_the_guarded_brave_rows():
     assert not unguarded_brave & set(LINUX_MOD.ORIGIN_BUILTIN_KEYS)
 
 
+def _setting_rows(mod):
+    return [r for r in mod.build_rows() if r["type"] in (mod.ROW_FEATURE, mod.ROW_CHOICE)]
+
+
 def test_inventory_counts_match_the_scripts():
     m = re.search(r"\*\*Inventory: (\d+) rows over (\d+) distinct keys\*\*", AUDIT)
     assert m, "inventory line missing"
-    rows = [r for r in LINUX_MOD.build_rows()
-            if r["type"] in (LINUX_MOD.ROW_FEATURE, LINUX_MOD.ROW_CHOICE)]
+    rows = _setting_rows(LINUX_MOD)
+    assert (int(m.group(1)), int(m.group(2))) == (len(rows), len({r["key"] for r in rows}))
+    # The machines that differ: the PS1 table, and slimbrave-mac.py on macOS.
+    m = re.search(r"`SlimBrave\.ps1`\s+has\s+(\d+)\s+rows\s+over\s+(\d+)\s+keys", AUDIT)
+    assert m, "SlimBrave.ps1 inventory sentence missing"
+    assert (int(m.group(1)), int(m.group(2))) == (len(PS1_ROWS), len({k for _, k in PS1_ROWS}))
+    m = re.search(r"`slimbrave-mac\.py`\s+on\s+macOS\s+has\s+(\d+)\s+rows\s+over\s+(\d+)\s+keys",
+                  AUDIT)
+    assert m, "macOS inventory sentence missing"
+    rows = _setting_rows(MAC_DARWIN)
     assert (int(m.group(1)), int(m.group(2))) == (len(rows), len({r["key"] for r in rows}))
 
 

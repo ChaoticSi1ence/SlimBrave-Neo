@@ -52,6 +52,11 @@
         "RemoteDebuggingAllowed": false,
         "BasicAuthOverHttpEnabled": false,
         "BlockExternalExtensions": true,
-        "ChromeVariations": 1
+        "ChromeVariations": 1,
+        "XSLTEnabled": false,
+        "DefaultJavaScriptOptimizerSetting": 2,
+        "SitePerProcess": true,
+        "OriginKeyedProcessesEnabled": true,
+        "NetworkServiceSandboxEnabled": true
     }
 }

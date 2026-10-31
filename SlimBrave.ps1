@@ -218,14 +218,28 @@ $privacyFeatures = @(
     @{ Name = "Block Remote Debugging"; Key = "RemoteDebuggingAllowed"; Value = 0; Type = "DWord"
        Tip = "Blocks the remote debugging port and pipe, the interface automation tools use to drive the browser and read your cookies and logged-in sessions. Disable Developer Tools does not cover this. Breaks Puppeteer, Playwright and the brave://inspect remote-debugging toggle. No restart needed." },
     @{ Name = "Require HTTPS for Basic Auth"; Key = "BasicAuthOverHttpEnabled"; Value = 0; Type = "DWord"
-       Tip = "Refuses HTTP Basic authentication over plain HTTP so your username and password are never sent in the clear. Breaks logins on legacy routers, printers and other appliances that only serve HTTP, and plain-HTTP proxies that use Basic authentication." }
+       Tip = "Refuses HTTP Basic authentication over plain HTTP so your username and password are never sent in the clear. Breaks logins on legacy routers, printers and other appliances that only serve HTTP, and plain-HTTP proxies that use Basic authentication." },
+    @{ Name = "Block Local Network Access"; Key = "LocalNetworkAccessBlockedForUrls"; Value = @("*"); Type = "List"
+       Tip = "Stops public websites from reaching devices on your local network (router, NAS, printers, smart-home hubs) or apps on this computer, with no prompt or per-site exception; Brave otherwise asks. Pages opened from a local address still work. Breaks web apps that pair with local devices or helper apps." },
+    @{ Name = "Disable XSLT"; Key = "XSLTEnabled"; Value = 0; Type = "DWord"
+       Tip = "Turns off XSLT, the legacy XML transform engine behind XSLTProcessor and xml-stylesheet pages, an attack surface Chromium is removing; this keeps it off, even for sites that opt back in. XML styled with it (some RSS feeds and sitemaps) shows unstyled. Takes full effect after a restart." },
+    @{ Name = "Disable JavaScript Optimization (hardening)"; Key = "DefaultJavaScriptOptimizerSetting"; Value = 2; Type = "DWord"
+       Tip = "Turns off V8's optimizing compilers (TurboFan, Maglev) on websites; Brave says this makes it more resistant to attacks. Sites keep working, WebAssembly included, but script-heavy pages and web apps run slower, with no per-site exception. Applies to tabs opened after the change." },
+    @{ Name = "Force Site Isolation for Every Site"; Key = "SitePerProcess"; Value = 1; Type = "DWord"
+       Tip = "Keeps every site in its own process, as Brave already does on desktop, and stops brave://flags#site-isolation-trial-opt-out or --disable-site-isolation-trials from turning it off. Takes effect after a restart." },
+    @{ Name = "Isolate Subdomains in Separate Processes"; Key = "OriginKeyedProcessesEnabled"; Value = 1; Type = "DWord"
+       Tip = "Puts each origin (for example mail.example.com and docs.example.com) in its own process rather than one per site, for stronger protection against Spectre-style leaks between subdomains. Uses more processes and memory. Takes effect after a restart. A brave://flags setting overrides it." },
+    @{ Name = "Sandbox the Network Service"; Key = "NetworkServiceSandboxEnabled"; Value = 1; Type = "DWord"
+       Tip = "Runs Brave's network process in the OS sandbox, which Brave leaves off by default. Ignored on Windows on ARM and before Windows 10 20H1, and after a failed sandboxed start until the next major update. On Linux, switched off for good the first time a site asks for Kerberos (Negotiate) sign-in." },
+    @{ Name = "Block Dynamic Code in the Browser Process"; Key = "DynamicCodeSettings"; Value = 1; Type = "DWord"
+       Tip = "Stops Brave's main process from creating or changing executable memory (Arbitrary Code Guard), which blocks injected shellcode and code-patching hooks there. Some antivirus, printer-driver or input-method software that loads into Brave may fail or crash it; untick this if so." }
 )
 
 # Site permissions and access lockdowns: content-setting defaults plus the
 # escape hatches (guest, incognito, extensions) that would otherwise bypass
 # the rest of the policy set.
 #
-# The first eight rows are tri-state content settings: a row carrying
+# The first nine rows are tri-state content settings: a row carrying
 # `Choices` is drawn as a dropdown instead of a checkbox, because Chromium
 # accepts more than "block or leave alone" for these keys. Choices is an
 # ordered list of Label/Value pairs; Value $null means "not managed", i.e.
@@ -234,10 +248,10 @@ $privacyFeatures = @(
 # exactly like the old unchecked checkbox.
 #
 # The legal values differ per key and are NOT uniform - Allow (1) is not a
-# member of the *GuardSetting / LocalFonts / WindowManagement enums, so
-# those rows only offer Ask (3) and Block (2). Do not "tidy" them into a
-# shared list. Web Notifications offers no Ask either: a managed Ask lets
-# no notification through (AUDIT.md, DefaultNotificationsSetting row).
+# member of the *GuardSetting / LocalFonts / WindowManagement / Clipboard
+# enums, so those rows only offer Ask (3) and Block (2). Do not "tidy" them
+# into a shared list. Web Notifications offers no Ask either: a managed Ask
+# lets no notification through (AUDIT.md, DefaultNotificationsSetting row).
 #
 # `Value` stays on a choice row as the value its pre-tri-state checkbox
 # wrote (always Block). It is never written directly; it is what a bare key
@@ -292,7 +306,13 @@ $sitePermissionFeatures = @(
            @{ Label = "Not managed"; Value = $null },
            @{ Label = "Ask";   Value = 3 },
            @{ Label = "Block"; Value = 2 })
-       Tip = "Sets the default for sites reading your monitor layout and placing windows on a chosen screen. Blocking breaks the full-screen presentation mode in some web apps. Chromium has no Allow state for this key." }
+       Tip = "Sets the default for sites reading your monitor layout and placing windows on a chosen screen. Blocking breaks the full-screen presentation mode in some web apps. Chromium has no Allow state for this key." },
+    @{ Name = "Clipboard Read Access"; Key = "DefaultClipboardSetting"; Value = 2; Type = "DWord"
+       Choices = @(
+           @{ Label = "Not managed"; Value = $null },
+           @{ Label = "Ask";   Value = 3 },
+           @{ Label = "Block"; Value = 2 })
+       Tip = "Sets the default for sites reading your clipboard without you pasting. Block removes the prompt and breaks Paste buttons inside web apps; Ask keeps the prompt. Either one overrides sites you allowed before. Ctrl+V and copy buttons still work. Chromium has no Allow state for this key." }
 )
 
 # Lockdowns and the escape hatches (guest, incognito, extensions) that
@@ -466,7 +486,12 @@ $script:embeddedPresets = [ordered]@{
         "RemoteDebuggingAllowed": false,
         "BasicAuthOverHttpEnabled": false,
         "BlockExternalExtensions": true,
-        "ChromeVariations": 1
+        "ChromeVariations": 1,
+        "XSLTEnabled": false,
+        "DefaultJavaScriptOptimizerSetting": 2,
+        "SitePerProcess": true,
+        "OriginKeyedProcessesEnabled": true,
+        "NetworkServiceSandboxEnabled": true
     }
 }
 '@
@@ -637,7 +662,7 @@ $categories = @(
 # The interface wants a lowercase row shape with a description and an ordered
 # choices list. The tables above are the single source of truth and stay in the
 # form the test suite parses, so the translation happens here at startup rather
-# than by maintaining a second copy of all 76 policies.
+# than by maintaining a second copy of all 81 policies.
 #
 # Ids are index-based because a few policy keys legitimately appear on two rows
 # (incognito, referrers). State is keyed by id, never by key.

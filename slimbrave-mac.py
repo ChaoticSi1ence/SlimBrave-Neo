@@ -630,8 +630,10 @@ def detect_brave():
 #
 # The enum is NOT uniform. Allow=1 is a legal member of the notifications,
 # geolocation and sensors settings only; for the guard settings (WebUSB,
-# Serial, WebHID) and for local fonts / window management, value 1 is not a
-# member at all and Chromium rejects it, so those rows never offer "Allow".
+# Serial, WebHID) and for local fonts / window management / clipboard,
+# value 1 is not a schema member. Chromium does not reject one: it drops it
+# for the guard settings and applies it as a managed Allow for the other
+# three, so those rows never offer "Allow".
 # Notifications offers no Ask either: a managed Ask lets no notification
 # through (AUDIT.md, DefaultNotificationsSetting row).
 # Each row keeps the `value` it wrote as a checkbox: that is what a legacy
@@ -700,6 +702,19 @@ CATEGORIES = [
 
             {"name": "Require HTTPS for Basic Auth", "key": "BasicAuthOverHttpEnabled", "value": False, "desc": "Refuses HTTP Basic authentication over plain HTTP so your username and password are never sent in the clear. Breaks logins on legacy routers, printers and other appliances that only serve HTTP, and plain-HTTP proxies that use Basic authentication."},
 
+            {"name": "Block Local Network Access", "key": "LocalNetworkAccessBlockedForUrls", "value": ["*"], "desc": "Stops public websites from reaching devices on your local network (router, NAS, printers, smart-home hubs) or apps on this computer, with no prompt or per-site exception; Brave otherwise asks. Pages opened from a local address still work. Breaks web apps that pair with local devices or helper apps."},
+
+            {"name": "Disable XSLT", "key": "XSLTEnabled", "value": False, "desc": "Turns off XSLT, the legacy XML transform engine behind XSLTProcessor and xml-stylesheet pages, an attack surface Chromium is removing; this keeps it off, even for sites that opt back in. XML styled with it (some RSS feeds and sitemaps) shows unstyled. Takes full effect after a restart."},
+
+            {"name": "Disable JavaScript Optimization (hardening)", "key": "DefaultJavaScriptOptimizerSetting", "value": 2, "desc": "Turns off V8's optimizing compilers (TurboFan, Maglev) on websites; Brave says this makes it more resistant to attacks. Sites keep working, WebAssembly included, but script-heavy pages and web apps run slower, with no per-site exception. Applies to tabs opened after the change."},
+
+            {"name": "Force Site Isolation for Every Site", "key": "SitePerProcess", "value": True, "desc": "Keeps every site in its own process, as Brave already does on desktop, and stops brave://flags#site-isolation-trial-opt-out or --disable-site-isolation-trials from turning it off. Takes effect after a restart."},
+
+            {"name": "Isolate Subdomains in Separate Processes", "key": "OriginKeyedProcessesEnabled", "value": True, "desc": "Puts each origin (for example mail.example.com and docs.example.com) in its own process rather than one per site, for stronger protection against Spectre-style leaks between subdomains. Uses more processes and memory. Takes effect after a restart. A brave://flags setting overrides it."},
+
+            # NetworkServiceSandboxEnabled is chrome.win / chrome.linux only;
+            # it is appended below when this script runs on Linux.
+            # DynamicCodeSettings is chrome.win only: SlimBrave.ps1 alone offers it.
         ],
     },
     {
@@ -723,6 +738,8 @@ CATEGORIES = [
             {"name": "Local Font Enumeration", "key": "DefaultLocalFontsSetting", "value": 2, "choices": CHOICES_ASK_BLOCK, "desc": "Sets the default for sites asking which fonts are installed on your machine - a strong fingerprinting signal that Shields' font protections don't cover. Blocking rarely breaks anything outside web design tools. Chromium has no Allow state for this key."},
 
             {"name": "Multi-Screen Access", "key": "DefaultWindowManagementSetting", "value": 2, "choices": CHOICES_ASK_BLOCK, "desc": "Sets the default for sites reading your monitor layout and placing windows on a chosen screen. Blocking breaks the full-screen presentation mode in some web apps. Chromium has no Allow state for this key."},
+
+            {"name": "Clipboard Read Access", "key": "DefaultClipboardSetting", "value": 2, "choices": CHOICES_ASK_BLOCK, "desc": "Sets the default for sites reading your clipboard without you pasting. Block removes the prompt and breaks Paste buttons inside web apps; Ask keeps the prompt. Either one overrides sites you allowed before. Ctrl+V and copy buttons still work. Chromium has no Allow state for this key."},
 
         ],
     },
@@ -841,6 +858,10 @@ CATEGORIES = [
 # running platform rather than `not IS_MAC` so the row only appears where
 # Brave actually honours it. Index 0 of Performance & Bloat matches the
 # position it occupies in slimbrave-linux.py and SlimBrave.ps1.
+# NetworkServiceSandboxEnabled is chrome.win + chrome.linux only too: macOS
+# always sandboxes the network service and is not in its supported_on. It
+# is appended last to Privacy & Security, so the order matches
+# slimbrave-linux.py.
 # BraveVPNDisabled works the other way round: honoured on macOS, compiled
 # out of Linux builds. On Linux the row keeps its key and value but takes
 # the same label and description note slimbrave-linux.py gives it.
@@ -850,6 +871,10 @@ if sys.platform.startswith("linux"):
             _cat["features"].insert(0, {"name": "Disable Background Mode",
                                         "key": "BackgroundModeEnabled", "value": False,
                                         "desc": "Stops Brave from staying open in the background after its last window closes, which it does only while an installed extension asks to run in the background. Without one, the policy only locks off 'Continue running background apps when Brave is closed' (brave://settings/system)."})
+        if _cat["name"] == "Privacy & Security":
+            _cat["features"].append({"name": "Sandbox the Network Service",
+                                     "key": "NetworkServiceSandboxEnabled", "value": True,
+                                     "desc": "Runs Brave's network process in the OS sandbox, which Brave leaves off by default. Ignored on Windows on ARM and before Windows 10 20H1, and after a failed sandboxed start until the next major update. On Linux, switched off for good the first time a site asks for Kerberos (Negotiate) sign-in."})
         for _feat in _cat["features"]:
             if _feat["key"] == "BraveVPNDisabled":
                 _feat["name"] = "Disable Brave VPN (no effect on Linux builds)"
@@ -2060,7 +2085,8 @@ def import_settings(rows, path):
     legacy_handled = set()
     # Choice keys whose value is not a legal member of that key's enum.
     # They stay unmanaged and are named in the result message rather than
-    # being written out as a value Brave would reject.
+    # being written out as a value Brave would ignore or misapply (a 1 on
+    # local fonts, window management or clipboard becomes a managed Allow).
     skipped_choices = []
     # Keys the config names that are built into Brave Origin on this
     # machine: left unmanaged, and counted in the result message.
