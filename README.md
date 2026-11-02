@@ -21,7 +21,7 @@ SlimBrave Neo uses Chromium enterprise managed policies to disable telemetry, bl
 > **Source code only — no `.exe`, `.msi`, `.dmg` or installers, ever.** This repository is the only official source; a download claiming to be SlimBrave Neo anywhere else is not from this project. See [`SECURITY.md`](SECURITY.md).
 
 > [!NOTE]
-> A fork of [SlimBrave](https://github.com/ltx0101/SlimBrave) by [@ltx0101](https://github.com/ltx0101), GPL-3.0, extended to Linux and macOS. Policy keys are curated and re-audited against brave-core and Chromium source by Claude Fable; what ships is a human call. Receipts in [`AUDIT.md`](AUDIT.md).
+> A fork of [SlimBrave](https://github.com/ltx0101/SlimBrave) by [@ltx0101](https://github.com/ltx0101), GPL-3.0, extended to Linux and macOS. Policy keys are curated and re-audited against brave-core and Chromium source by Claude Fable/Opus; what ships is a human call. Receipts in [`AUDIT.md`](AUDIT.md).
 
 > [!NOTE]
 > **Linux users: consider [Brave Origin](https://brave.com/origin/linux/) first** — an official Brave build with telemetry and bloat already removed, now on the Release channel (`apt install brave-origin`). SlimBrave Neo is the better fit if you want per-policy control, presets, or your own DoH templates — and it runs on Origin too: the Arch `brave-origin-bin` package and the `brave-origin` deb/rpm are detected, and Origin reads the same `/etc/brave/policies` directory, so everything Origin has not already compiled out applies there as well.
