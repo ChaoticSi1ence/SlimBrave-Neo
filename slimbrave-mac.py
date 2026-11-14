@@ -696,9 +696,9 @@ CATEGORIES = [
 
             {"name": "Disable Stats Ping", "key": "BraveStatsPingEnabled", "value": False, "desc": "Stops the daily usage ping that counts this install in Brave's active-user statistics, plus the search-engine usage counts it carries and the referral-code check. P3A Analytics sends its own copy of the search counts until it is disabled too."},
 
-            {"name": "Limit Variations to Critical Fixes", "key": "ChromeVariations", "value": 1, "group": "variations", "desc": "Restricts Brave's remote seed (Griffin) to studies Brave marks critical, so features Brave turns on only that way stay off, such as WebGL/WebGPU fingerprint masking (brave://flags restores it) and a Google sign-in fix. Takes effect after a restart. Mutually exclusive with Disable Variations."},
+            {"name": "Limit Variations to Critical Fixes", "key": "ChromeVariations", "value": 1, "group": "variations", "desc": "Restricts Brave's remote seed (Griffin) to critical studies, so what Brave enables only that way stays off: WebGL/WebGPU fingerprint masking, image metadata stripping (brave://flags restores both), a Google sign-in fix. Takes effect after a restart. Mutually exclusive with Disable Variations."},
 
-            {"name": "Disable Variations / Griffin Experiments", "key": "ChromeVariations", "value": 2, "group": "variations", "desc": "Refuses every study in Brave's remote seed (Griffin), critical fixes too, so features Brave turns on only that way stay off, such as WebGL/WebGPU fingerprint masking and a Google sign-in fix. The seed is still downloaded. Takes effect after a restart. Mutually exclusive with Limit Variations."},
+            {"name": "Disable Variations / Griffin Experiments", "key": "ChromeVariations", "value": 2, "group": "variations", "desc": "Refuses every Griffin study, critical ones too, so what Brave enables only through its remote seed stays off: WebGL/WebGPU fingerprint masking, image metadata stripping, a Google sign-in fix. The seed still downloads. Takes effect after a restart. Mutually exclusive with Limit Variations."},
 
             {"name": "Disable Enhanced Spell Check", "key": "SpellCheckServiceEnabled", "value": False, "group": "spellcheck", "desc": "Locks off enhanced spell check, which sends what you type in web forms to Google. Brave already ships it off with no setting to turn it on; offline spell checking keeps working. Mutually exclusive with Disable Spellcheck, which turns spell checking off altogether and makes this row do nothing."},
 
@@ -831,13 +831,13 @@ CATEGORIES = [
 
             {"name": "Disable Brave AI Chat", "key": "BraveAIChatEnabled", "value": False, "desc": "Disables Leo, Brave's built-in AI assistant, and removes it from the sidebar and address bar. Brave still downloads Leo's WebMCP tool-scripts component, though nothing uses it while Leo is off."},
 
-            {"name": "Disable Local AI (On-Device Models, Brave 1.94+, off by default on Release)", "key": "BraveLocalAIEnabled", "value": False, "desc": "Stops Brave from downloading and running on-device AI models and from building an AI index of your browsing history; disabling Leo does not cover this. Off by default on Release (on in Nightly and half of Beta); this keeps it off if Brave or you turn it on. Takes effect after a restart."},
+            {"name": "Disable Local AI (On-Device Models, Brave 1.94+, off by default on Release)", "key": "BraveLocalAIEnabled", "value": False, "desc": "Stops Brave from downloading and running on-device AI models and from building an AI index of your browsing history; disabling Leo does not cover this. Off by default on Release (on in Nightly and Beta); this keeps it off if Brave or you turn it on. Takes effect after a restart."},
 
             {"name": "Disable Brave Shields", "key": "BraveShieldsDisabledForUrls", "value": ["https://*", "http://*"], "group": "shields", "desc": "Kiosk/testing only. Shields OFF for every site: no ad or tracker blocking; Shields & Content Protection rows, Strip Tracking URL Parameters and Reduce Language Fingerprinting do nothing. De-AMP, Debouncing, GPC and third-party cookie blocking still work. Mutually exclusive with Force Shields On."},
 
             {"name": "Force Shields On (All Sites)", "key": "BraveShieldsEnabledForUrls", "value": ["https://*", "http://*"], "group": "shields", "desc": "Locks Shields ON for every site: the per-site toggle can no longer drop ad, tracker or fingerprinting protection, but switching it off still unblocks third-party cookies and storage for that site. Mutually exclusive with Disable Brave Shields."},
 
-            {"name": "Disable Brave News", "key": "BraveNewsDisabled", "value": True, "desc": "Removes the Brave News feed from the new tab page."},
+            {"name": "Disable Brave News", "key": "BraveNewsDisabled", "value": True, "desc": "Removes the Brave News feed from the new tab page. A profile Brave opted into News on first run can still show a News button in the sidebar, which opens an empty panel."},
 
             {"name": "Disable Brave Talk", "key": "BraveTalkDisabled", "value": True, "desc": "Hides Brave Talk (private video calls) from the new tab page, sidebar and menus. The talk.brave.com website itself still works."},
 
