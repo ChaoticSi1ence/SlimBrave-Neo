@@ -3148,7 +3148,8 @@ def test_ps1_embedded_preset_names_match_files():
 # HardwareAccelerationModeEnabled left Performance Focused,
 # AlwaysOpenPdfExternally left Maximum Privacy (its empty plugin list
 # undoes the preset's fingerprinting pin), ChromeVariations left
-# Balanced Privacy and Developer (AUDIT ChromeVariations row), and Maximum
+# Balanced Privacy and Developer, then Maximum Privacy in v2.4.1 (AUDIT
+# ChromeVariations row), and Maximum
 # Privacy gained the new engine and process-isolation hardening
 # (XSLTEnabled, DefaultJavaScriptOptimizerSetting, SitePerProcess and
 # OriginKeyedProcessesEnabled). Balanced
@@ -3250,7 +3251,6 @@ V195_PRESET_POLICIES = {
         "BraveWaybackMachineEnabled": False,
         "BraveWebDiscoveryEnabled": False,
         "BrowserSignin": 0,
-        "ChromeVariations": 1,
         "DefaultBraveAdblockSetting": 2,
         "DefaultBraveFingerprintingV2Setting": 3,
         "DefaultBraveHttpsUpgradeSetting": 2,
@@ -3422,15 +3422,18 @@ def test_variations_rows_name_their_griffin_costs(mod):
     assert "brave://flags" in rows[1]["desc"]
 
 
-def test_strict_https_preset_keeps_its_variations_partner():
-    """DefaultBraveHttpsUpgradeSetting = 2 stays enforced on Brave's
-    HTTPS-First rollout only while ChromeVariations filters
-    TransitionToUpstreamHttpsUpgrade (AUDIT DefaultBraveHttpsUpgradeSetting
-    row), so a preset that promises strict HTTPS must carry one of its rows."""
+def test_strict_https_row_names_the_rollout_gap(mod):
+    """No preset limits variations since v2.4.1: the Griffin-only protections
+    ChromeVariations refuses outweigh keeping strict HTTPS locked on Brave's
+    HTTPS-First rollout (AUDIT ChromeVariations row). So Maximum Privacy's
+    DefaultBraveHttpsUpgradeSetting = 2 is unenforced there, and the row's
+    label must keep saying so."""
+    row = next(f for c in mod.CATEGORIES for f in c["features"]
+               if f["key"] == "DefaultBraveHttpsUpgradeSetting" and f["value"] == 2)
+    assert "not enforced on Brave's HTTPS-First rollout" in row["name"]
     for preset in PRESETS:
         features = json.loads(preset.read_text(encoding="utf-8"))["Features"]
-        if features.get("DefaultBraveHttpsUpgradeSetting") == 2:
-            assert features.get("ChromeVariations") in (1, 2), preset.name
+        assert "ChromeVariations" not in features, preset.name
 
 
 # ---------------------------------------------------------------------------

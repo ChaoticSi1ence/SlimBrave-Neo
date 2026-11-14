@@ -537,7 +537,6 @@ $script:embeddedPresets = [ordered]@{
         "ExtensionInstallTypeBlocklist": [
             "command_line"
         ],
-        "ChromeVariations": 1,
         "XSLTEnabled": false,
         "DefaultJavaScriptOptimizerSetting": 2,
         "SitePerProcess": true,
