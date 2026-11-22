@@ -135,7 +135,18 @@ described under each platform, or the JSON config file you pick yourself in the
 Import/Export dialog (`--import` / `--export` on Linux and macOS). On Linux and
 macOS, Export creates that file with your own account's rights, not root's, so
 it can only land where you could write it yourself; Import reads the file you
-name as root and refuses one over 1 MiB.
+name as root and refuses one over 1 MiB. In all three scripts, Import's result
+shows names and values copied from the file only escaped to printable ASCII
+(anything else as `\uXXXX`) and capped in length, five to a reason, and the
+file's own name (on the command line, its path) with every control,
+text-direction and zero-width character written as `\uXXXX`, so a crafted
+config or file name cannot put control or escape sequences on your terminal
+or in the status bar, nor reorder what it shows. A DoH template holding a
+control or text-direction character is refused rather than imported, and the
+Linux and macOS template field draws control, format, combining and wide
+characters as `?`, so a template cannot paint outside its field. Import never writes a key or value no row
+offers. Paths outside Import, such as the one you give Export or
+`--policy-file`, are still printed as given.
 
 If you grant sudo for this tool alone: the Linux and macOS scripts run every
 helper program by absolute path (`/usr/bin/pgrep`; on macOS also

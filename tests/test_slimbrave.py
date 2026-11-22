@@ -451,13 +451,24 @@ def test_import_joins_a_template_list_with_spaces(mod, tmp_path):
     assert mod.get_dns_template(rows) == "https://a/dns-query https://b/dns-query"
 
 
-@pytest.mark.parametrize("tmpl", [False, 0, []], ids=["false", "zero", "empty-list"])
-def test_import_takes_a_falsy_template_as_none(mod, tmp_path, tmpl):
+@pytest.mark.parametrize("tmpl", [None, "", [], [""]], ids=["null", "empty", "empty-list", "list-of-empty"])
+def test_import_takes_an_empty_template_as_none(mod, tmp_path, tmpl):
     rows = mod.build_rows()
     ok, msg = mod.import_settings(rows, str(_write_json(tmp_path, {"Features": {}, "DnsTemplates": tmpl})))
     assert ok, msg
     assert mod.get_dns_template(rows) == ""
     assert mod.get_dns_mode(rows) == "unmanaged"
+
+
+@pytest.mark.parametrize("tmpl", [False, 0, {}], ids=["false", "zero", "object"])
+def test_import_refuses_a_template_that_is_not_text(mod, tmp_path, tmpl):
+    # SlimBrave.ps1 refuses these too (Read-ImportTemplate), so the same file
+    # fails on every platform instead of meaning "no template" on one.
+    rows = _preticked_rows(mod)
+    ok, msg = mod.import_settings(rows, str(_write_json(tmp_path, {"Features": {}, "DnsTemplates": tmpl})))
+    assert ok is False
+    assert msg == "Invalid config: DnsTemplates must be a string"
+    _assert_untouched(mod, rows)
 
 
 @pytest.mark.parametrize("text, expected", [
@@ -493,12 +504,13 @@ def test_import_takes_the_dns_mode_in_any_letter_case(mod, tmp_path):
     assert policy.get("DnsOverHttpsMode") == "automatic"
 
 
-@pytest.mark.parametrize("mode", ["bogus", 5], ids=["word", "number"])
-def test_import_names_an_unknown_dns_mode_and_leaves_dns_unmanaged(mod, tmp_path, mode):
-    """The mode the TUI had before the import (off) does not survive."""
+@pytest.mark.parametrize("mode,shown", [("bogus", '"bogus"'), (5, "5")], ids=["word", "number"])
+def test_import_names_an_unknown_dns_mode_and_leaves_dns_unmanaged(mod, tmp_path, mode, shown):
+    """The mode the TUI had before the import (off) does not survive. A
+    string value is shown quoted, as every string the message echoes is."""
     policy, msg = _dns_policy_after_import(mod, tmp_path, mode)
     assert "DnsOverHttpsMode" not in policy
-    assert f"DnsMode={mode}" in msg
+    assert f"DnsMode={shown}" in msg
 
 
 def test_sync_ignores_a_template_that_is_not_a_string(mod):
@@ -538,7 +550,7 @@ def test_import_takes_a_value_only_in_its_policys_json_type(mod, tmp_path, key, 
     policy, err = mod._build_policy(rows)
     assert err == ""
     assert key not in policy
-    tail = msg[len(f"Imported from {path}"):]
+    tail = msg[len(f"Imported from {path.name}"):]
     assert tail.count(key) == 1, f"{key}={bad!r} is not named once in: {msg!r}"
 
 
@@ -4585,7 +4597,7 @@ def test_ps1_engine_guards_are_wired_not_merely_defined():
 
     imp = text[text.index("function Import-PresetIntoState"):]
     imp = imp[:imp.index("\n}\n")]
-    assert "Compare-Object" in imp, "Import stages a list row without comparing its value"
+    assert "(Test-ImportSameList $wantList $mine)" in imp, "Import stages a list row without comparing its value"
     assert "Enforce-ExclusionGroups" in imp, "Import can stage two members of one exclusion group"
 
     sync = text[text.index("function Sync-FromRegistry"):]
@@ -4678,14 +4690,16 @@ def test_ps1_import_applies_the_python_rules():
     assert "[int]$want" not in imp, "the choice import casts, and a [long] past Int32 throws"
     assert "$ok = ($want -is [int] -or $want -is [long])" in imp
     assert "[double]" not in imp and "[byte]" not in imp
-    # An unmatched choice (an off-enum value such as Notifications' 3) is named.
-    assert 'if (-not $matched) { $script:importNotes += "$($row.key)=$want" }' in imp
+    # An unmatched choice (an off-enum value such as Notifications' 3) is named:
+    # an integer as a value no row sets, anything else as not accepted.
+    assert "} elseif ($ok) {\n                $missed[$row.key] = Format-ImportItem $row.key $want" in imp
+    assert "} else { $wrong[$row.key] = Format-ImportItem $row.key $want }" in imp
     assert "$fits = ($want -is [array])" in imp
     assert "if ($fits -and $wantList.Count -eq $mine.Count -and" in imp
     assert "$fits = ($want -is [string])" in imp
     assert "$script:intEnumKeys -contains $row.key" in imp
     assert "$fits = (($want -is [bool]) -or ($want -is [int]) -or ($want -is [long]))" in imp
-    assert 'if (-not $fits) {\n                $script:importNotes += "$($row.key)=$want"' in imp
+    assert "if (-not $fits) {\n                $wrong[$row.key] = Format-ImportItem $row.key $want" in imp
 
     handler = live[live.index('"Import" {'):]
     handler = handler[:handler.index('Set-Status "Import failed')]
@@ -4705,7 +4719,10 @@ def test_ps1_import_applies_the_python_rules():
                     "$script:dnsState.Mode=$dnsSnap.Mode", "$script:dnsState.Tmpl=$dnsSnap.Tmpl"):
         assert restore in body, f"a failed import does not restore {restore}"
     assert body.rstrip().endswith("$ok=$false")
-    assert "($script:importNotes | Sort-Object -Unique)" in handler
+    # Value notes keep file order (Sort-Object reorders them, ignoring case);
+    # the group clause is unchanged.
+    assert "'the value is not one this policy accepts' $script:importNotes" in handler
+    assert "$script:importNotes |" not in handler
     assert "($script:importConflicts | Sort-Object -Unique)" in handler
     assert "mutually exclusive with another imported row" in handler
 

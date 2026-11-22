@@ -26,6 +26,7 @@ import argparse
 import curses
 import json
 import locale
+import math
 import os
 import shutil
 import socket
@@ -33,6 +34,7 @@ import stat
 import subprocess
 import sys
 import textwrap
+import unicodedata
 import tempfile
 
 IS_MAC = sys.platform == "darwin"
@@ -1092,19 +1094,26 @@ def activate_row(rows, row):
     return True
 
 
+def _is_json_int(value):
+    """True for a JSON integer as Windows PowerShell 5.1 reads one: an [int]
+    or a [long]. A larger one is a [decimal] or a [double] there, so it is
+    no integer to any of the three scripts."""
+    return type(value) is int and -2 ** 63 <= value < 2 ** 63
+
+
 def _value_fits_row(row, value):
     """True when `value` has the JSON type of the policy a checkbox row writes.
 
     Import and policy-sync take a value only in that type, the rule
     SlimBrave.ps1's import applies too: an integer policy only a JSON
-    integer, a boolean policy true/false or an integer, a list policy an
-    array, the string policy a string.
+    integer within 64 bits, a boolean policy true/false or such an
+    integer, a list policy an array, the string policy a string.
     """
     want = row["value"]
     if isinstance(want, bool):
-        return type(value) in (bool, int)  # Windows exports write 0/1
+        return type(value) is bool or _is_json_int(value)  # Windows exports write 0/1
     if isinstance(want, int):
-        return type(value) is int  # True == 1 must not pick an enum member
+        return _is_json_int(value)  # True == 1 must not pick an enum member
     if isinstance(want, list):
         return isinstance(value, list)
     return isinstance(value, str)
@@ -1116,7 +1125,11 @@ def _value_matches_row(row, value):
         return False
     if isinstance(row["value"], list):
         # Order means nothing to Chromium, as in SlimBrave.ps1's Compare-Object.
-        return sorted(value, key=str) == sorted(row["value"])
+        # Only JSON strings are entries, as there. Checked first, so no
+        # nested entry is ever compared or printed: str() of one recursed
+        # as deep as the file nests it.
+        return (all(type(v) is str for v in value)
+                and sorted(value) == sorted(row["value"]))
     return value == row["value"]
 
 
@@ -1161,11 +1174,96 @@ def _enforce_groups(rows):
 MAX_IMPORT_BYTES = 1024 * 1024
 
 
+def _fold_case(key):
+    """`key` with each character in its simple upper case: c.upper() where
+    that is one character, c itself where it is more (the sharp s, a
+    ligature) or lies beyond U+FFFF. Close to .NET Framework's
+    OrdinalIgnoreCase, by which Windows PowerShell 5.1 compares the names of
+    a JSON object one UTF-16 unit at a time: U+00C9 and U+00E9 are one name
+    there and here, and a letter beyond U+FFFF folds in neither."""
+    return "".join(_fold_char(c) for c in key)
+
+
+def _fold_char(c):
+    """One character of _fold_case: its simple upper case. str.upper() is
+    the full mapping, two characters for the 27 Greek letters with
+    ypogegrammeni (U+1F80), whose simple upper case is the one-character
+    title case .NET folds them to (U+1F88), so that is taken instead."""
+    if ord(c) > 0xFFFF:
+        return c
+    up = c.upper()
+    if len(up) == 1:
+        return up
+    title = c.title()
+    return title if len(title) == 1 else c
+
+
+class _KeysDifferInCase(ValueError):
+    """Two keys of one JSON object differ only in letter case."""
+
+    def __init__(self, first, second):
+        super().__init__("keys differ only in letter case")
+        self.keys = (first, second)
+
+
+class _EmptyKey(ValueError):
+    """A key of a JSON object is the empty string."""
+
+    def __init__(self):
+        super().__init__("a key is empty")
+
+
+def _refuse_unreadable_keys(pairs):
+    """read_json_file's object_pairs_hook: the object, unless one of its
+    keys is empty or two of them differ only in letter case.
+
+    Windows PowerShell 5.1's ConvertFrom-Json cannot read either, at any
+    depth: a property with an empty name is refused, and two names that
+    differ only in case are DuplicateKeysInJsonString. SlimBrave.ps1 so
+    refuses such a file, and the Python scripts refuse it too, so one file
+    never imports here and fails there. Case is folded by _fold_case, as
+    near as Python comes to .NET's rule. A key written twice in the same
+    case is left to json: the last one wins.
+    """
+    first_seen = {}
+    for key, _ in pairs:
+        if not key:
+            raise _EmptyKey()
+        first = first_seen.setdefault(_fold_case(key), key)
+        if first != key:
+            raise _KeysDifferInCase(first, key)
+    return dict(pairs)
+
+
+def _json_int(text):
+    """read_json_file's parse_int: an integer within 64 bits as an int, a
+    larger one as a float (_json_float), as Windows PowerShell 5.1 reads it
+    as a [decimal] or a [double], neither of which _is_json_int takes.
+    float() reads any length in linear time, so a million digits cannot
+    stall a Python without the 4300-digit limit (3.9.6, macOS's own)."""
+    if len(text) <= 20:
+        value = int(text)
+        if -2 ** 63 <= value < 2 ** 63:
+            return value
+    return _json_float(text)
+
+
+def _json_float(text):
+    """read_json_file's parse_float: a number past the double range is
+    refused (ValueError), as Windows PowerShell 5.1's reader refuses it."""
+    value = float(text)
+    if math.isinf(value):
+        raise ValueError("a number is out of range")
+    return value
+
+
 def read_json_file(path):
     """Read a JSON file, handling BOM and encoding from PS1 exports.
 
     Raises OSError for a file over MAX_IMPORT_BYTES, which import_settings
-    reports as a read error.
+    reports as a read error; and, both ValueErrors, _EmptyKey for an object
+    with an empty key and _KeysDifferInCase for one with two keys that
+    differ only in letter case.
     """
     with open(path, "rb") as f:
         data = f.read(MAX_IMPORT_BYTES + 1)
@@ -1187,7 +1285,8 @@ def read_json_file(path):
 
     # Strip null bytes (UTF-16 artifacts in malformed files)
     text = text.replace("\x00", "")
-    return json.loads(text)
+    return json.loads(text, object_pairs_hook=_refuse_unreadable_keys,
+                      parse_int=_json_int, parse_float=_json_float)
 
 # ---------------------------------------------------------------------------
 # Profile-prefs repair
@@ -2571,6 +2670,195 @@ def _write_export(path, text):
     return [True, f"Exported to {path}"]
 
 
+# What Import takes is decided by the rows alone: a key one of them writes,
+# in its exact letter case (Chromium matches policy names that way), with a
+# value a row writes. Nothing else is ever written - issue #33's
+# pass-through is declined, since a shared file must not set any machine
+# policy it likes - and everything else the file holds, but for a
+# platform-limited key, is named in the result message, in the words
+# SlimBrave.ps1 and slimbrave-linux.py use.
+
+# The fields of a config file.
+CONFIG_FIELDS = ("Features", "DnsMode", "DnsTemplates")
+
+# Policies Chromium has on some platforms only: BackgroundModeEnabled on
+# Windows and Linux, DynamicCodeSettings on Windows. Where no row writes one
+# here, Import skips it without a note: Chromium's schema on this platform
+# has no such policy, so nothing is lost, and naming it would put a note on
+# four of the six presets on macOS.
+PLATFORM_LIMITED_KEYS = frozenset(("BackgroundModeEnabled", "DynamicCodeSettings"))
+
+# Keys earlier versions wrote and this one no longer offers: the names in
+# RETIRED_POLICIES, which a test holds equal to SlimBrave.ps1's
+# $script:retiredPolicies and to slimbrave-linux.py's RETIRED_KEYS. The
+# macOS-only BackgroundModeEnabled is not one: it is platform-limited.
+RETIRED_KEYS = frozenset(RETIRED_POLICIES)
+
+# Where a DNS name inside Features belongs: the policy file's two DNS
+# names come from DnsMode and DnsTemplates, which are top-level fields.
+FEATURES_NAME_HINTS = {
+    "DnsOverHttpsMode": "use DnsMode",
+    "DnsOverHttpsTemplates": "use DnsTemplates",
+    "DnsMode": "a top-level field",
+    "DnsTemplates": "a top-level field",
+}
+
+# The clauses of the result message, in this order: (kind, verb, reason).
+# The Brave Origin count and then the exclusion groups follow them.
+IMPORT_NOTES = (
+    ("case", "left unmanaged", "names are case-sensitive"),
+    ("type", "left unmanaged", "the value is not one this policy accepts"),
+    ("value", "left unmanaged", "no row sets that value"),
+    ("retired", "left unmanaged", "SlimBrave Neo no longer offers it"),
+    ("unknown", "left unmanaged", "SlimBrave Neo does not offer it"),
+    ("field", "ignored", "it is not a SlimBrave Neo setting"),
+)
+EXCLUSIVE_REASON = "it is mutually exclusive with another imported row"
+
+# The names and values the message copies from the file are shown in
+# printable ASCII and cut to SHOWN_MAX characters, since --import prints
+# them as root and curses refuses a NUL; a clause lists MAX_SHOWN_ITEMS.
+SHOWN_MAX = 64
+MAX_SHOWN_ITEMS = 5
+_PLAIN_NAME_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                              "abcdefghijklmnopqrstuvwxyz0123456789_.-")
+
+# What a DoH template from a file may not hold: the C0 and C1 controls,
+# DEL, the line and paragraph separators, and the twelve bidi controls
+# (Unicode's Bidi_Control), which would reorder the row here and the text
+# box on Windows. Import refuses a template with one rather than strip it,
+# and the template field draws one as '?' (_field_text).
+_CONTROL_CHARS = frozenset(chr(c) for c in (*range(0x20), *range(0x7F, 0xA0),
+                                            0x2028, 0x2029))
+_BIDI_CONTROLS = frozenset(chr(c) for c in (0x061C, 0x200E, 0x200F,
+                                            *range(0x202A, 0x202F),
+                                            *range(0x2066, 0x206A)))
+
+
+def _escaped(ch):
+    """`ch` as it is in printable ASCII (0x20-0x7E), \\uXXXX otherwise:
+    UTF-16 code units in uppercase hex, two for a character past U+FFFF."""
+    code = ord(ch)
+    if 0x20 <= code <= 0x7E:
+        return ch
+    if code > 0xFFFF:
+        code -= 0x10000
+        return "\\u%04X\\u%04X" % (0xD800 + (code >> 10), 0xDC00 + (code & 0x3FF))
+    return "\\u%04X" % code
+
+
+# Besides _CONTROL_CHARS and _BIDI_CONTROLS, the zero-width format
+# characters, which hide text, are kept out of a file name Import echoes; so
+# is a lone surrogate (an undecodable byte of a Linux file name). Any other
+# character, a Cyrillic, CJK or emoji name's included, is shown as it is.
+_NAME_FORMAT_CHARS = frozenset("\u200b\u200c\u200d\u2060\ufeff")
+
+
+def _shown_path(path):
+    """A file name or path as Import echoes it: a control, bidi or zero-width
+    character, or a lone surrogate, as _escaped writes it, with no quotes and
+    no cut; any other character as it is, as SlimBrave.ps1 shows it. The CLI
+    writes it through _say, so a terminal that cannot show a character still
+    cannot make print() fail."""
+    return "".join(
+        _escaped(ch) if (ch in _CONTROL_CHARS or ch in _BIDI_CONTROLS
+                         or ch in _NAME_FORMAT_CHARS or "\ud800" <= ch <= "\udfff")
+        else ch
+        for ch in path)
+
+
+def _say(text, stream=None):
+    """print() for the CLI that cannot fail on a terminal whose encoding
+    lacks a character of `text` (an ASCII or Latin-1 locale): such a
+    character is written as _escaped writes it."""
+    stream = sys.stdout if stream is None else stream
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    try:
+        text.encode(encoding)
+    except UnicodeEncodeError:
+        shown = []
+        for ch in text:
+            try:
+                ch.encode(encoding)
+                shown.append(ch)
+            except UnicodeEncodeError:
+                shown.append(_escaped(ch))
+        text = "".join(shown)
+    except LookupError:
+        pass
+    print(text, file=stream)
+
+
+def _quoted(text):
+    """`text` as a double-quoted string of printable ASCII.
+
+    Each character outside 0x20-0x7E becomes \\uXXXX (UTF-16 code units,
+    uppercase hex), and `"` and `\\` take a backslash. A body longer than
+    SHOWN_MAX is cut to SHOWN_MAX - 3 characters and ends in '...'.
+    Hand-written rather than json.dumps: SlimBrave.ps1 has to print the
+    same text, and its ConvertTo-Json escapes <, >, & and ' as well.
+    """
+    parts = []
+    size = 0
+    for ch in text:
+        part = "\\" + ch if ch == '"' or ch == "\\" else _escaped(ch)
+        parts.append(part)
+        size += len(part)
+        if size > SHOWN_MAX:
+            break  # the cut falls before this point
+    body = "".join(parts)
+    if len(body) > SHOWN_MAX:
+        body = body[:SHOWN_MAX - 3] + "..."
+    return '"' + body + '"'
+
+
+def _shown_name(name):
+    """A name from an imported file as the result message shows it.
+
+    As it is when it is 1 to SHOWN_MAX of A-Z a-z 0-9 _ . - (every policy
+    name is), quoted by _quoted otherwise, so an odd name can pass neither
+    for two names nor for a terminal escape sequence.
+    """
+    if 0 < len(name) <= SHOWN_MAX and all(c in _PLAIN_NAME_CHARS for c in name):
+        return name
+    return _quoted(name)
+
+
+def _shown_value(value):
+    """A value from an imported file as the result message shows it.
+
+    true or false, null, an integer within 64 bits (_is_json_int) in
+    decimal, a string quoted by _quoted. None for any other number, a list
+    or an object, which are not shown: Python and PowerShell print them
+    differently, and the scripts have to say the same thing.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    if _is_json_int(value):
+        return str(value)  # 20 characters at most
+    if isinstance(value, str):
+        return _quoted(value)
+    return None
+
+
+def _shown_item(key, value):
+    """`Key=<value>`, or the key alone for a value that is not shown."""
+    name = _shown_name(key)
+    shown = _shown_value(value)
+    return name if shown is None else f"{name}={shown}"
+
+
+def _note_clause(verb, reason, items):
+    """`; <verb> because <reason>: <items>`, at most MAX_SHOWN_ITEMS of
+    them and then ' and N more'."""
+    text = ", ".join(items[:MAX_SHOWN_ITEMS])
+    if len(items) > MAX_SHOWN_ITEMS:
+        text += f" and {len(items) - MAX_SHOWN_ITEMS} more"
+    return f"; {verb} because {reason}: {text}"
+
+
 def _parse_imported_features(features_obj):
     """Normalize the Features field from a config file.
 
@@ -2592,87 +2880,138 @@ def _parse_imported_features(features_obj):
 def import_settings(rows, path):
     """Import a SlimBrave Neo JSON config and update TUI row states.
 
-    Every refusal returns before any row is touched, so a failed import
-    leaves the selections as they were. The order matches SlimBrave.ps1's
-    Import: the file, a JSON object, a Features block, the DNS fields, each
-    value against its policy's type, then the exclusion groups.
+    Every refusal returns before any row is touched, or puts the rows back
+    (a value nested too deep), so a failed import leaves the selections as
+    they were. The order matches SlimBrave.ps1's Import: the file, a JSON
+    object, a Features block, the DNS fields, each value against its
+    policy's type, then the exclusion groups. Returns (ok, message); the
+    message names everything in the file that no row took, under the
+    reasons in IMPORT_NOTES.
+    """
+    ok, msg, _ = _import_config(rows, path)
+    return ok, msg
+
+
+def _import_config(rows, path):
+    """import_settings, returning (ok, message, outcome).
+
+    `outcome` (None on a refusal) is what --import decides on: "entries",
+    how many entries the Features block names; "taken", how many keys a row
+    took; "dns", whether the import set a managed DNS mode.
     """
     try:
         config = read_json_file(path)
     except FileNotFoundError:
-        return False, f"File not found: {path}"
+        return False, f"File not found: {_shown_path(path)}", None
+    except _EmptyKey:
+        return False, "Invalid config: a key is empty", None
+    except _KeysDifferInCase as e:
+        return False, ("Invalid config: keys differ only in letter case: "
+                       + ", ".join(_shown_name(k) for k in e.keys)), None
     except (ValueError, RecursionError) as e:
         # JSONDecodeError, UnicodeDecodeError and the 4300-digit integer
         # limit are all ValueErrors; a deeply nested file is RecursionError.
-        return False, f"Invalid JSON: {e}"
+        return False, f"Invalid JSON: {e}", None
     except OSError as e:
-        return False, f"Read error: {e}"
+        return False, f"Read error: {_shown_path(str(e))}", None  # it holds the path
 
+    # Nothing in _take_config walks a value's depth, but a value nested
+    # past the stack must not end the TUI or print a traceback: on a
+    # RecursionError the rows go back to what they were, as on any refusal.
+    saved = [dict(row) for row in rows]
+    try:
+        return _take_config(rows, config, path)
+    except RecursionError:
+        for row, before in zip(rows, saved):
+            row.clear()
+            row.update(before)
+        return False, "Invalid config: nesting too deep", None
+
+
+def _take_config(rows, config, path):
+    """_import_config once the file is read: `config` checked, taken into
+    `rows` and described, with the same (ok, message, outcome)."""
     # `[1,2]`, `null`, `"x"` and `3` are all valid JSON that would die at
     # the first .get() — in the TUI that traceback escapes curses.wrapper.
     if not isinstance(config, dict):
         return False, (
             f"Invalid config: expected a JSON object, got {type(config).__name__}"
-        )
+        ), None
 
     # A file without a Features object or array (the policy file, a
     # Bookmarks dump, a DNS-only file, a lowercase `features`) is not a
     # SlimBrave config. Taking it used to clear every row and report
-    # success, and --import then wrote an empty policy.
+    # success, and --import then wrote an empty policy. A block spelled in
+    # another letter case is pointed at, not taken.
     features = config.get("Features")
     if not isinstance(features, (dict, list)):
-        return False, "Invalid config: no Features block (not a SlimBrave Neo config)"
+        msg = "Invalid config: no Features block (not a SlimBrave Neo config)"
+        found = next((k for k in config if k != "Features" and k.isascii()
+                      and k.lower() == "features"), None)
+        if found is not None:
+            msg += f" (found {_shown_name(found)}; names are case-sensitive)"
+        return False, msg, None
     features_map, is_legacy = _parse_imported_features(features)
 
-    # Values left unmanaged and named in the result message: a choice
-    # key's value that is not a legal member of its enum, a value outside
-    # its policy's JSON type, and an unknown DnsMode. Written out, such a
-    # value is one Brave would ignore or misapply (a 1 on local fonts,
-    # window management or clipboard becomes a managed Allow).
-    skipped_choices = []
-
-    # A list of strings is joined with spaces, as SlimBrave.ps1's [string]
-    # cast joins an array; anything falsy is no template, as there. No
-    # strip: SlimBrave.ps1 does not trim either.
+    # A list of strings is joined with spaces, as SlimBrave.ps1 joins an
+    # array. A missing, null or empty value is no template, as there, and
+    # any other non-string (false, 0, {}) is refused, as there. No strip:
+    # SlimBrave.ps1 does not trim either.
     raw_tmpl = config.get("DnsTemplates")
     if isinstance(raw_tmpl, list) and all(isinstance(t, str) for t in raw_tmpl):
         raw_tmpl = " ".join(raw_tmpl)
-    if not raw_tmpl:
+    if raw_tmpl is None or raw_tmpl == "":
         dns_template = ""
     elif isinstance(raw_tmpl, str):
         dns_template = raw_tmpl
     else:
-        return False, "Invalid config: DnsTemplates must be a string"
-    # No DnsMode in the file means DNS is unmanaged (a bare DnsTemplates is
-    # treated as custom for legacy exports). The mode is matched in any
-    # letter case, as SlimBrave.ps1 matches it; an unknown one leaves DNS
-    # unmanaged and is named.
+        return False, "Invalid config: DnsTemplates must be a string", None
+    # A control character makes a template corrupt, not one to clean up:
+    # stripping it would write a resolver the file never named.
+    if not (_CONTROL_CHARS.isdisjoint(dns_template)
+            and _BIDI_CONTROLS.isdisjoint(dns_template)):
+        return False, "Invalid config: DnsTemplates contains a control character", None
+    # No DnsMode in the file (none, null or "") means DNS is unmanaged (a
+    # bare DnsTemplates is treated as custom for legacy exports). The mode
+    # is SlimBrave's own word, matched in any ASCII letter case as
+    # SlimBrave.ps1 matches it; any other value, false or 0 as much as an
+    # unknown word, leaves DNS unmanaged and is named.
     raw_mode = config.get("DnsMode")
-    if not raw_mode:
+    bad_mode = None
+    if raw_mode is None or raw_mode == "":
         dns_mode = "custom" if dns_template else "unmanaged"
-    elif isinstance(raw_mode, str) and raw_mode.lower() in DNS_MODES:
+    elif (isinstance(raw_mode, str) and raw_mode.isascii()
+          and raw_mode.lower() in DNS_MODES):
         dns_mode = raw_mode.lower()
     else:
         dns_mode = "unmanaged"
-        skipped_choices.append(f"DnsMode={raw_mode}")
+        bad_mode = _shown_item("DnsMode", raw_mode)
 
+    # What the rows make of the file, for the message: the keys a row has
+    # (inert ones included), the inert ones, the keys a row took, and the
+    # keys whose value has the JSON type their rows write (every row of a
+    # key writes the same type). A value outside that type is one Brave
+    # would ignore or misapply (a 1 on local fonts, window management or
+    # clipboard becomes a managed Allow); one inside it that no row writes
+    # may be legal, so the two are named apart.
+    row_keys = set()
+    inert_keys = set()
+    taken = set()
+    fits = set()
     # Legacy array format can't distinguish value-1 vs value-2 for keys
     # with multiple rows (IncognitoModeAvailability). To avoid silently
     # picking the later entry — which historically force-incognitoed users
     # who imported the Parental Controls preset — only the first matching
     # row per key is checked in legacy mode.
     legacy_handled = set()
-    # Keys the config names that are built into Brave Origin on this
-    # machine: left unmanaged, and counted in the result message.
-    skipped_inert = []
 
     for row in rows:
         if row["type"] == ROW_FEATURE:
             key = row["key"]
+            row_keys.add(key)
             if row.get("inert"):
+                inert_keys.add(key)
                 row["checked"] = False
-                if key in features_map:
-                    skipped_inert.append(key)
                 continue
             if key not in features_map:
                 row["checked"] = False
@@ -2684,28 +3023,29 @@ def import_settings(rows, path):
                 else:
                     row["checked"] = True
                     legacy_handled.add(key)
-            elif not _value_fits_row(row, expected):
-                row["checked"] = False
-                # Two rows can share a key; it is named once.
-                if key not in skipped_choices:
-                    skipped_choices.append(key)
-            else:
+            elif _value_fits_row(row, expected):
+                fits.add(key)
                 row["checked"] = _value_matches_row(row, expected)
+            else:
+                row["checked"] = False
+            if row["checked"]:
+                taken.add(key)
         elif row["type"] == ROW_CHOICE:
+            key = row["key"]
+            row_keys.add(key)
             # Import is authoritative: a key the config does not name goes
             # back to "Not managed", matching the old unticked checkbox.
             row["selected"] = 0
-            if row["key"] in features_map:
-                if is_legacy:
-                    # The array format carries no values; naming the key
-                    # used to tick a checkbox that wrote row["value"].
-                    idx = _choice_index_for_value(row, row["value"])
-                else:
-                    idx = _choice_index_for_value(row, features_map[row["key"]])
-                if idx is None:
-                    skipped_choices.append(row["key"])
-                else:
+            if key in features_map:
+                # The array format carries no values; naming the key used
+                # to tick a checkbox that wrote row["value"].
+                want = row["value"] if is_legacy else features_map[key]
+                idx = _choice_index_for_value(row, want)
+                if idx is not None:
                     row["selected"] = idx
+                    taken.add(key)
+                if _is_json_int(want):
+                    fits.add(key)
         elif row["type"] == ROW_DNS:
             # Always set, so the TUI never keeps its pre-import mode.
             row["selected"] = row["options"].index(dns_mode)
@@ -2714,19 +3054,93 @@ def import_settings(rows, path):
             row["cursor"] = len(dns_template)
             row["scroll"] = 0
 
-    dropped = _enforce_groups(rows)
-    msg = f"Imported from {path}"
-    if skipped_choices:
-        msg += ("; left unmanaged because the value is not one this policy "
-                "accepts: " + ", ".join(skipped_choices))
-    if skipped_inert:
-        n = len(skipped_inert)
+    dropped = set(_enforce_groups(rows))
+
+    # Name what no row took. Every clause lists the Features entries first,
+    # in file order, then the DnsMode, then the other top-level names in
+    # file order: the order SlimBrave.ps1 builds its lists in (the Features
+    # walk, the DnsMode after it, then the top-level names Read-ImportFields
+    # kept). A name that matches in all but ASCII letter case is given the
+    # spelling that would have: a Features key one of the row keys or the
+    # platform-limited ones (a retired or DNS name in the wrong case is
+    # simply one SlimBrave Neo does not offer), a top-level field one of
+    # CONFIG_FIELDS. A name with any other character matches nothing:
+    # Python's and .NET's case rules part outside ASCII (the Kelvin sign,
+    # the long s), and SlimBrave.ps1 has to suggest the same spellings.
+    notes = {kind: [] for kind, _, _ in IMPORT_NOTES}
+    noted = set()
+    builtin = set()
+    exclusive = []
+    key_spellings = {k.lower(): k for k in row_keys | PLATFORM_LIMITED_KEYS}
+    field_spellings = {k.lower(): k for k in CONFIG_FIELDS}
+
+    def note(kind, ident, item):
+        if (kind, ident) not in noted:  # a legacy array can repeat itself
+            noted.add((kind, ident))
+            notes[kind].append(item)
+
+    def note_name(name, spellings, kind, hint=None):
+        shown = _shown_name(name)
+        canonical = spellings.get(name.lower()) if name.isascii() else None
+        if canonical is not None:
+            note("case", name, f"{shown} (use {canonical})")
+        else:
+            note(kind, name, f"{shown} ({hint})" if hint else shown)
+
+    for field in ("Features", "DnsMode",
+                  *(f for f in config if f not in CONFIG_FIELDS)):
+        if field == "DnsMode":
+            if bad_mode is not None:
+                note("type", field, bad_mode)
+        elif field != "Features":
+            note_name(field, field_spellings, "field")
+        else:
+            # The object's keys or the legacy array's entries, in file order.
+            for key in features:
+                if not isinstance(key, str):
+                    # A legacy entry that is no name, shown as a value (a
+                    # float, list or object has no rendering to show).
+                    shown = _shown_value(key)
+                    if shown is not None:
+                        note("unknown", (shown,), shown)
+                elif key in dropped:
+                    if key not in exclusive:
+                        exclusive.append(key)
+                elif key in taken:
+                    pass
+                elif key in inert_keys:
+                    builtin.add(key)
+                elif key in row_keys:
+                    if is_legacy:
+                        note("value", key, key)
+                    elif key in fits:
+                        note("value", key, _shown_item(key, features_map[key]))
+                    else:
+                        note("type", key, _shown_item(key, features_map[key]))
+                elif key in PLATFORM_LIMITED_KEYS:
+                    pass  # no row here, by design
+                elif key in RETIRED_KEYS:
+                    note("retired", key, key)
+                else:
+                    note_name(key, key_spellings, "unknown",
+                              FEATURES_NAME_HINTS.get(key))
+
+    msg = f"Imported from {_shown_path(os.path.basename(path))}"
+    for kind, verb, reason in IMPORT_NOTES:
+        if notes[kind]:
+            msg += _note_clause(verb, reason, notes[kind])
+    if builtin:
+        n = len(builtin)
         msg += (f"; {n} key{'s' if n != 1 else ''} built into Brave Origin "
                 "left unmanaged")
-    if dropped:
-        msg += ("; left unmanaged because it is mutually exclusive with "
-                "another imported row: " + ", ".join(dropped))
-    return True, msg
+    if exclusive:
+        # Sorted in any letter case and in full, as SlimBrave.ps1 lists
+        # them (Sort-Object -Unique): row keys only, never a name to escape.
+        msg += (f"; left unmanaged because {EXCLUSIVE_REASON}: "
+                + ", ".join(sorted(exclusive, key=str.lower)))
+    outcome = {"entries": len(features), "taken": len(taken),
+               "dns": dns_mode != "unmanaged"}
+    return True, msg, outcome
 
 # ---------------------------------------------------------------------------
 # TUI
@@ -2852,7 +3266,7 @@ def desc_pane_lines(max_x):
     return _desc_pane_lines[max_x]
 
 
-def layout(max_y, max_x, show_desc):
+def layout(max_y, max_x, show_desc, status_n=1):
     """The row budget for one frame, shared by draw() and viewport_rows().
 
     Rows 0-1 are the title and the hints. The list sits in a box, the
@@ -2863,6 +3277,11 @@ def layout(max_y, max_x, show_desc):
     plain stack it was before them - list from row 2, buttons on the
     second-last row, status on the last - because eight rows of chrome
     would leave nothing else.
+
+    A status of `status_n` lines (status_lines()) takes the last rows, up
+    to STATUS_MAX_LINES of them and never the list's last row, so the list
+    has fewer rows only while a multi-line status shows; the unframed
+    stack keeps one status line.
     """
     if max_y < 9:
         list_rows = max(1, max_y - 5)
@@ -2876,8 +3295,10 @@ def layout(max_y, max_x, show_desc):
             "btn_top": max_y - 3,
             "btn_y": max_y - 2,
             "status_y": max_y - 1,
+            "status_lines": 1,
         }
-    fixed = 2 + 2 + 3 + 1
+    status_n = max(1, min(status_n, STATUS_MAX_LINES, max_y - 8))
+    fixed = 2 + 2 + 3 + status_n
     pane = desc_pane_lines(max_x) if show_desc else 0
     if pane and max_y - fixed - (pane + 2) < DESC_PANE_MIN_LIST:
         pane = 0
@@ -2895,7 +3316,8 @@ def layout(max_y, max_x, show_desc):
         "pane_lines": pane,
         "btn_top": btn_top,
         "btn_y": btn_top + 1,
-        "status_y": max_y - 1,
+        "status_y": max_y - status_n,
+        "status_lines": status_n,
     }
 
 
@@ -2908,6 +3330,21 @@ def template_field_width(max_x):
     """
     # capped so the closing bracket stays inside the box on a narrow terminal
     return max(1, min(max_x - 21, max(10, (max_x - 1) - 4 - 22)))
+
+
+def _field_text(text):
+    """`text` as the DoH template field draws it, one cell per character:
+    a control character (_CONTROL_CHARS), a bidi control, any other format
+    or combining character, a lone surrogate or an unassigned one, and a
+    wide character as '?', so a template read from the policy or a file can
+    neither move the cursor, reorder the row nor run past its field (a wide
+    character takes two cells, a combining one none, and the field counts
+    characters); any other character, an IDN host's included, as it is."""
+    return "".join("?" if (c in _CONTROL_CHARS or c in _BIDI_CONTROLS
+                           or unicodedata.category(c) in ("Cf", "Mn", "Me", "Cs", "Cn")
+                           or unicodedata.east_asian_width(c) in ("W", "F"))
+                   else c
+                   for c in text)
 
 
 def wrap_description(text, width, max_lines, ellipsis="..."):
@@ -2926,6 +3363,19 @@ def wrap_description(text, width, max_lines, ellipsis="..."):
     room = max(0, width - len(ellipsis))
     lines[-1] = lines[-1][:room].rstrip() + ellipsis
     return lines
+
+
+# The status line grows to this many lines rather than lose its tail (an
+# import that names what it left out runs well past one), as SlimBrave.ps1's
+# status bar grows to four.
+STATUS_MAX_LINES = 4
+
+
+def status_lines(text, max_x, max_lines=STATUS_MAX_LINES):
+    """The status message as draw() paints it: wrapped to the status width
+    (max_x - 4), at most `max_lines` lines, the last ending in '...' when
+    the message runs past them."""
+    return wrap_description(text, max(1, max_x - 4), max_lines, "...")
 
 
 BUTTON_DESC = {
@@ -3118,10 +3568,11 @@ def resolve_cursor(sel, cursor_idx):
     return pos, sel[pos]
 
 
-def viewport_rows(stdscr, show_desc=False):
+def viewport_rows(stdscr, show_desc=False, status_msg=""):
     """Return how many list rows fit inside the list box this frame."""
     max_y, max_x = stdscr.getmaxyx()
-    return layout(max_y, max_x, show_desc)["list_rows"]
+    status_n = len(status_lines(status_msg, max_x))
+    return layout(max_y, max_x, show_desc, status_n)["list_rows"]
 
 
 def clamp_scroll(rows, vis, scroll_offset, cursor_vpos, visible_count):
@@ -3171,16 +3622,23 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
     max_y, max_x = stdscr.getmaxyx()
     usable_w = max_x - 1  # avoid writing to the last column
     hz, vt, tl, tr, bl, br, ellipsis = box_glyphs()
-    lay = layout(max_y, max_x, show_desc)
+    # The prompt sits on the status line, so the status is not painted then.
+    status = status_lines(status_msg, max_x) if focus != FOCUS_PROMPT else []
+    lay = layout(max_y, max_x, show_desc, len(status))
+    if len(status) > lay["status_lines"]:
+        # Fewer rows than the message wants: cut it where the screen ends.
+        status = status_lines(status_msg, max_x, lay["status_lines"])
     framed = lay["framed"]
     inner_x = 2 if framed else 0
     inner_w = max(1, usable_w - 4) if framed else usable_w
     edge_attr = curses.color_pair(CP_NORMAL) | curses.A_DIM
 
     def put(y, x, text, n, attr):
+        # ValueError is curses refusing an embedded NUL. Import escapes what
+        # it copies from a file; this keeps any other text from ending the TUI.
         try:
             stdscr.addnstr(y, x, text, n, attr)
-        except curses.error:
+        except (curses.error, ValueError):
             pass
 
     def frame(top, bottom, label=""):
@@ -3306,7 +3764,7 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
                 elif cur_pos < scroll:
                     scroll = cur_pos
                 row["scroll"] = scroll
-                visible_text = val[scroll:scroll + field_w]
+                visible_text = _field_text(val[scroll:scroll + field_w])
                 # padded to the field width, so the closing bracket keeps
                 # its place when the cursor sits at the end of the text
                 line = f"    Template: [{visible_text.ljust(field_w)}]"
@@ -3332,7 +3790,7 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
             # Stay inside the bracketed field, not just inside the line.
             if field_start <= cur_screen_pos < min(inner_x + inner_w,
                                                    field_start + field_w):
-                ch = tmpl_val[cur_pos] if cur_pos < len(tmpl_val) else " "
+                ch = _field_text(tmpl_val[cur_pos]) if cur_pos < len(tmpl_val) else " "
                 put(y, cur_screen_pos, ch, 1,
                     curses.color_pair(CP_BUTTON_ACTIVE))
 
@@ -3380,8 +3838,8 @@ def draw(stdscr, rows, cursor_idx, scroll_offset, focus, btn_idx,
             put(status_y, cur_x, ch, 1, curses.color_pair(CP_BUTTON_ACTIVE))
     elif status_msg:
         cp = CP_STATUS_OK if status_ok else CP_STATUS_ERR
-        put(status_y, 2, status_msg[:usable_w - 3], usable_w - 3,
-            curses.color_pair(cp))
+        for i, line in enumerate(status):
+            put(status_y + i, 2, line, usable_w - 3, curses.color_pair(cp))
 
     stdscr.refresh()
 
@@ -3718,7 +4176,7 @@ def main(stdscr, override_installations=None):
         status_ok = True
 
     while True:
-        visible_count = viewport_rows(stdscr, show_desc)
+        visible_count = viewport_rows(stdscr, show_desc, status_msg)
         # Recomputed every pass: a fold, a filter keystroke or an import can
         # change what is on screen between one getch() and the next.
         vis = visible_indices(rows, filter_text)
@@ -4105,11 +4563,19 @@ def cli_import(path, installations, doh_templates="",
                persist_mode=PERSIST_DEFAULT):
     """Non-interactive: import config and apply policies."""
     rows = build_rows(installations)
-    ok, msg = import_settings(rows, path)
+    ok, msg, outcome = _import_config(rows, path)
     if not ok:
-        print(f"Error: {msg}", file=sys.stderr)
+        _say(f"Error: {msg}", sys.stderr)
         return 1
-    print(msg)
+    _say(msg)
+    # A Features block that names entries but has none taken, with no DNS
+    # mode either, would apply an empty policy and so remove SlimBrave's:
+    # a file of policies SlimBrave Neo does not offer writes nothing. An
+    # empty block still applies an empty policy, as it always has.
+    if outcome["entries"] and not outcome["taken"] and not outcome["dns"]:
+        _say(f"Error: nothing in {_shown_path(path)} can be applied; "
+             "--import wrote nothing.", sys.stderr)
+        return 1
 
     # A template is inert unless the mode asks for one, and most presets
     # carry no DnsMode at all — promote those rather than dropping the flag
@@ -4118,10 +4584,10 @@ def cli_import(path, installations, doh_templates="",
     if doh_templates:
         dns_mode = get_dns_mode(rows)
         if dns_mode == "off":
-            print(
+            _say(
                 "Error: --doh-templates conflicts with DnsMode 'off' in "
-                f"{path}. Remove one of them.",
-                file=sys.stderr,
+                f"{_shown_path(path)}. Remove one of them.",
+                sys.stderr,
             )
             return 1
         for row in rows:
@@ -4134,11 +4600,11 @@ def cli_import(path, installations, doh_templates="",
 
     ok, msg = apply_policy(rows, installations, persist_mode=persist_mode)
     if not ok:
-        print(f"Error: {msg}", file=sys.stderr)
+        _say(f"Error: {msg}", sys.stderr)
         return 1
     if IS_MAC and _is_override(installations) and _is_profile_installed():
         msg += PROFILE_STILL_APPLIES
-    print(msg)
+    _say(msg)
     if IS_MAC and persist_mode == "on":
         # The status text has no room for it; the CLI prints the path in
         # full, so the file can be found again if the hand-off is missed.
