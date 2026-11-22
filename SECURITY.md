@@ -135,7 +135,10 @@ described under each platform, or the JSON config file you pick yourself in the
 Import/Export dialog (`--import` / `--export` on Linux and macOS). On Linux and
 macOS, Export creates that file with your own account's rights, not root's, so
 it can only land where you could write it yourself; Import reads the file you
-name as root and refuses one over 1 MiB.
+name as root and refuses one over 1 MiB. In all three scripts, Import's result
+shows names and values copied from the file only escaped to printable ASCII
+(anything else as `\uXXXX`) and capped in length, so a crafted config cannot
+put control or escape sequences on your terminal or in the status bar.
 
 If you grant sudo for this tool alone: the Linux and macOS scripts run every
 helper program by absolute path (`/usr/bin/pgrep`; on macOS also

@@ -493,12 +493,13 @@ def test_import_takes_the_dns_mode_in_any_letter_case(mod, tmp_path):
     assert policy.get("DnsOverHttpsMode") == "automatic"
 
 
-@pytest.mark.parametrize("mode", ["bogus", 5], ids=["word", "number"])
-def test_import_names_an_unknown_dns_mode_and_leaves_dns_unmanaged(mod, tmp_path, mode):
-    """The mode the TUI had before the import (off) does not survive."""
+@pytest.mark.parametrize("mode,shown", [("bogus", '"bogus"'), (5, "5")], ids=["word", "number"])
+def test_import_names_an_unknown_dns_mode_and_leaves_dns_unmanaged(mod, tmp_path, mode, shown):
+    """The mode the TUI had before the import (off) does not survive. A
+    string value is shown quoted, as every string the message echoes is."""
     policy, msg = _dns_policy_after_import(mod, tmp_path, mode)
     assert "DnsOverHttpsMode" not in policy
-    assert f"DnsMode={mode}" in msg
+    assert f"DnsMode={shown}" in msg
 
 
 def test_sync_ignores_a_template_that_is_not_a_string(mod):
@@ -538,7 +539,7 @@ def test_import_takes_a_value_only_in_its_policys_json_type(mod, tmp_path, key, 
     policy, err = mod._build_policy(rows)
     assert err == ""
     assert key not in policy
-    tail = msg[len(f"Imported from {path}"):]
+    tail = msg[len(f"Imported from {path.name}"):]
     assert tail.count(key) == 1, f"{key}={bad!r} is not named once in: {msg!r}"
 
 
@@ -4678,14 +4679,16 @@ def test_ps1_import_applies_the_python_rules():
     assert "[int]$want" not in imp, "the choice import casts, and a [long] past Int32 throws"
     assert "$ok = ($want -is [int] -or $want -is [long])" in imp
     assert "[double]" not in imp and "[byte]" not in imp
-    # An unmatched choice (an off-enum value such as Notifications' 3) is named.
-    assert 'if (-not $matched) { $script:importNotes += "$($row.key)=$want" }' in imp
+    # An unmatched choice (an off-enum value such as Notifications' 3) is named:
+    # an integer as a value no row sets, anything else as not accepted.
+    assert "} elseif ($ok) {\n                $missed[$row.key] = Format-ImportItem $row.key $want" in imp
+    assert "} else { $wrong[$row.key] = Format-ImportItem $row.key $want }" in imp
     assert "$fits = ($want -is [array])" in imp
     assert "if ($fits -and $wantList.Count -eq $mine.Count -and" in imp
     assert "$fits = ($want -is [string])" in imp
     assert "$script:intEnumKeys -contains $row.key" in imp
     assert "$fits = (($want -is [bool]) -or ($want -is [int]) -or ($want -is [long]))" in imp
-    assert 'if (-not $fits) {\n                $script:importNotes += "$($row.key)=$want"' in imp
+    assert "if (-not $fits) {\n                $wrong[$row.key] = Format-ImportItem $row.key $want" in imp
 
     handler = live[live.index('"Import" {'):]
     handler = handler[:handler.index('Set-Status "Import failed')]
@@ -4705,7 +4708,10 @@ def test_ps1_import_applies_the_python_rules():
                     "$script:dnsState.Mode=$dnsSnap.Mode", "$script:dnsState.Tmpl=$dnsSnap.Tmpl"):
         assert restore in body, f"a failed import does not restore {restore}"
     assert body.rstrip().endswith("$ok=$false")
-    assert "($script:importNotes | Sort-Object -Unique)" in handler
+    # Value notes keep file order (Sort-Object reorders them, ignoring case);
+    # the group clause is unchanged.
+    assert "'the value is not one this policy accepts' $script:importNotes" in handler
+    assert "$script:importNotes |" not in handler
     assert "($script:importConflicts | Sort-Object -Unique)" in handler
     assert "mutually exclusive with another imported row" in handler
 

@@ -293,7 +293,7 @@ Any managed value overrides the per-site choices you made for that permission wh
 - Multi-Screen Access — *Ask / Block*; the window-management permission: your monitor layout, plus placing windows on a chosen screen
 - Clipboard Read Access — *Ask / Block*; sites reading your clipboard (passwords, 2FA codes, wallet addresses) without you pasting. Block breaks Paste buttons inside web apps; Ctrl+V, right-click Paste and copy buttons keep working, and Brave's own pages are exempt
 
-Older configs keep working unchanged: a v1.9.5 export or preset naming one of these keys carries the value `2`, so it imports as **Block**, and a key the config doesn't name comes back as **Not managed**. A value outside a key's legal set is left unmanaged rather than written out, and the import result names the key it skipped.
+Older configs keep working unchanged: a v1.9.5 export or preset naming one of these keys carries the value `2`, so it imports as **Block**, and a key the config doesn't name comes back as **Not managed**. A value these selectors don't offer, whether outside the key's legal set or legal but not offered (the Ask a v2.3 export can carry for Web Notifications), is left unmanaged rather than written out, and the import result names it: `DefaultNotificationsSetting=3`.
 
 The section ends with two plain checkboxes, because their policies are on/off switches whose "on" is the same as leaving them unset. Each is a hard block (no site or extension can use the device, none is asked, and per-site Allow exceptions stop working), so neither is in any preset:
 - Block Microphone Access: breaks web calls and meetings (Meet, Zoom or Teams on the web, Discord, Brave Talk), voice messages and dictation
@@ -407,7 +407,7 @@ The Windows PowerShell script is GUI-only: it has no user-facing flags. It decla
 
 | Flag | Description |
 |------|-------------|
-| `--import PATH` | Import a SlimBrave Neo JSON config and apply policies |
+| `--import PATH` | Import a SlimBrave Neo JSON config and apply policies. Prints what the file held that SlimBrave Neo left unmanaged; exit status below |
 | `--export PATH` | Export current policy to a SlimBrave Neo JSON config, written with your own account's rights (pick a path you can write). Cannot be combined with `--reset`; export first. |
 | `--reset` | Remove the managed policy file |
 | `--policy-file PATH` | Override the policy file: a `slimbrave*.json` directly in `/etc/brave/policies/managed` (Linux), or `com.brave.Browser[.beta\|.nightly].plist` directly in `/Library/Managed Preferences` or `/Library/Preferences` (macOS); anything else is refused. On macOS it implies `--persist off` and never touches an installed Configuration Profile; `--persist on` is refused. |
@@ -416,7 +416,14 @@ The Windows PowerShell script is GUI-only: it has no user-facing flags. It decla
 | `--persist MODE` | **macOS only** (`slimbrave-mac.py`). `off` (plist only; may reset after reboot on macOS 13+) or `on` (install an Apple Configuration Profile via System Settings; durable, Apple-recommended). Omitted = reuse whatever mode is currently installed; falls back to `off` if nothing is. With `--policy-file`, the default is `off`. `slimbrave-linux.py` does not accept this flag at all and exits 2 if it is passed; `slimbrave-mac.py` run on Linux accepts only `off`, because `/etc/brave/policies` is already durable. |
 | `-h`, `--help` | Show help |
 
-Import/export uses the same JSON format as the Windows PowerShell version. Configs are cross-platform compatible.
+Import/export uses the same JSON format as the Windows PowerShell version. Configs are cross-platform compatible. Import takes only what SlimBrave Neo's own rows write and names the rest; *What Import takes, and what it names* under How It Works has the details.
+
+`--import` prints the import result on stdout, then applies it. It exits:
+- `0` when it wrote the policy, even if the result names keys it left unmanaged.
+- `1` when the import wrote nothing: the file was refused (missing, unreadable, over 1 MiB, not JSON, two keys that differ only in letter case, not a SlimBrave Neo config, a `DnsTemplates` that is not text); `--doh-templates` contradicts the file's `DnsMode` `off`; the policy could not be written (a write error, or `secure` or `custom` DNS with no template); or the file names entries but SlimBrave Neo can take none of them and it sets no DNS mode. That last case prints `Error: nothing in <file> can be applied` on stderr and leaves the policy as it was, so a file of policies SlimBrave Neo doesn't offer never replaces yours with an empty one. `{"Features":{}}` still applies an empty policy, on purpose. Not running as root also exits `1`.
+- `2` for a command line it cannot run: a bad or conflicting flag, a refused `--policy-file`, or `--channels` naming no installed channel.
+
+With `--reset`, the reset runs first, whatever the import then does.
 
 ---
 
@@ -425,7 +432,7 @@ Import/export uses the same JSON format as the Windows PowerShell version. Confi
 <details>
 <summary><strong>How presets behave</strong></summary>
 
-A preset is a starting point, not a verdict — import it, untick whatever you don't want, then Apply. Maximum Privacy, Balanced Privacy, Performance Focused and Developer turn off Background Mode (Strict Parental Controls and Brave Origin leave it alone); that policy is Windows/Linux only, so on macOS the key is skipped and the rest of the preset applies unchanged. None of the presets ships "Disable Safe Browsing", "Allow Permissive Referrers", "Block Dynamic Code in the Browser Process", or the two mutually-exclusive Shields overrides. Rows that would have no effect in Brave are not offered. Some rows the presets carry change nothing on a default Release install: Playlist is off by default on Release and Beta, Local AI on Release, and rows such as Global Privacy Control, De-AMP and Block Third Party Cookies lock a default Brave already has, so a settings toggle, Adblock-Only mode or a change of default can't undo it. The Features lists above say which.
+A preset is a starting point, not a verdict — import it, untick whatever you don't want, then Apply. Maximum Privacy, Balanced Privacy, Performance Focused and Developer turn off Background Mode (Strict Parental Controls and Brave Origin leave it alone); that policy is Windows/Linux only, so on macOS the key is skipped without a note and the rest of the preset applies unchanged. None of the presets ships "Disable Safe Browsing", "Allow Permissive Referrers", "Block Dynamic Code in the Browser Process", or the two mutually-exclusive Shields overrides. Rows that would have no effect in Brave are not offered. Some rows the presets carry change nothing on a default Release install: Playlist is off by default on Release and Beta, Local AI on Release, and rows such as Global Privacy Control, De-AMP and Block Third Party Cookies lock a default Brave already has, so a settings toggle, Adblock-Only mode or a change of default can't undo it. The Features lists above say which.
 
 </details>
 
@@ -545,8 +552,8 @@ SlimBrave Neo writes Chromium [managed enterprise policies](https://chromeenterp
 **Additional behavior:**
 - Auto-detects Brave installations: Arch (`brave-bin`, `brave-origin-bin`), deb/rpm (`brave-browser`, `brave-origin`), Flatpak, Snap, macOS App (Stable / Beta / Nightly; not Brave Origin), and PATH fallback; on Linux, Brave Origin is reported as its own channel
 - Reads existing policies on startup and pre-checks matching features; on macOS, the Apply-time channel prompt pre-ticks channels that already have a SlimBrave-managed policy (sticky default)
-- Apply rewrites every key SlimBrave Neo manages, so unchecked features are cleanly removed. On Linux the policy file is SlimBrave Neo's own. On macOS each channel's plist is shared, so keys SlimBrave Neo does not manage stay, and Reset deletes the plist only when nothing else is left in it.
-- Import/export compatible with the Windows PowerShell version: all three scripts now export UTF-8 without a BOM, and all three still read the UTF-16 files older PowerShell exports produced
+- Apply rewrites every key SlimBrave Neo manages, so unchecked features are cleanly removed. On Linux the policy file is SlimBrave Neo's own. On macOS each channel's plist is shared, so keys SlimBrave Neo does not manage stay, and Reset deletes the plist only when nothing else is left in it. To keep policies of your own next to SlimBrave's, see *Your own policies alongside SlimBrave* below.
+- Import/export compatible with the Windows PowerShell version: all three scripts now export UTF-8 without a BOM, and all three still read the UTF-16 files older PowerShell exports produced. Import takes only what a row writes and names everything else; see *What Import takes, and what it names* below
 
 ---
 
@@ -589,6 +596,117 @@ Set-ExecutionPolicy -ExecutionPolicy Undefined   -Scope CurrentUser   # undo
 ```
 
 </details>
+
+</details>
+
+<details>
+<summary><strong>What Import takes, and what it names</strong></summary>
+
+Import fills in the rows from a config file; nothing is written until you Apply (the CLI's `--import` applies straight after). It takes a key only where one of SlimBrave Neo's rows writes that key, and only with a value that row writes. Nothing else in the file ever becomes policy, so a config someone sends you can set nothing the interface couldn't. To set other policies yourself, see *Your own policies alongside SlimBrave* below.
+
+Names count only in their exact letter case, in all three scripts: the top-level `Features`, `DnsMode` and `DnsTemplates`, every key inside `Features`, string values such as `disable_non_proxied_udp`, and list entries such as `https://*`. The one exception is the `DnsMode` value, SlimBrave's own word, which reads in any case. A file with two keys that differ only in letter case, such as `TorDisabled` and `tordisabled`, is refused whole, because Windows PowerShell 5.1 can't read one. A `features` block in the wrong case is refused too, with a message that names what it found and says names are case-sensitive.
+
+Anything else the file holds is left unmanaged and named in the result, under one of these reasons, in this order:
+
+| The result says | For |
+|---|---|
+| left unmanaged because names are case-sensitive | a key or field in the wrong letter case, with the spelling to use: `torDisabled (use TorDisabled)` |
+| left unmanaged because the value is not one this policy accepts | a value of the wrong JSON type, such as `"1"` or `true` for a number or a string for an on/off policy, and a `DnsMode` it doesn't know |
+| left unmanaged because no row sets that value | the right type, but no row writes it: Web Notifications' `3` (Ask), `IncognitoModeAvailability` `0`, the opposite on/off value, a list that isn't exactly SlimBrave's, a string or list entry in another letter case |
+| left unmanaged because SlimBrave Neo no longer offers it | a key an earlier version wrote, such as `ShoppingListEnabled` |
+| left unmanaged because SlimBrave Neo does not offer it | any other key, such as `DiskCacheSize`; a DNS policy inside `Features` says where it belongs: `DnsOverHttpsMode (use DnsMode)` |
+| ignored because it is not a SlimBrave Neo setting | a top-level field other than those three |
+
+The Brave Origin count (on a Linux machine whose only Brave is Origin) and the losing row of a mutually exclusive pair the file names both of follow, as before. Two keys are skipped without a note, because Chromium has no such policy there: `BackgroundModeEnabled` on macOS, and `DynamicCodeSettings` on Linux and macOS. That keeps the presets free of notes on every platform.
+
+The result starts `Imported from <file name>`. A name from the file appears as written when it looks like a policy name (letters, digits, `_`, `.` and `-`, at most 64 of them); any other name, and every string value, appears in quotes, with anything outside printable ASCII written as `\uXXXX`, cut at 64 characters. Each reason lists up to five names, then how many more. The Windows status bar words the same reasons as sentences (`Left unmanaged, because ...`) and grows to four lines; past that it ends in an ellipsis and its tooltip holds the whole text. The TUI wraps the result to up to four lines under the buttons (fewer on a very short terminal), the last ending in `...` when there is more, and the list gives up rows while it shows.
+
+</details>
+
+<details>
+<summary><strong>Your own policies alongside SlimBrave</strong></summary>
+
+SlimBrave Neo sets only the policies it has a row for, and Chromium has many more. You can set any of them yourself, next to SlimBrave's, as long as you put them where SlimBrave doesn't write. Import won't carry them for you: SlimBrave runs as root or Administrator, and a config file someone sends you shouldn't be able to set machine policy you never saw a row for. Instead, Import names each key it has no row for (see *What Import takes, and what it names* above), so you can see what a config carried that SlimBrave left alone.
+
+**The one rule.** A key SlimBrave has a row for belongs to SlimBrave, and so do `DnsOverHttpsMode` and `DnsOverHttpsTemplates` (the DNS section). Set those in SlimBrave. If you set one somewhere else, then on Windows and macOS Apply overwrites it while its row is on and removes it while the row is off, and Reset removes it. On Linux, while the row is on, both files set it and the file order below decides. To check a key, type it into the Windows search box (it matches policy keys), or run `grep -c '"key": "DiskCacheSize"' slimbrave-linux.py` (`slimbrave-mac.py` on a Mac): `0` means no row.
+
+On Windows and macOS, Apply and Reset also remove the keys older versions wrote, each only while it still holds exactly the value SlimBrave wrote ([SECURITY.md](SECURITY.md) lists them). A value you set to that same value yourself looks identical, so a `SafeSitesFilterBehavior` of `1` you set goes too; any other value stays.
+
+**Windows.** Add your values under `HKLM\SOFTWARE\Policies\BraveSoftware\Brave` (every account) or `HKCU\SOFTWARE\Policies\BraveSoftware\Brave` (only you), with regedit, `reg add`, or the Group Policy editor with Brave's ADMX templates. Apart from those old keys, SlimBrave never changes or removes a value whose name has no row. From an elevated prompt:
+
+```
+reg add "HKLM\SOFTWARE\Policies\BraveSoftware\Brave" /v DiskCacheSize /t REG_DWORD /d 104857600 /f
+reg add "HKLM\SOFTWARE\Policies\BraveSoftware\Brave\URLBlocklist" /v 1 /t REG_SZ /d example.com /f
+```
+
+The registry ignores letter case, so `diskcachesize` and `DiskCacheSize` are one name. Under a name that has a row, Apply and Reset also delete your HKCU copy, though the window shows only HKLM. Lists are the one softer case: a list such as `ExtensionInstallBlocklist` that isn't exactly SlimBrave's stays while its row is off (the status says so), but turning the row on replaces it. Values under `...\Brave\Recommended`, defaults a user can still change, are never touched.
+
+**Linux.** Leave `slimbrave.json` to SlimBrave: Apply rewrites it whole and Reset deletes it. Put your policies in a file of your own in the same folder. SlimBrave reads, writes and deletes only `slimbrave.json`, or the `slimbrave*.json` you name with `--policy-file`, so a file whose name doesn't start with `slimbrave` is out of its reach. The folder exists once SlimBrave has applied once:
+
+```bash
+sudo tee /etc/brave/policies/managed/local.json >/dev/null <<'EOF'
+{
+  "DiskCacheSize": 104857600,
+  "URLBlocklist": ["example.com"]
+}
+EOF
+sudo chmod 644 /etc/brave/policies/managed/local.json
+```
+
+Brave runs as you, so the file has to be readable by everyone (644). Brave merges every file in that folder in name order: when two files set the same key, the one whose name sorts last wins, and brave://policy notes the conflict. `local.json` sorts before `slimbrave.json`, so a row you tick in SlimBrave wins and your value applies whenever that row is off; `zz-local.json` would win over SlimBrave instead. Keep names lowercase, since capitals sort before every lowercase letter. Brave reads every file there whatever its name ends in, so keep backups such as `slimbrave.json.bak` somewhere else or they apply too. The Flatpak sees only `*.json` files, and a new file only after Brave fully quits and starts again. Defaults a user can still change go in `/etc/brave/policies/recommended/`, which SlimBrave never touches; SlimBrave's values outrank them.
+
+**macOS.** The lasting way is a Configuration Profile of your own for `com.brave.Browser` (or `.beta`, `.nightly`), with its own `PayloadIdentifier`, and `--persist on` for SlimBrave. SlimBrave removes and re-stages only its own profile, `io.github.slimbrave-neo.brave-policy`, which carries only SlimBrave's keys, so yours stays installed. Two profiles for the same Brave app haven't been tested side by side on a real Mac yet, and which one wins a key both set is up to macOS, so keep your keys and SlimBrave's apart.
+
+The quick way, with `--persist off`, is to add keys straight to `/Library/Managed Preferences/com.brave.Browser.plist`. Apply and Reset replace only SlimBrave's keys, and Reset deletes the file only when nothing else is left in it. macOS 13+ may still clear that file at reboot, as it may clear SlimBrave's keys in that mode, and while any Configuration Profile for the app is installed macOS writes the file itself, so a hand edit there may not last.
+
+<details>
+<summary>A minimal profile of your own</summary>
+
+The same shape as the profile SlimBrave stages. Put the output of `uuidgen` in each `PayloadUUID` (run it twice), save the file as `my-brave-policy.mobileconfig`, double-click it, then install it under System Settings > General > Device Management.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>PayloadType</key><string>Configuration</string>
+  <key>PayloadVersion</key><integer>1</integer>
+  <key>PayloadIdentifier</key><string>local.my-brave-policy</string>
+  <key>PayloadUUID</key><string>PASTE-FIRST-UUID</string>
+  <key>PayloadDisplayName</key><string>My Brave Policy</string>
+  <key>PayloadScope</key><string>System</string>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>PayloadType</key><string>com.apple.ManagedClient.preferences</string>
+      <key>PayloadVersion</key><integer>1</integer>
+      <key>PayloadIdentifier</key><string>local.my-brave-policy.payload</string>
+      <key>PayloadUUID</key><string>PASTE-SECOND-UUID</string>
+      <key>PayloadContent</key>
+      <dict>
+        <key>com.brave.Browser</key>
+        <dict>
+          <key>Forced</key>
+          <array>
+            <dict>
+              <key>mcx_preference_settings</key>
+              <dict>
+                <key>DiskCacheSize</key><integer>104857600</integer>
+                <key>URLBlocklist</key><array><string>example.com</string></array>
+              </dict>
+            </dict>
+          </array>
+        </dict>
+      </dict>
+    </dict>
+  </array>
+</dict>
+</plist>
+```
+
+</details>
+
+**Checking.** brave://policy lists your policies and SlimBrave's together, all with Source *Platform*, and doesn't say which tool set which. Press *Reload policies* after a change; some policies, `DiskCacheSize` among them, take effect only after Brave restarts. Windows and Linux list a name Brave doesn't know as *Unknown policy*; macOS leaves it out. On a Windows PC or Mac that isn't joined to a domain or enrolled in device management, Chromium also blocks a few policies from any local source, among them `HomepageLocation`, `NewTabPageLocation`, `RestoreOnStartup` and extensions force-installed from outside the Chrome Web Store, whoever sets them. Linux doesn't block them.
 
 </details>
 

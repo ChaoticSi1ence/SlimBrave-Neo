@@ -130,12 +130,15 @@ not append.
   `--doh-templates`, the policy file read at launch, or text typed under
   `custom`/`secure` before switching mode; their UI then greys the field and
   cannot clear it (What's next). Three exceptions by design:
-  `slimbrave-mac.py` on macOS has no `BackgroundModeEnabled` row and ignores
-  that key on import without a note; only `SlimBrave.ps1` offers `DynamicCodeSettings`
-  (`chrome.win` only), which the Python scripts neither offer nor import,
-  also without a note; on a Linux machine whose only Brave is Origin, the
-  Python scripts leave the 13 `ORIGIN_BUILTIN_KEYS` unmanaged on import,
-  with a note, and out of export.
+  `slimbrave-mac.py` on macOS has no `BackgroundModeEnabled` row, and only
+  `SlimBrave.ps1` offers `DynamicCodeSettings` (`chrome.win` only), which the
+  Python scripts neither offer nor import; where a script has no row for
+  either (`PLATFORM_LIMITED_KEYS` in both Python scripts), Import skips it by
+  design, without the note it gives every other key it leaves unmanaged,
+  because Chromium has no such policy on that platform and naming it would
+  mark four of the six presets on macOS; on a Linux machine whose only Brave
+  is Origin, the Python scripts leave the 13 `ORIGIN_BUILTIN_KEYS` unmanaged
+  on import, with a note, and out of export.
 - **Inventory: 89 rows over 84 distinct keys** (`ChromeVariations`,
   `IncognitoModeAvailability`, `DefaultBraveReferrersSetting`,
   `HardwareAccelerationModeEnabled` and `SafeBrowsingProtectionLevel` have
@@ -1319,22 +1322,35 @@ Watch list, each with the trigger that turns it into work:
   `Origin` record, because the bare `brave-origin` alternative points at its
   launcher (see What the tool does with it). (3) macOS Origin: `MAC_CHANNELS`
   lacks `com.brave.Browser.origin{,.beta,.nightly}` (see Platform policy
-  locations). (4) Import names the values a row cannot take: an off-enum
-  choice, a value outside its policy's JSON type (a `true` or `"2"` for an
-  integer policy, a string for a boolean or list policy), an unknown
-  `DnsMode`, and the dropped row of a contradictory exclusion group; in
-  `SlimBrave.ps1` also a foreign list. The Python scripts also name Origin
-  built-ins. A key that matches no row (`AlternateErrorPagesEnabled`,
-  `DNSInterceptionChecksEnabled`, `MediaRecommendationsEnabled`,
-  `SafeBrowsingExtendedReportingEnabled`, `SafeSitesFilterBehavior`,
-  `ShoppingListEnabled`, `NetworkServiceSandboxEnabled`,
-  `BackgroundModeEnabled` on macOS, or `DynamicCodeSettings` in the
-  Python scripts), or a legal value no row writes, is still dropped without
-  a word. `SlimBrave.ps1` also matches key names (`Features` included),
-  string values and list entries in any letter case. The Python scripts need
-  the exact case everywhere but the `DnsMode` value: a lowercase `features`
-  is refused, and anything else in the wrong case is dropped silently. Make
-  all three exact-case once every dropped key is named. (5) `SlimBrave.ps1`
+  locations). (4) What Import leaves open since v2.4.2, which names
+  everything it leaves unmanaged and matches names, string values and list
+  entries in exact case in all three: `SlimBrave.ps1`'s Re-sync
+  (`Sync-FromRegistry`) and its list-ownership test
+  (`Test-ListPolicyIsExactly`) still compare values in any letter case
+  (`-eq`, `Compare-Object`), so Re-sync ticks a row for a value Import now
+  names, such as a hand-written `WebRtcIPHandling` =
+  `DISABLE_NON_PROXIED_UDP`; make both exact in one change, since Apply's
+  list removal rests on the ownership test. A value under a row's key that
+  no row writes (a GPO's `ChromeVariations` = 0, or the
+  `DefaultNotificationsSetting` = 3 a v2.3 Ask left behind) reads as
+  unmanaged at startup and on Re-sync, in all three scripts, and the next
+  Apply deletes it without a word; name it there ('Apply removes it'). On
+  macOS, Apply and Reset remove someone else's list under a row's key
+  (`_write_one_policy` and `_strip_managed` have no ownership test), where
+  Windows keeps a list that is not exactly SlimBrave's while its row is
+  off; port the Windows rule, or keep the difference documented in the
+  README. `SlimBrave.ps1` reads an import file of any size; the Python
+  scripts refuse one over 1 MiB (`MAX_IMPORT_BYTES`). Registry values
+  upstream SlimBrave wrote under names with no retired entry stay put:
+  `DeveloperToolsDisabled` (still applied at Chromium 157, so on such a
+  machine unticking Disable Developer Tools leaves DevTools blocked; Import
+  names it as not offered), `HttpsUpgradesEnabled` and `BraveAdsEnabled`
+  (written before upstream had Export, so no config carries them); retiring
+  them needs a Windows-only part of `$script:retiredPolicies`, which a test
+  holds equal to `RETIRED_POLICIES` and `RETIRED_KEYS`. The Python scripts
+  fold only ASCII letters when they refuse two keys that differ only in
+  case, so a pair such as `É` and `é` imports there, both named as not
+  offered, while Windows PowerShell 5.1 refuses the file. (5) `SlimBrave.ps1`
   started from a mapped network drive or a `subst` drive relaunches elevated
   with a path the elevated session usually cannot see, and the new window
   closes without a message; the README says to run it from a local folder.
@@ -1364,10 +1380,14 @@ Watch list, each with the trigger that turns it into work:
     with nothing ticked. (c) Import
     `{"Features":{"DefaultNotificationsSetting":3000000000}}`, then the same
     with `1e10`, `2e0`, `2.0` and `3`: each imports, without 'Import failed',
-    with the value named in the status and Web Notifications left at Not
-    managed; `{"Features":{"DefaultBraveReferrersSetting":true}}` ticks
-    nothing and names the key. (d) Export with DNS `custom` and a template
-    whose host is not ASCII (`https://dns.exämple/dns-query`), then import
+    with Web Notifications left at Not managed and the key named in the
+    status, as `DefaultNotificationsSetting=3000000000` and `=3` after 'no
+    row sets that value' and bare after 'the value is not one this policy
+    accepts' for the other three;
+    `{"Features":{"DefaultBraveReferrersSetting":true}}` ticks nothing and
+    names `DefaultBraveReferrersSetting=true` after the latter. (d) Export
+    with DNS `custom` and a template whose host is not ASCII
+    (`https://dns.exämple/dns-query`), then import
     the file: the template comes back unchanged. (e) With no
     `HKCU\SOFTWARE\Policies\BraveSoftware\Brave` key, Apply: no 'Left alone'
     in the status. Write `BraveShieldsEnabledForUrls` by hand as subkey
@@ -1391,7 +1411,29 @@ Watch list, each with the trigger that turns it into work:
     'Not elevated' message and no second window. (k) For Tool fixes (5), not
     blocking: start it from a mapped drive (with and without
     `EnableLinkedConnections`) and from a `subst` drive, under same-account
-    and over-the-shoulder UAC, and record what each does.
+    and over-the-shoulder UAC, and record what each does. (l) For v2.4.2's
+    Import, whose `SlimBrave.ps1` half has never run:
+    `{"Features":{"MetricsReportingEnabled":false,"metricsreportingenabled":true}}`,
+    and the same pair inside an object nested under another field, fail
+    with 'Import failed - keys differ only in letter case' and the error's
+    text naming both keys, the staged rows unchanged (record the
+    `FullyQualifiedErrorId`; 'not a SlimBrave config' there means the catch
+    missed it); `{"features":{}}` fails with '... (found features; names are
+    case-sensitive)';
+    `{"Features":{"torDisabled":true,"ChromeVariations":0,"WebRtcIPHandling":"DISABLE_NON_PROXIED_UDP","ShoppingListEnabled":false,"DiskCacheSize":1},"dnsmode":"off","Version":2}`
+    ticks nothing, leaves DNS unmanaged, and the status (bar or tooltip)
+    names `torDisabled (use TorDisabled)`, `dnsmode (use DnsMode)`; then
+    `ChromeVariations=0`, `WebRtcIPHandling="DISABLE_NON_PROXIED_UDP"` after
+    'no row sets that value'; `ShoppingListEnabled` as no longer offered;
+    `DiskCacheSize` as not offered; and 'Ignored, because it is not a
+    SlimBrave Neo setting: Version.', in that order;
+    `{"Features":{"TorDisabled":true},"DnsMode":"\u001b[2J"}` ticks Disable
+    Tor and names `DnsMode="\u001B[2J"`; seven unknown keys list five, then
+    'and 2 more'; the six presets import with no note and stage what they
+    did before, and `e4c698b`'s Maximum Privacy, an upstream array export,
+    names seven retired keys (five, 'and 2 more') and
+    `DeveloperToolsDisabled`; a file of 10000 unknown keys imports without
+    hanging the window.
   - `BrowserSignin`, owed (v2.4.0 shipped without it): does any shipping
     build carry a Google
     OAuth client? On Brave Release for Windows, macOS and Linux, with no
@@ -1563,6 +1605,7 @@ with the reference that carries the detail. Newest first.
 
 | When | What | Reference |
 |---|---|---|
+| 2026-11-21 | Import names everything it leaves unmanaged, under one reason each, the reasons in the same words and order in all three scripts: a name in the wrong letter case (with the spelling to use), a value outside its policy's JSON type or an unknown `DnsMode`, a value of the right type no row sets (Web Notifications' 3, a list that is not SlimBrave's), a key SlimBrave Neo no longer offers (the retired table, which `slimbrave-linux.py` now carries as `RETIRED_KEYS`), any other key (a DNS key inside `Features` says where it belongs), and an unknown top-level field; the Origin count and the exclusion-group note follow as before. `BackgroundModeEnabled` and `DynamicCodeSettings` are skipped without a note where no row offers them (`PLATFORM_LIMITED_KEYS`). All three match key names, the three fields, string values and list entries in exact case (the `DnsMode` value still in any case), so `SlimBrave.ps1` no longer takes a `features`, a `dnsmode` or a mis-cased key, and all three refuse a file with two keys that differ only in letter case, which Windows PowerShell 5.1 cannot read. A name from the file is shown as written only when it looks like a policy name; other names and every string value are quoted, with `\uXXXX` for anything outside printable ASCII, cut at 64 characters, five per reason; the result names the file, not its path. The TUI status wraps to four lines, and `--import` exits 1 without writing when the file names entries and none can be applied. Passing unknown keys through (issue #33) declined, since Import runs elevated and takes only what a row writes; the README gains Your own policies alongside SlimBrave. The `SlimBrave.ps1` half has not run on Windows (Runtime checks owed, (l)) | v2.4.2, issue #33 |
 | 2026-11-14 | Cursory pass at Brave 1.99.57 (the first Release on Chromium 157.0.8103.79) and brave-variations `9654aa3`: policy YAMLs, pref mappings and factory dispatch unchanged for every written key. `StripImageMetadataV1` reached 100% of desktop Release through Griffin, so both `ChromeVariations` descriptions and the README name image metadata stripping among what they refuse. `TranslatorAPIAllowed` → ⚠️ no-op in Brave (1.99 turns the Translator API off itself). The News opt-in study (3% of new Windows installs; News description updated), the Windows 24H2 kill switch at 100% and moot on 157, the Local AI speech study on Beta (Local AI description updated), the ads OHTTP gate and the Focus Mode share recorded. `ChromeVariations` leaves Maximum Privacy, so no preset limits variations: the Griffin-only protections it refused (WebGL/WebGPU masking, image metadata stripping, clean-link copy) now outweigh keeping that preset's strict HTTPS locked on the HTTPS-First rollout | v2.4.1 |
 | 2026-10-31 | Missed-items audit at Brave 1.98.64 / Chromium 156.0.8078.80 / brave-variations `c73faf3`, every proposal argued red vs blue. Inert-key rule rewritten: `ShoppingListEnabled`, `AlternateErrorPagesEnabled` and `DNSInterceptionChecksEnabled` move to Considered and rejected and the PS1 and macOS retired tables; lock-only rows say what Brave already does; about 30 descriptions corrected and side effects named (printing, DevTools, default browser, Force Incognito, Shields cookies; Web Notifications drops Ask). `ChromeVariations` leaves Balanced Privacy and Developer (it refuses Griffin's WebGL/WebGPU masking) and stays in Maximum Privacy; `AlwaysOpenPdfExternally` leaves Maximum Privacy and `HardwareAccelerationModeEnabled` leaves Performance Focused. 17 rows over 16 new keys (clipboard, local network, XSLT, JavaScript optimizer, microphone, camera, app-launch prompt, site isolation, subdomain processes, dynamic code (PS1), command-line extensions, Google image descriptions, YouTube Restricted Mode, Safe Browsing lock, no click-through on Safe Browsing or certificate warnings, history deletion lock; `NetworkServiceSandboxEnabled` withdrawn before release when `brave://sandbox` on Windows showed the network service unsandboxed); 49 more Considered-and-rejected rows (66 keys plus the 20 `RemoteAccessHost*` keys); cloud-only keys screened out. Code: Export written as the invoking user, `--policy-file` limited to a `slimbrave*.json` or Brave channel plist in a policy directory, helpers by absolute path, macOS keeps other tools' plist keys, fsync and umask fixes, import type checks and one group-conflict rule, PS1 Apply reports failed writes; four more leftovers deleted on Windows and macOS. 76 → 89 rows, 72 → 84 keys (`SlimBrave.ps1` 90 over 85) | v2.4.0, PR #31 |
 | 2026-10-24 | Pass at the new pins (Brave 1.98.60, Chromium 156.0.8078.48), every row re-read. `SafeBrowsingExtendedReportingEnabled` removed (capped at cr144; handler and pref mapping deleted before 156) and `SafeSitesFilterBehavior` removed (blocks nothing in Brave, which ships no Google API key, yet sends every URL to Google): 78 → 76 rows, 74 → 72 keys; `SlimBrave.ps1` Apply and Reset now delete retired keys it wrote. `AutofillAddressEnabled` / `AutofillCreditCardEnabled` → ⚠️ deprecated, still applied (kept by the maintainer's decision while `AutofillSettings` is inert); `DefaultBraveHttpsUpgradeSetting` → ⚠️ (Griffin's `TransitionToUpstreamHttpsUpgrade` turns Brave's upgrader off on Beta, Nightly and part of Release; `ChromeVariations` keeps it); `DNSInterceptionChecksEnabled` → ⚠️ inert (Chromium skips the probes unless `IntranetRedirectBehavior` is 3). New watch items: Brave's HTTPS transition, Chromium's GPC, the News new-user opt-in, `AlternateErrorPagesEnabled` on 157, the sensors Ask model, the nixpkgs source build. Descriptions corrected for QUIC, Sync, Network Prediction, ChromeVariations, Talk, Browser Sign-in, Basic Auth, sideloaded extensions, Local AI, Default Browser, Rewards, Stats Ping and the two Autofill rows | v2.3.3, PR #30 (`b228a18`) |
