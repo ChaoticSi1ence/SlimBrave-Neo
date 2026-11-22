@@ -380,7 +380,7 @@ Pin Brave's own protection defaults as managed policy so they can't be weakened 
 - `unmanaged` by default — no DNS policy is written, so Brave's own DNS settings stay user-controlled
 - Four managed modes: `automatic`, `off`, `secure`, `custom` (`off` force-disables DoH as policy)
 - Custom DoH template URL support (e.g. `https://cloudflare-dns.com/dns-query`)
-- Inline editable template field in the TUI
+- Inline editable template field in the TUI; it shows a control character or a text-direction control in the template as `?`, and Import refuses a template that holds a control character or a text-direction control
 - `secure` and `custom` **require** a template URL and are refused without one. Chromium would otherwise apply the mode with an empty resolver list and resolve nothing at all — and being machine-managed policy, you couldn't fix it from `brave://settings`. `automatic` is exempt: an empty template there is valid. The three scripts differ on a template with `automatic`: the Windows GUI writes and exports a template only with `secure` or `custom`, while the Linux and macOS scripts — whose template field is greyed out in `automatic` too — still write and export one that arrives with `automatic` from an imported file or `--doh-templates`, and Brave uses it.
 - Brave VPN on Windows: when it connects over IKEv2 while its DNS helper service is not running, Brave normally forces secure DNS to Cloudflare so lookups can't leak past the tunnel. A managed `automatic` or `off` stops that, and Brave shows a policy warning instead; the Balanced Privacy, Performance Focused and Developer presets set `automatic`. `unmanaged` keeps the protection, and `secure` and `custom` already send every lookup over DoH.
 
@@ -420,10 +420,17 @@ Import/export uses the same JSON format as the Windows PowerShell version. Confi
 
 `--import` prints the import result on stdout, then applies it. It exits:
 - `0` when it wrote the policy, even if the result names keys it left unmanaged.
-- `1` when the import wrote nothing: the file was refused (missing, unreadable, over 1 MiB, not JSON, two keys that differ only in letter case, not a SlimBrave Neo config, a `DnsTemplates` that is not text); `--doh-templates` contradicts the file's `DnsMode` `off`; the policy could not be written (a write error, or `secure` or `custom` DNS with no template); or the file names entries but SlimBrave Neo can take none of them and it sets no DNS mode. That last case prints `Error: nothing in <file> can be applied` on stderr and leaves the policy as it was, so a file of policies SlimBrave Neo doesn't offer never replaces yours with an empty one. `{"Features":{}}` still applies an empty policy, on purpose. Not running as root also exits `1`.
+- `1` when it wrote nothing:
+  - the file was refused. `Error:` and the reason go to stderr; *What Import takes, and what it names* lists every refusal: a file that is missing, unreadable, over 1 MiB, not JSON, nested too deep or not a SlimBrave Neo config, or one with an empty key, two keys that differ only in letter case, or a `DnsTemplates` that is not text or holds a control character.
+  - `--doh-templates` contradicts the file's `DnsMode` `off`.
+  - the policy could not be written: a write error, or `secure` or `custom` DNS with no template.
+  - the file names entries but SlimBrave Neo can take none of them, and it sets no DNS mode. The import result goes to stdout as usual, then `Error: nothing in <path> can be applied; --import wrote nothing.` to stderr, with the path as you gave it. So a file of policies SlimBrave Neo doesn't offer never replaces SlimBrave's policy with an empty one. A file holding only keys Import skips without a note on that platform, such as a Windows export with nothing but `DynamicCodeSettings`, ends this way too, after a result that names nothing. `{"Features":{}}` still applies an empty policy, on purpose.
+  - it is not running as root.
 - `2` for a command line it cannot run: a bad or conflicting flag, a refused `--policy-file`, or `--channels` naming no installed channel.
 
-With `--reset`, the reset runs first, whatever the import then does.
+With `--reset`, the reset runs first, whatever the import then does: if the import then writes nothing, no SlimBrave policy is left.
+
+</details>
 
 ---
 
@@ -533,8 +540,6 @@ Applies the policy half of what [Brave Origin](https://brave.com/origin/) upgrad
 
 </details>
 
-</details>
-
 ## How It Works
 
 <details>
@@ -554,6 +559,8 @@ SlimBrave Neo writes Chromium [managed enterprise policies](https://chromeenterp
 - Reads existing policies on startup and pre-checks matching features; on macOS, the Apply-time channel prompt pre-ticks channels that already have a SlimBrave-managed policy (sticky default)
 - Apply rewrites every key SlimBrave Neo manages, so unchecked features are cleanly removed. On Linux the policy file is SlimBrave Neo's own. On macOS each channel's plist is shared, so keys SlimBrave Neo does not manage stay, and Reset deletes the plist only when nothing else is left in it. To keep policies of your own next to SlimBrave's, see *Your own policies alongside SlimBrave* below.
 - Import/export compatible with the Windows PowerShell version: all three scripts now export UTF-8 without a BOM, and all three still read the UTF-16 files older PowerShell exports produced. Import takes only what a row writes and names everything else; see *What Import takes, and what it names* below
+
+</details>
 
 ---
 
@@ -597,36 +604,52 @@ Set-ExecutionPolicy -ExecutionPolicy Undefined   -Scope CurrentUser   # undo
 
 </details>
 
-</details>
-
 <details>
 <summary><strong>What Import takes, and what it names</strong></summary>
 
 Import fills in the rows from a config file; nothing is written until you Apply (the CLI's `--import` applies straight after). It takes a key only where one of SlimBrave Neo's rows writes that key, and only with a value that row writes. Nothing else in the file ever becomes policy, so a config someone sends you can set nothing the interface couldn't. To set other policies yourself, see *Your own policies alongside SlimBrave* below.
 
-Names count only in their exact letter case, in all three scripts: the top-level `Features`, `DnsMode` and `DnsTemplates`, every key inside `Features`, string values such as `disable_non_proxied_udp`, and list entries such as `https://*`. The one exception is the `DnsMode` value, SlimBrave's own word, which reads in any case. A file with two keys that differ only in letter case, such as `TorDisabled` and `tordisabled`, is refused whole, because Windows PowerShell 5.1 can't read one. A `features` block in the wrong case is refused too, with a message that names what it found and says names are case-sensitive.
+Names count only in their exact letter case, in all three scripts: the top-level `Features`, `DnsMode` and `DnsTemplates`, every key inside `Features`, string values such as `disable_non_proxied_udp`, and list entries such as `https://*`. They are compared character by character, so a name or value with an invisible character in it, such as a soft hyphen, doesn't match either. The one exception is the `DnsMode` value, SlimBrave's own word, which reads in any letter case (`Secure`, `OFF`).
 
-Anything else the file holds is left unmanaged and named in the result, under one of these reasons, in this order:
+**What it names.** Anything else the file holds is left unmanaged and named in the result, under one of these reasons, in this order:
 
 | The result says | For |
 |---|---|
-| left unmanaged because names are case-sensitive | a key or field in the wrong letter case, with the spelling to use: `torDisabled (use TorDisabled)` |
-| left unmanaged because the value is not one this policy accepts | a value of the wrong JSON type, such as `"1"` or `true` for a number or a string for an on/off policy, and a `DnsMode` it doesn't know |
-| left unmanaged because no row sets that value | the right type, but no row writes it: Web Notifications' `3` (Ask), `IncognitoModeAvailability` `0`, the opposite on/off value, a list that isn't exactly SlimBrave's, a string or list entry in another letter case |
+| left unmanaged because names are case-sensitive | a key or field in the wrong letter case, with the spelling to use: `torDisabled (use TorDisabled)`. Only a name in plain ASCII is given a spelling; any other is named under one of the reasons below |
+| left unmanaged because the value is not one this policy accepts | a value of the wrong JSON type: `"1"`, `true`, `2.0` or a whole number past 64 bits for a number, a string for an on/off policy, a lone string for a list. Also a `DnsMode` that names no mode: an unknown word, `false`, `0`, a list or an object |
+| left unmanaged because no row sets that value | the right type, but no row writes it: Web Notifications' `3` (Ask), `IncognitoModeAvailability` `0`, the opposite on/off value, a list that doesn't hold exactly SlimBrave's entries (in any order), a string or list entry in another letter case |
 | left unmanaged because SlimBrave Neo no longer offers it | a key an earlier version wrote, such as `ShoppingListEnabled` |
-| left unmanaged because SlimBrave Neo does not offer it | any other key, such as `DiskCacheSize`; a DNS policy inside `Features` says where it belongs: `DnsOverHttpsMode (use DnsMode)` |
+| left unmanaged because SlimBrave Neo does not offer it | any other key, such as `DiskCacheSize`; a DNS policy inside `Features` says where it belongs: `DnsOverHttpsMode (use DnsMode)`. In an old array-format file, an entry that isn't a name is shown as its value (`5`, `null`, `true`); a fraction, a list or an object there has no shown form and is left out of the result |
 | ignored because it is not a SlimBrave Neo setting | a top-level field other than those three |
 
-The Brave Origin count (on a Linux machine whose only Brave is Origin) and the losing row of a mutually exclusive pair the file names both of follow, as before. Two keys are skipped without a note, because Chromium has no such policy there: `BackgroundModeEnabled` on macOS, and `DynamicCodeSettings` on Linux and macOS. That keeps the presets free of notes on every platform.
+The Brave Origin count (on a Linux machine whose only Brave is Origin) and the losing row of a mutually exclusive pair the file names both of follow, as before. Two keys are skipped without a note, whatever their value, because Chromium has no such policy there: `BackgroundModeEnabled` on macOS, and `DynamicCodeSettings` on Linux and macOS. That keeps the presets free of notes on every platform.
 
-The result starts `Imported from <file name>`. A name from the file appears as written when it looks like a policy name (letters, digits, `_`, `.` and `-`, at most 64 of them); any other name, and every string value, appears in quotes, with anything outside printable ASCII written as `\uXXXX`, cut at 64 characters. Each reason lists up to five names, then how many more. The Windows status bar words the same reasons as sentences (`Left unmanaged, because ...`) and grows to four lines; past that it ends in an ellipsis and its tooltip holds the whole text. The TUI wraps the result to up to four lines under the buttons (fewer on a very short terminal), the last ending in `...` when there is more, and the list gives up rows while it shows.
+The result starts `Imported from <file name>`. Within each reason the entries of `Features` come first, in file order, then `DnsMode`, then the other top-level fields in file order; the mutually exclusive keys are listed sorted. Each reason lists up to five, then how many more (`and 2 more`). A name from the file appears as written when it looks like a policy name (letters, digits, `_`, `.` and `-`, at most 64 of them). Any other name, and every string value, appears in quotes, with `"` and `\` escaped, anything outside printable ASCII written as `\uXXXX`, and anything past 64 characters cut short with `...`. A value follows its key (`DefaultNotificationsSetting=3`, `MetricsReportingEnabled=true`) unless it is a fraction, a number past 64 bits, a list or an object; then the key stands alone. The file's own name shows as it is, a Cyrillic, CJK or emoji name included, except that a control, text-direction or zero-width character in it (or, on Linux, a byte that isn't valid text) is written as `\uXXXX`; on a terminal whose encoding can't show a character, the CLI writes that one as `\uXXXX` too. The Windows status bar ends `Imported from <file name>.` with a full stop when reasons follow, and words them as sentences (`Left unmanaged, because ...`) and grows to four lines; past that it ends in an ellipsis and its tooltip holds the whole text. The TUI wraps the result to up to four lines under the buttons (fewer on a very short terminal), the last ending in `...` when there is more, and the list gives up rows while it shows.
+
+**What it refuses.** A refused file changes nothing: the rows and the DNS mode stay as they were, and `--import` writes nothing. The Linux and macOS scripts give the reason as below (the CLI after `Error: `), the Windows GUI after `Import failed - `:
+
+| The file | Linux and macOS | Windows |
+|---|---|---|
+| can't be found, can't be read, or is over 1 MiB | `File not found: <path>`, `Read error: <reason>` (`Read error: file is larger than 1 MiB`) | `not a SlimBrave config`; Windows reads a file of any size |
+| isn't JSON | `Invalid JSON: <reason>` | `not a SlimBrave config` |
+| nests deeper than the JSON reader goes | `Invalid JSON: <reason>`; how deep Python reads depends on its version and stack, far past anything a config needs. Should a value nest past the stack after reading, `Invalid config: nesting too deep` | `not a SlimBrave config`; Windows PowerShell 5.1 stops at about 100 levels |
+| isn't a JSON object | `Invalid config: expected a JSON object, got <type>` | `not a SlimBrave config` |
+| has no `Features` object or array | `Invalid config: no Features block (not a SlimBrave Neo config)` | `not a SlimBrave config` |
+| has `features`, or another spelling of it, instead of `Features` | the same, then `(found features; names are case-sensitive)` | the same |
+| has an empty key `""`, anywhere | `Invalid config: a key is empty` | `a key is empty` |
+| has two keys in one object that differ only in letter case, anywhere: `TorDisabled` and `tordisabled`, or `É` and `é` | `Invalid config: keys differ only in letter case: TorDisabled, tordisabled` | `keys differ only in letter case:` and then Windows' own message, which names both keys |
+| has a `DnsTemplates` that isn't text: `false`, `0`, `{}`, or a list holding anything but strings | `Invalid config: DnsTemplates must be a string` | `DnsTemplates must be a string` |
+| has a `DnsTemplates` with a control character: a line break or tab, DEL, a C1 control, U+2028 or U+2029, or a text-direction control (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069) | `Invalid config: DnsTemplates contains a control character` | `DnsTemplates contains a control character` |
+| has a number past what a double holds (about 1.8e308), such as `1e400` or a 400-digit integer | `Invalid JSON: a number is out of range` | `not a SlimBrave config`; Windows PowerShell 5.1 can't read the number |
+
+A missing, `null` or empty `DnsTemplates` is no template, and a list of strings is joined with spaces. A key written twice in the same letter case is not refused; its last value counts. The empty key and the case twins are refused because Windows PowerShell 5.1 can't read such a file, so the other two scripts don't take it either. The Windows wording comes from `SlimBrave.ps1`'s code and the depth at which 5.1 stops from PowerShell's source; neither has been checked on Windows yet ([AUDIT.md](AUDIT.md), Runtime checks owed).
 
 </details>
 
 <details>
 <summary><strong>Your own policies alongside SlimBrave</strong></summary>
 
-SlimBrave Neo sets only the policies it has a row for, and Chromium has many more. You can set any of them yourself, next to SlimBrave's, as long as you put them where SlimBrave doesn't write. Import won't carry them for you: SlimBrave runs as root or Administrator, and a config file someone sends you shouldn't be able to set machine policy you never saw a row for. Instead, Import names each key it has no row for (see *What Import takes, and what it names* above), so you can see what a config carried that SlimBrave left alone.
+SlimBrave Neo sets only the policies it has a row for, and Chromium has many more. You can set any of them yourself, next to SlimBrave's, as long as you put them where SlimBrave doesn't write. Import won't carry them for you: SlimBrave runs as root or Administrator, and a config file someone sends you shouldn't be able to set machine policy you never saw a row for. Instead, Import names each key it has no row for, apart from the two Chromium lacks on some platforms (see *What Import takes, and what it names* above), so you can see what a config carried that SlimBrave left alone. A file holding only keys SlimBrave has no row for leaves every row unticked, and `--import` of one writes nothing and exits 1 rather than replace SlimBrave's policy with an empty one.
 
 **The one rule.** A key SlimBrave has a row for belongs to SlimBrave, and so do `DnsOverHttpsMode` and `DnsOverHttpsTemplates` (the DNS section). Set those in SlimBrave. If you set one somewhere else, then on Windows and macOS Apply overwrites it while its row is on and removes it while the row is off, and Reset removes it. On Linux, while the row is on, both files set it and the file order below decides. To check a key, type it into the Windows search box (it matches policy keys), or run `grep -c '"key": "DiskCacheSize"' slimbrave-linux.py` (`slimbrave-mac.py` on a Mac): `0` means no row.
 

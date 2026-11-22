@@ -25,6 +25,7 @@ import argparse
 import curses
 import json
 import locale
+import math
 import os
 import shutil
 import socket
@@ -32,6 +33,7 @@ import stat
 import subprocess
 import sys
 import textwrap
+import unicodedata
 import tempfile
 
 POLICY_DIR = "/etc/brave/policies/managed"
@@ -1019,8 +1021,21 @@ def _fold_case(key):
     OrdinalIgnoreCase, by which Windows PowerShell 5.1 compares the names of
     a JSON object one UTF-16 unit at a time: U+00C9 and U+00E9 are one name
     there and here, and a letter beyond U+FFFF folds in neither."""
-    return "".join(c.upper() if ord(c) <= 0xFFFF and len(c.upper()) == 1 else c
-                   for c in key)
+    return "".join(_fold_char(c) for c in key)
+
+
+def _fold_char(c):
+    """One character of _fold_case: its simple upper case. str.upper() is
+    the full mapping, two characters for the 27 Greek letters with
+    ypogegrammeni (U+1F80), whose simple upper case is the one-character
+    title case .NET folds them to (U+1F88), so that is taken instead."""
+    if ord(c) > 0xFFFF:
+        return c
+    up = c.upper()
+    if len(up) == 1:
+        return up
+    title = c.title()
+    return title if len(title) == 1 else c
 
 
 class _KeysDifferInCase(ValueError):
@@ -1060,6 +1075,28 @@ def _refuse_unreadable_keys(pairs):
     return dict(pairs)
 
 
+def _json_int(text):
+    """read_json_file's parse_int: an integer within 64 bits as an int, a
+    larger one as a float (_json_float), as Windows PowerShell 5.1 reads it
+    as a [decimal] or a [double], neither of which _is_json_int takes.
+    float() reads any length in linear time, so a million digits cannot
+    stall a Python without the 4300-digit limit (3.9.6, macOS's own)."""
+    if len(text) <= 20:
+        value = int(text)
+        if -2 ** 63 <= value < 2 ** 63:
+            return value
+    return _json_float(text)
+
+
+def _json_float(text):
+    """read_json_file's parse_float: a number past the double range is
+    refused (ValueError), as Windows PowerShell 5.1's reader refuses it."""
+    value = float(text)
+    if math.isinf(value):
+        raise ValueError("a number is out of range")
+    return value
+
+
 def read_json_file(path):
     """Read a JSON file, handling BOM and encoding from PS1 exports.
 
@@ -1088,7 +1125,8 @@ def read_json_file(path):
 
     # Strip null bytes (UTF-16 artifacts in malformed files)
     text = text.replace("\x00", "")
-    return json.loads(text, object_pairs_hook=_refuse_unreadable_keys)
+    return json.loads(text, object_pairs_hook=_refuse_unreadable_keys,
+                      parse_int=_json_int, parse_float=_json_float)
 
 # ---------------------------------------------------------------------------
 # Profile-prefs repair
@@ -1875,12 +1913,14 @@ _PLAIN_NAME_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ"
                               "abcdefghijklmnopqrstuvwxyz0123456789_.-")
 
 # What a DoH template from a file may not hold: the C0 and C1 controls,
-# DEL, and the line and paragraph separators. Import refuses a template
-# with one rather than strip it, and the template field draws one as '?'
-# (_field_text), as it does a bidi control, which would reorder the row.
+# DEL, the line and paragraph separators, and the twelve bidi controls
+# (Unicode's Bidi_Control), which would reorder the row here and the text
+# box on Windows. Import refuses a template with one rather than strip it,
+# and the template field draws one as '?' (_field_text).
 _CONTROL_CHARS = frozenset(chr(c) for c in (*range(0x20), *range(0x7F, 0xA0),
                                             0x2028, 0x2029))
-_BIDI_CONTROLS = frozenset(chr(c) for c in (*range(0x202A, 0x202F),
+_BIDI_CONTROLS = frozenset(chr(c) for c in (0x061C, 0x200E, 0x200F,
+                                            *range(0x202A, 0x202F),
                                             *range(0x2066, 0x206A)))
 
 
@@ -1896,12 +1936,46 @@ def _escaped(ch):
     return "\\u%04X" % code
 
 
+# Besides _CONTROL_CHARS and _BIDI_CONTROLS, the zero-width format
+# characters, which hide text, are kept out of a file name Import echoes; so
+# is a lone surrogate (an undecodable byte of a Linux file name). Any other
+# character, a Cyrillic, CJK or emoji name's included, is shown as it is.
+_NAME_FORMAT_CHARS = frozenset("\u200b\u200c\u200d\u2060\ufeff")
+
+
 def _shown_path(path):
-    """A file name or path as Import echoes it: each character outside
-    printable ASCII as _escaped writes it, with no quotes and no cut. So
-    print() cannot fail on an ASCII stdout, and no control character
-    reaches the terminal or the TUI's status line."""
-    return "".join(_escaped(ch) for ch in path)
+    """A file name or path as Import echoes it: a control, bidi or zero-width
+    character, or a lone surrogate, as _escaped writes it, with no quotes and
+    no cut; any other character as it is, as SlimBrave.ps1 shows it. The CLI
+    writes it through _say, so a terminal that cannot show a character still
+    cannot make print() fail."""
+    return "".join(
+        _escaped(ch) if (ch in _CONTROL_CHARS or ch in _BIDI_CONTROLS
+                         or ch in _NAME_FORMAT_CHARS or "\ud800" <= ch <= "\udfff")
+        else ch
+        for ch in path)
+
+
+def _say(text, stream=None):
+    """print() for the CLI that cannot fail on a terminal whose encoding
+    lacks a character of `text` (an ASCII or Latin-1 locale): such a
+    character is written as _escaped writes it."""
+    stream = sys.stdout if stream is None else stream
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    try:
+        text.encode(encoding)
+    except UnicodeEncodeError:
+        shown = []
+        for ch in text:
+            try:
+                ch.encode(encoding)
+                shown.append(ch)
+            except UnicodeEncodeError:
+                shown.append(_escaped(ch))
+        text = "".join(shown)
+    except LookupError:
+        pass
+    print(text, file=stream)
 
 
 def _quoted(text):
@@ -2076,7 +2150,8 @@ def _take_config(rows, config, path):
         return False, "Invalid config: DnsTemplates must be a string", None
     # A control character makes a template corrupt, not one to clean up:
     # stripping it would write a resolver the file never named.
-    if not _CONTROL_CHARS.isdisjoint(dns_template):
+    if not (_CONTROL_CHARS.isdisjoint(dns_template)
+            and _BIDI_CONTROLS.isdisjoint(dns_template)):
         return False, "Invalid config: DnsTemplates contains a control character", None
     # No DnsMode in the file (none, null or "") means DNS is unmanaged (a
     # bare DnsTemplates is treated as custom for legacy exports). The mode
@@ -2438,11 +2513,17 @@ def template_field_width(max_x):
 
 
 def _field_text(text):
-    """`text` as the DoH template field draws it: a control character
-    (_CONTROL_CHARS) or a bidi control as '?', one cell each, so a template
-    read from a file can neither move the cursor nor reorder the row; any
-    other character, an IDN host's included, as it is."""
-    return "".join("?" if c in _CONTROL_CHARS or c in _BIDI_CONTROLS else c
+    """`text` as the DoH template field draws it, one cell per character:
+    a control character (_CONTROL_CHARS), a bidi control, any other format
+    or combining character, a lone surrogate or an unassigned one, and a
+    wide character as '?', so a template read from the policy or a file can
+    neither move the cursor, reorder the row nor run past its field (a wide
+    character takes two cells, a combining one none, and the field counts
+    characters); any other character, an IDN host's included, as it is."""
+    return "".join("?" if (c in _CONTROL_CHARS or c in _BIDI_CONTROLS
+                           or unicodedata.category(c) in ("Cf", "Mn", "Me", "Cs", "Cn")
+                           or unicodedata.east_asian_width(c) in ("W", "F"))
+                   else c
                    for c in text)
 
 
@@ -3426,16 +3507,16 @@ def cli_import(path, installations, doh_templates=""):
     rows = build_rows(installations)
     ok, msg, outcome = _import_config(rows, path)
     if not ok:
-        print(f"Error: {msg}", file=sys.stderr)
+        _say(f"Error: {msg}", sys.stderr)
         return 1
-    print(msg)
+    _say(msg)
     # A Features block that names entries but has none taken, with no DNS
     # mode either, would apply an empty policy and so remove SlimBrave's:
     # a file of policies SlimBrave Neo does not offer writes nothing. An
     # empty block still applies an empty policy, as it always has.
     if outcome["entries"] and not outcome["taken"] and not outcome["dns"]:
-        print(f"Error: nothing in {_shown_path(path)} can be applied; "
-              "--import wrote nothing.", file=sys.stderr)
+        _say(f"Error: nothing in {_shown_path(path)} can be applied; "
+             "--import wrote nothing.", sys.stderr)
         return 1
 
     # A template is inert unless the mode asks for one, and most presets
@@ -3445,10 +3526,10 @@ def cli_import(path, installations, doh_templates=""):
     if doh_templates:
         dns_mode = get_dns_mode(rows)
         if dns_mode == "off":
-            print(
+            _say(
                 "Error: --doh-templates conflicts with DnsMode 'off' in "
                 f"{_shown_path(path)}. Remove one of them.",
-                file=sys.stderr,
+                sys.stderr,
             )
             return 1
         for row in rows:
@@ -3461,9 +3542,9 @@ def cli_import(path, installations, doh_templates=""):
 
     ok, msg = apply_policy(rows, installations)
     if not ok:
-        print(f"Error: {msg}", file=sys.stderr)
+        _say(f"Error: {msg}", sys.stderr)
         return 1
-    print(msg)
+    _say(msg)
     return 0
 
 

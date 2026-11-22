@@ -120,6 +120,22 @@ def _esc(text):
     return "".join(out)
 
 
+# What a file name echoed by Import keeps out of the message: the control
+# and bidi characters a template may not hold and the zero-width format
+# characters (any lone surrogate too).
+NAME_UNSAFE = {*range(0x20), *range(0x7F, 0xA0), 0x2028, 0x2029, 0x061C, 0x200E, 0x200F,
+               *range(0x202A, 0x202F), *range(0x2066, 0x206A), 0x200B, 0x200C, 0x200D,
+               0x2060, 0xFEFF}
+
+
+def _esc_name(text):
+    """How Import echoes a file name or path, written out again here: an
+    unsafe character (NAME_UNSAFE, or a lone surrogate) as \\uXXXX in
+    uppercase hex, any other character as it is."""
+    return "".join("\\u%04X" % ord(ch) if ord(ch) in NAME_UNSAFE or 0xD800 <= ord(ch) <= 0xDFFF
+                   else ch for ch in text)
+
+
 # A file name holding what Import has to escape when it echoes one: a
 # non-ASCII letter and a bidi override, and where file names may hold them
 # (not on Windows) an ESC and a newline.
@@ -159,13 +175,14 @@ def test_the_known_names_and_the_reasons_are_the_specified_ones(mod):
     assert [verb for _, verb, _ in mod.IMPORT_NOTES] == ["left unmanaged"] * 5 + ["ignored"]
     assert mod.EXCLUSIVE_REASON == "it is mutually exclusive with another imported row"
     assert (mod.SHOWN_MAX, mod.MAX_SHOWN_ITEMS, mod.STATUS_MAX_LINES) == (64, 5, 4)
-    # What a template may not hold (C0, DEL and C1, the line and paragraph
-    # separators), and the bidi controls the template field masks too.
+    # What a template may not hold: C0, DEL and C1, the line and paragraph
+    # separators, and the twelve bidi controls (Unicode's Bidi_Control),
+    # which the template field also masks.
     assert mod._CONTROL_CHARS == frozenset(
         chr(c) for c in list(range(0x00, 0x20)) + list(range(0x7F, 0xA0)) + [0x2028, 0x2029])
     assert mod._BIDI_CONTROLS == frozenset(
-        chr(c) for c in list(range(0x202A, 0x202F)) + list(range(0x2066, 0x206A)))
-    assert len(mod._CONTROL_CHARS) == 67 and len(mod._BIDI_CONTROLS) == 9
+        chr(c) for c in [0x061C, 0x200E, 0x200F] + list(range(0x202A, 0x202F)) + list(range(0x2066, 0x206A)))
+    assert len(mod._CONTROL_CHARS) == 67 and len(mod._BIDI_CONTROLS) == 12
 
 
 def _ps1_retired_names():
@@ -356,12 +373,16 @@ def test_the_lead_names_the_file_not_its_path(mod, tmp_path):
     assert ok and msg == "Imported from My Preset.json"
 
 
-def test_a_path_is_echoed_in_printable_ascii_without_quotes(mod):
+def test_a_path_is_echoed_with_only_unsafe_characters_escaped(mod):
     assert mod._shown_path("My Preset.json") == "My Preset.json"
     assert mod._shown_path('/tmp/a "b" \\c.json') == '/tmp/a "b" \\c.json'
-    name = "caf\u00e9\n\x1b[2J\u202e\U0001F600\udcff.json"
+    name = "caf\u00e9\n\x1b[2J\u202e\U0001F600\u200b\udcff.json"
     assert mod._shown_path(name) == (
-        "caf\\u00E9\\u000A\\u001B[2J\\u202E\\uD83D\\uDE00\\uDCFF.json") == _esc(name)
+        "caf\u00e9\\u000A\\u001B[2J\\u202E\U0001F600\\u200B\\uDCFF.json") == _esc_name(name)
+    # A Cyrillic or CJK name reads as it is.
+    assert mod._shown_path("\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438.json") == (
+        "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438.json")
+    assert mod._shown_path("\u8a2d\u5b9a.json") == "\u8a2d\u5b9a.json"
     assert mod._shown_path("y" * 300) == "y" * 300    # no cut
 
 
@@ -370,18 +391,18 @@ def test_import_echoes_the_file_name_and_path_escaped(mod, tmp_path):
     a bidi control in a name never reaches the status line or the terminal."""
     path = _write_named(tmp_path, {"Features": {"BraveRewardsDisabled": True}}, ODD_NAME)
     assert mod.import_settings(mod.build_rows(), str(path)) == (
-        True, "Imported from " + _esc(ODD_NAME))
-    assert _esc(ODD_NAME).startswith("caf\\u00E9 \\u202E")
+        True, "Imported from " + _esc_name(ODD_NAME))
+    assert _esc_name(ODD_NAME).startswith("caf\u00e9 \\u202E")   # the letter as it is
     missing = tmp_path / ("gone " + ODD_NAME)
     assert mod.import_settings(mod.build_rows(), str(missing)) == (
-        False, "File not found: " + _esc(str(missing)))
+        False, "File not found: " + _esc_name(str(missing)))
     folder = tmp_path / ("dir " + ODD_NAME)
     folder.mkdir()
     # The OSError's own text, its repr() of the path included, escaped.
     ok, msg = mod.import_settings(mod.build_rows(), str(folder))
     assert ok is False and msg.startswith("Read error: "), msg
-    assert all(" " <= c <= "~" for c in msg), repr(msg)
-    assert "dir caf\\u00E9 " in msg
+    assert not any(ord(c) in NAME_UNSAFE or 0xD800 <= ord(c) <= 0xDFFF for c in msg), repr(msg)
+    assert "dir caf\u00e9 " in msg
 
 
 @pytest.mark.parametrize("config,items", [
@@ -1056,14 +1077,14 @@ def test_cli_import_names_the_path_escaped_when_it_writes_nothing(mod, tmp_path,
     path = _write_named(tmp_path, {"Features": {"HomepageLocation": "x"}}, ODD_NAME)
     assert mod.cli_import(str(path), None) == 1
     out, err = capsys.readouterr()
-    assert out.startswith(f"Imported from {_esc(ODD_NAME)}; ")
-    assert err == f"Error: nothing in {_esc(str(path))} can be applied; --import wrote nothing.\n"
+    assert out.startswith(f"Imported from {_esc_name(ODD_NAME)}; ")
+    assert err == f"Error: nothing in {_esc_name(str(path))} can be applied; --import wrote nothing.\n"
     # The --doh-templates conflict names the file the same way.
     path = _write_named(tmp_path, {"Features": {}, "DnsMode": "off"}, "off " + ODD_NAME)
     assert mod.cli_import(str(path), None, doh_templates="https://dns.example/dns-query") == 1
     err = capsys.readouterr().err
     assert err == ("Error: --doh-templates conflicts with DnsMode 'off' in "
-                   f"{_esc(str(path))}. Remove one of them.\n")
+                   f"{_esc_name(str(path))}. Remove one of them.\n")
     assert applied == []
 
 
@@ -1449,3 +1470,66 @@ def test_the_template_field_draws_control_and_bidi_characters_as_question_marks(
     assert not any(c in HIDDEN for row in frame for c in row)
     start = line.index("Template: [") + len("Template: [")
     assert line[start + tmpl.index("\n")] == "?"
+
+
+# ---------------------------------------------------------------------------
+# Final review fixes: number range, Greek case pairs, bidi controls in a
+# template, and what the template field draws
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    '{"Features": {"MetricsReportingEnabled": 1e400}}',
+    '{"Features": {"MetricsReportingEnabled": -1e400}}',
+    '{"Features": {"ChromeVariations": 1' + "0" * 400 + '}}',
+    '{"Features": {}, "DnsMode": 1' + "0" * 400 + '}',
+    '{"Features": ["BraveRewardsDisabled", 1' + "0" * 400 + ']}',
+], ids=["float-overflow", "negative-overflow", "long-integer", "dns-mode", "legacy-entry"])
+def test_a_number_past_the_double_range_refuses_the_file(mod, tmp_path, text):
+    """Windows PowerShell 5.1's reader cannot read such a number, so no
+    script imports the file; reading it as a float also keeps a huge digit
+    string linear on a Python without the 4300-digit limit."""
+    rows = _preticked(mod)
+    ok, msg = mod.import_settings(rows, str(_write(tmp_path, text)))
+    assert (ok, msg) == (False, "Invalid JSON: a number is out of range")
+    assert _untouched(mod, rows)
+
+
+def test_an_integer_past_64_bits_but_within_a_double_is_not_an_integer(mod, tmp_path):
+    _, policy, tail = _import(mod, tmp_path, '{"Features": {"ChromeVariations": 18446744073709551616}}')
+    assert policy == {}
+    assert tail == "; left unmanaged because the value is not one this policy accepts: ChromeVariations"
+
+
+@pytest.mark.parametrize("pair", [("\\u1f80", "\\u1f88"), ("\\u1fb3", "\\u1fbc"), ("\\u1ff3", "\\u1ffc")],
+                         ids=["1F80", "1FB3", "1FF3"])
+def test_a_greek_letter_with_ypogegrammeni_folds_as_on_windows(mod, tmp_path, pair):
+    """.NET folds U+1F80 to U+1F88 (one character, its simple upper case),
+    where str.upper() gives two, so such a pair is one name on Windows and
+    is refused here too."""
+    rows = _preticked(mod)
+    text = '{"Features": {"%s": 1, "%s": 2}}' % pair
+    ok, msg = mod.import_settings(rows, str(_write(tmp_path, text)))
+    assert ok is False and msg.startswith("Invalid config: keys differ only in letter case")
+    assert _untouched(mod, rows)
+
+
+@pytest.mark.parametrize("ch", ["؜", "‎", "‏", "‮", "⁦", "⁩"],
+                         ids=["ALM", "LRM", "RLM", "RLO", "LRI", "PDI"])
+def test_a_bidi_control_in_a_template_refuses_the_file(mod, tmp_path, ch):
+    rows = _preticked(mod)
+    text = json.dumps({"Features": {}, "DnsMode": "custom", "DnsTemplates": "https://dns.example/" + ch + "dns-query"})
+    ok, msg = mod.import_settings(rows, str(_write(tmp_path, text)))
+    assert (ok, msg) == (False, "Invalid config: DnsTemplates contains a control character")
+    assert _untouched(mod, rows)
+
+
+@pytest.mark.parametrize("text,shown", [
+    ("https://dns.exämple/dns-query", "https://dns.exämple/dns-query"),  # narrow, kept
+    ("https://ｄｎｓ/x", "https://???/x"),                              # fullwidth: two cells each
+    ("https://例え/x", "https://??/x"),                                     # CJK: wide
+    ("https://áb/x", "https://a?b/x"),                                        # combining mark: no cell
+    ("https://a​b/x", "https://a?b/x"),                                        # zero-width space: format
+    ("https://a‎b/x", "https://a?b/x"),                                        # bidi control
+])
+def test_the_template_field_draws_one_cell_per_character(mod, text, shown):
+    assert mod._field_text(text) == shown

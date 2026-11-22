@@ -749,12 +749,13 @@ Origin-specific code.
   for Variations, Incognito, the Safe Browsing level, Browser sign-in,
   Developer Tools, Network Prediction, the JavaScript optimizer, YouTube
   Restricted Mode, the five `DefaultBrave*` settings and, in `SlimBrave.ps1`
-  only, dynamic code) only a JSON integer, so a quoted `"1"`, a `true`, `2.0`
-  or `2e0` is refused and named; a boolean policy `true`/`false` or `0`/`1`
-  (Windows exports write 0/1); a list policy an array; a string policy a
-  string. A managed
-  `Default*Setting` is a Wildcard/Wildcard rule in `PolicyProvider`
-  (156.0.8078.80
+  only, dynamic code) only a JSON integer within 64 bits (Windows PowerShell
+  5.1 reads a larger one as a `[decimal]` or `[double]`), so a quoted `"1"`,
+  a `true`, `2.0`, `2e0` or `9223372036854775808` is refused and named; a
+  boolean policy `true`/`false` or such an integer (Windows exports write
+  0/1); a list policy an array, whose entries match only as strings; a
+  string policy a string. A managed `Default*Setting` is a Wildcard/Wildcard
+  rule in `PolicyProvider` (156.0.8078.80
   `components/content_settings/core/browser/content_settings_policy_provider.cc:270-275,687-690,703-713`).
   `HostContentSettingsMap` reads it before the one-time and pref providers
   and, for these types, without merging one-time grants
@@ -1324,11 +1325,11 @@ Watch list, each with the trigger that turns it into work:
   lacks `com.brave.Browser.origin{,.beta,.nightly}` (see Platform policy
   locations). (4) What Import leaves open since v2.4.2, which names
   everything it leaves unmanaged and matches names, string values and list
-  entries in exact case in all three: `SlimBrave.ps1`'s Re-sync
-  (`Sync-FromRegistry`) and its list-ownership test
-  (`Test-ListPolicyIsExactly`) still compare values in any letter case
-  (`-eq`, `Compare-Object`), so Re-sync ticks a row for a value Import now
-  names, such as a hand-written `WebRtcIPHandling` =
+  entries exactly, in letter case and character by character, in all three:
+  `SlimBrave.ps1`'s Re-sync (`Sync-FromRegistry`) and its list-ownership
+  test (`Test-ListPolicyIsExactly`) still compare values in any letter case
+  and by culture (`-eq`, `Compare-Object`), so Re-sync ticks a row for a
+  value Import now names, such as a hand-written `WebRtcIPHandling` =
   `DISABLE_NON_PROXIED_UDP`; make both exact in one change, since Apply's
   list removal rests on the ownership test. A value under a row's key that
   no row writes (a GPO's `ChromeVariations` = 0, or the
@@ -1347,10 +1348,40 @@ Watch list, each with the trigger that turns it into work:
   names it as not offered), `HttpsUpgradesEnabled` and `BraveAdsEnabled`
   (written before upstream had Export, so no config carries them); retiring
   them needs a Windows-only part of `$script:retiredPolicies`, which a test
-  holds equal to `RETIRED_POLICIES` and `RETIRED_KEYS`. The Python scripts
-  fold only ASCII letters when they refuse two keys that differ only in
-  case, so a pair such as `É` and `é` imports there, both named as not
-  offered, while Windows PowerShell 5.1 refuses the file. (5) `SlimBrave.ps1`
+  holds equal to `RETIRED_POLICIES` and `RETIRED_KEYS`. `--import` of a
+  file whose only entries are platform-limited keys (a Windows export
+  holding just `DynamicCodeSettings`, on Linux) exits 1 after a result that
+  names nothing, and only the generic 'nothing in ... can be applied' line
+  explains it; say there that Chromium has no such policy on this platform.
+  In an old array-format file, an entry that is a fraction, a list, an
+  object or an integer past 64 bits is left out of the result in all three,
+  since Python and PowerShell print none of them alike; name it by its kind
+  ('a list') if that ever matters. Import escapes every name, value and
+  path it prints, but the rest of the Python scripts print paths as given:
+  Export's 'Exported to' and 'Export failed' lines, and for a
+  `--policy-file` target an Apply's write errors and Reset's 'Removed
+  <file>' (on macOS also 'Removed SlimBrave keys from <plist>'). Each is a
+  path the user typed or one of SlimBrave's own, so nothing a config
+  carries reaches the terminal that way, but a file name can hold a
+  control character; send them through `_shown_path` as Import does.
+  Windows PowerShell 5.1's `ConvertFrom-Json` reads a string
+  `"\/Date(<ms>)\/"` as a `[DateTime]`, where Python reads the text
+  `/Date(<ms>)/`: as `DnsTemplates` it makes Windows refuse the file
+  ('DnsTemplates must be a string') while Linux and macOS take it as the
+  template, and as a `DnsMode` or a string row's value Windows names the
+  key alone where the Python scripts show the text. No file SlimBrave
+  writes holds one; record what 5.1 does (Runtime checks owed, (l)) before
+  choosing between mimicking it in the Python reader and turning the date
+  back into its text in `SlimBrave.ps1`. The two readers part in a few more
+  ways, all read from source and owed the same check: 5.1 refuses nesting
+  past about 100 levels and likely a key named `psobject`, `psbase`,
+  `psadapted`, `psextended` or `pstypenames` (the last as a case-only
+  duplicate, so the status would say 'keys differ only in letter case'),
+  and it reads single quotes, unquoted names, numbers such as `+1` and
+  `01`, raw control characters inside strings and invalid UTF-8, all of
+  which Python refuses (both refuse a number past the double range); Python drops raw NUL bytes before reading, so a key
+  with one inside imports there as the name it spells and is named as not
+  offered on Windows. (5) `SlimBrave.ps1`
   started from a mapped network drive or a `subst` drive relaunches elevated
   with a path the elevated session usually cannot see, and the new window
   closes without a message; the README says to run it from a local folder.
@@ -1412,28 +1443,69 @@ Watch list, each with the trigger that turns it into work:
     blocking: start it from a mapped drive (with and without
     `EnableLinkedConnections`) and from a `subst` drive, under same-account
     and over-the-shoulder UAC, and record what each does. (l) For v2.4.2's
-    Import, whose `SlimBrave.ps1` half has never run:
+    Import, whose `SlimBrave.ps1` half has never run, what it refuses: each
+    of these shows 'Import failed - ' and the reason, with the staged rows
+    and DNS mode unchanged.
     `{"Features":{"MetricsReportingEnabled":false,"metricsreportingenabled":true}}`,
-    and the same pair inside an object nested under another field, fail
-    with 'Import failed - keys differ only in letter case' and the error's
-    text naming both keys, the staged rows unchanged (record the
-    `FullyQualifiedErrorId`; 'not a SlimBrave config' there means the catch
-    missed it); `{"features":{}}` fails with '... (found features; names are
-    case-sensitive)';
+    the same pair inside an object nested under another field, and
+    `{"Features":{"\u00c9t\u00e9":1,"\u00e9t\u00e9":1}}` give 'keys differ
+    only in letter case: ' and the error's own text naming both keys
+    (record the `FullyQualifiedErrorId`, which the catch expects to start
+    `DuplicateKeysInJsonString,`; 'not a SlimBrave config' there means the
+    catch missed it). `{"Features":{"":true}}` and `{"Features":{},"":1}`
+    give 'a key is empty'; unverified, since the catch expects
+    `Argument,Microsoft.PowerShell.Commands.ConvertFromJsonCommand` from a
+    `PSArgumentException` whose `ParamName` is `name` (read from the
+    non-CoreCLR `JsonObject.cs`), so record the id, the exception type and
+    its `ParamName`: 'not a SlimBrave config' there means the guess was
+    wrong. `{"features":{}}` gives 'not a SlimBrave config (found features;
+    names are case-sensitive)'. `{"Features":{},"DnsTemplates":false}`, then
+    `0`, `{}` and `["https://dns.example/dns-query",1]` in its place, give
+    'DnsTemplates must be a string';
+    `{"Features":{},"DnsMode":"custom","DnsTemplates":"https://dns.example/dns-query\n"}`,
+    then `\t`, `\u0085` and `\u2028` in place of `\n`, give 'DnsTemplates
+    contains a control character'.
+    `{"Features":{"TorDisabled":true},"DnsTemplates":null}`, and the same
+    with `""` or `[]`, import instead, with Disable Tor ticked and DNS
+    unmanaged. Record what 5.1 says for
+    `{"Features":{},"DnsTemplates":"\/Date(0)\/"}` (from source: 'DnsTemplates
+    must be a string', see Tool fixes (4)), for a `Features` value nested
+    150 arrays deep (from source: 'not a SlimBrave config'; Linux and macOS
+    import it and name the key) and for `{"Features":{"pstypenames":1}}`.
+    (m) What v2.4.2's Import names, in the status bar or its tooltip:
     `{"Features":{"torDisabled":true,"ChromeVariations":0,"WebRtcIPHandling":"DISABLE_NON_PROXIED_UDP","ShoppingListEnabled":false,"DiskCacheSize":1},"dnsmode":"off","Version":2}`
-    ticks nothing, leaves DNS unmanaged, and the status (bar or tooltip)
-    names `torDisabled (use TorDisabled)`, `dnsmode (use DnsMode)`; then
-    `ChromeVariations=0`, `WebRtcIPHandling="DISABLE_NON_PROXIED_UDP"` after
-    'no row sets that value'; `ShoppingListEnabled` as no longer offered;
-    `DiskCacheSize` as not offered; and 'Ignored, because it is not a
-    SlimBrave Neo setting: Version.', in that order;
+    ticks nothing, leaves DNS unmanaged, and names `torDisabled (use
+    TorDisabled)`, `dnsmode (use DnsMode)`; then `ChromeVariations=0`,
+    `WebRtcIPHandling="DISABLE_NON_PROXIED_UDP"` after 'no row sets that
+    value'; `ShoppingListEnabled` as no longer offered; `DiskCacheSize` as
+    not offered; and 'Ignored, because it is not a SlimBrave Neo setting:
+    Version.', in that order.
+    `{"DnsMode":"bogus","Features":{"MetricsReportingEnabled":"no"}}` names
+    `MetricsReportingEnabled="no", DnsMode="bogus"`, in that order.
     `{"Features":{"TorDisabled":true},"DnsMode":"\u001b[2J"}` ticks Disable
-    Tor and names `DnsMode="\u001B[2J"`; seven unknown keys list five, then
-    'and 2 more'; the six presets import with no note and stage what they
-    did before, and `e4c698b`'s Maximum Privacy, an upstream array export,
-    names seven retired keys (five, 'and 2 more') and
-    `DeveloperToolsDisabled`; a file of 10000 unknown keys imports without
-    hanging the window.
+    Tor and names `DnsMode="\u001B[2J"`; with `false`, `0`, `[0]` and `{}`
+    as the `DnsMode` it names `DnsMode=false`, `DnsMode=0`, `DnsMode` and
+    `DnsMode`, and with `null` or `""` nothing; with `"se\u00adcure"` it
+    names `DnsMode="se\u00ADcure"` and leaves DNS unmanaged.
+    `{"Features":{"BraveShieldsDisabledForUrls":["https://*","http:\u00ad//*"]}}`
+    ticks nothing and names the key after 'no row sets that value'.
+    `{"Features":{"DefaultNotificationsSetting":9223372036854775807}}` names
+    `DefaultNotificationsSetting=9223372036854775807` after 'no row sets
+    that value', and `99999999999999999999` in its place names the key alone
+    after 'the value is not one this policy accepts'.
+    `{"Features":["MetricsReportingEnabled",5,5,null,null]}` ticks Disable
+    Metrics Reporting and names `5, null` as not offered. A copy of a preset
+    saved as `café.json` imports with the status 'Imported from
+    café.json' and no note, while one whose name holds U+202E shows it as
+    `\u202E`; a status with reasons reads 'Imported from <name>. Left
+    unmanaged, because ...'. `{"Features":{},"DnsMode":"custom","DnsTemplates":"https://dns.example/\u200edns-query"}`
+    gives 'DnsTemplates contains a control character', and
+    `{"Features":{"MetricsReportingEnabled":1e400}}` 'not a SlimBrave
+    config'. Seven unknown keys list five, then 'and 2
+    more'. The six presets import with no note and stage what they did
+    before, and `e4c698b`'s Maximum Privacy, an upstream array export, names
+    seven retired keys (five, 'and 2 more') and `DeveloperToolsDisabled`. A
+    file of 10000 unknown keys imports without hanging the window.
   - `BrowserSignin`, owed (v2.4.0 shipped without it): does any shipping
     build carry a Google
     OAuth client? On Brave Release for Windows, macOS and Linux, with no
@@ -1605,7 +1677,7 @@ with the reference that carries the detail. Newest first.
 
 | When | What | Reference |
 |---|---|---|
-| 2026-11-21 | Import names everything it leaves unmanaged, under one reason each, the reasons in the same words and order in all three scripts: a name in the wrong letter case (with the spelling to use), a value outside its policy's JSON type or an unknown `DnsMode`, a value of the right type no row sets (Web Notifications' 3, a list that is not SlimBrave's), a key SlimBrave Neo no longer offers (the retired table, which `slimbrave-linux.py` now carries as `RETIRED_KEYS`), any other key (a DNS key inside `Features` says where it belongs), and an unknown top-level field; the Origin count and the exclusion-group note follow as before. `BackgroundModeEnabled` and `DynamicCodeSettings` are skipped without a note where no row offers them (`PLATFORM_LIMITED_KEYS`). All three match key names, the three fields, string values and list entries in exact case (the `DnsMode` value still in any case), so `SlimBrave.ps1` no longer takes a `features`, a `dnsmode` or a mis-cased key, and all three refuse a file with two keys that differ only in letter case, which Windows PowerShell 5.1 cannot read. A name from the file is shown as written only when it looks like a policy name; other names and every string value are quoted, with `\uXXXX` for anything outside printable ASCII, cut at 64 characters, five per reason; the result names the file, not its path. The TUI status wraps to four lines, and `--import` exits 1 without writing when the file names entries and none can be applied. Passing unknown keys through (issue #33) declined, since Import runs elevated and takes only what a row writes; the README gains Your own policies alongside SlimBrave. The `SlimBrave.ps1` half has not run on Windows (Runtime checks owed, (l)) | v2.4.2, issue #33 |
+| 2026-11-21 | Import names everything it leaves unmanaged, under one reason each, the reasons and the items in the same words and order in all three scripts: a name in the wrong letter case (with the spelling to use), a value outside its policy's JSON type (an integer past 64 bits counts as none, as Windows PowerShell 5.1 reads it) or a `DnsMode` that names no mode (only a missing, null or empty one is no mode), a value of the right type no row sets (Web Notifications' 3, a list that is not SlimBrave's), a key SlimBrave Neo no longer offers (the retired table, which `slimbrave-linux.py` now carries as `RETIRED_KEYS`), any other key (a DNS key inside `Features` says where it belongs), and an unknown top-level field; `Features` entries first in file order, then `DnsMode`, then the other fields; the Origin count and the exclusion-group note (sorted) follow as before. `BackgroundModeEnabled` and `DynamicCodeSettings` are skipped without a note where no row offers them (`PLATFORM_LIMITED_KEYS`). All three match key names, the three fields, string values and list entries in exact case and ordinally, `SlimBrave.ps1` no longer comparing lists or the `DnsMode` word by culture (the `DnsMode` value still in any ASCII case), so it no longer takes a `features`, a `dnsmode` or a mis-cased key. All three refuse a file 5.1 cannot read, an empty key or two keys that differ only in letter case (folded one UTF-16 unit at a time, as .NET does) at any depth, a `DnsTemplates` that is not text (`false`, `0`, `{}`) or holds a control or text-direction character, and a number past the double range, which 5.1 cannot read either. A name from the file is shown as written only when it looks like a policy name; other names and every string value are quoted, with `\uXXXX` for anything outside printable ASCII, cut at 64 characters, five per reason; the result names the file, not its path, as it is but for control, text-direction and zero-width characters, which it escapes, and the CLI escapes whatever the terminal's encoding cannot show; the Windows status bar ends the lead with a full stop when reasons follow. A list row takes only string entries, which ends a deep-nesting `RecursionError` that closed the TUI, and the TUI draws control, format, combining and wide characters in the template field as `?`, so a template stays inside its field. The TUI status wraps to four lines, and `--import` exits 1 without writing when the file names entries and none can be applied. Passing unknown keys through (issue #33) declined, since Import runs elevated and takes only what a row writes; the README gains Your own policies alongside SlimBrave and a table of what Import refuses, and its CLI and How It Works blocks now close where they end instead of hiding Presets and Requirements. The `SlimBrave.ps1` half has not run on Windows (Runtime checks owed, (l) and (m)) | v2.4.2, issue #33 |
 | 2026-11-14 | Cursory pass at Brave 1.99.57 (the first Release on Chromium 157.0.8103.79) and brave-variations `9654aa3`: policy YAMLs, pref mappings and factory dispatch unchanged for every written key. `StripImageMetadataV1` reached 100% of desktop Release through Griffin, so both `ChromeVariations` descriptions and the README name image metadata stripping among what they refuse. `TranslatorAPIAllowed` → ⚠️ no-op in Brave (1.99 turns the Translator API off itself). The News opt-in study (3% of new Windows installs; News description updated), the Windows 24H2 kill switch at 100% and moot on 157, the Local AI speech study on Beta (Local AI description updated), the ads OHTTP gate and the Focus Mode share recorded. `ChromeVariations` leaves Maximum Privacy, so no preset limits variations: the Griffin-only protections it refused (WebGL/WebGPU masking, image metadata stripping, clean-link copy) now outweigh keeping that preset's strict HTTPS locked on the HTTPS-First rollout | v2.4.1 |
 | 2026-10-31 | Missed-items audit at Brave 1.98.64 / Chromium 156.0.8078.80 / brave-variations `c73faf3`, every proposal argued red vs blue. Inert-key rule rewritten: `ShoppingListEnabled`, `AlternateErrorPagesEnabled` and `DNSInterceptionChecksEnabled` move to Considered and rejected and the PS1 and macOS retired tables; lock-only rows say what Brave already does; about 30 descriptions corrected and side effects named (printing, DevTools, default browser, Force Incognito, Shields cookies; Web Notifications drops Ask). `ChromeVariations` leaves Balanced Privacy and Developer (it refuses Griffin's WebGL/WebGPU masking) and stays in Maximum Privacy; `AlwaysOpenPdfExternally` leaves Maximum Privacy and `HardwareAccelerationModeEnabled` leaves Performance Focused. 17 rows over 16 new keys (clipboard, local network, XSLT, JavaScript optimizer, microphone, camera, app-launch prompt, site isolation, subdomain processes, dynamic code (PS1), command-line extensions, Google image descriptions, YouTube Restricted Mode, Safe Browsing lock, no click-through on Safe Browsing or certificate warnings, history deletion lock; `NetworkServiceSandboxEnabled` withdrawn before release when `brave://sandbox` on Windows showed the network service unsandboxed); 49 more Considered-and-rejected rows (66 keys plus the 20 `RemoteAccessHost*` keys); cloud-only keys screened out. Code: Export written as the invoking user, `--policy-file` limited to a `slimbrave*.json` or Brave channel plist in a policy directory, helpers by absolute path, macOS keeps other tools' plist keys, fsync and umask fixes, import type checks and one group-conflict rule, PS1 Apply reports failed writes; four more leftovers deleted on Windows and macOS. 76 → 89 rows, 72 → 84 keys (`SlimBrave.ps1` 90 over 85) | v2.4.0, PR #31 |
 | 2026-10-24 | Pass at the new pins (Brave 1.98.60, Chromium 156.0.8078.48), every row re-read. `SafeBrowsingExtendedReportingEnabled` removed (capped at cr144; handler and pref mapping deleted before 156) and `SafeSitesFilterBehavior` removed (blocks nothing in Brave, which ships no Google API key, yet sends every URL to Google): 78 → 76 rows, 74 → 72 keys; `SlimBrave.ps1` Apply and Reset now delete retired keys it wrote. `AutofillAddressEnabled` / `AutofillCreditCardEnabled` → ⚠️ deprecated, still applied (kept by the maintainer's decision while `AutofillSettings` is inert); `DefaultBraveHttpsUpgradeSetting` → ⚠️ (Griffin's `TransitionToUpstreamHttpsUpgrade` turns Brave's upgrader off on Beta, Nightly and part of Release; `ChromeVariations` keeps it); `DNSInterceptionChecksEnabled` → ⚠️ inert (Chromium skips the probes unless `IntranetRedirectBehavior` is 3). New watch items: Brave's HTTPS transition, Chromium's GPC, the News new-user opt-in, `AlternateErrorPagesEnabled` on 157, the sensors Ask model, the nixpkgs source build. Descriptions corrected for QUIC, Sync, Network Prediction, ChromeVariations, Talk, Browser Sign-in, Basic Auth, sideloaded extensions, Local AI, Default Browser, Rewards, Stats Ping and the two Autofill rows | v2.3.3, PR #30 (`b228a18`) |

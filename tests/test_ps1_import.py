@@ -301,13 +301,16 @@ def test_ps1_import_status_names_each_class_in_order():
     level. The exclusion-group clause is last and unchanged."""
     handler = _handler()
     ok = handler[handler.index("if($ok){"):handler.index("} else {", handler.index("Set-Status $msg"))]
-    clauses = re.findall(r"^\s*\$msg\+=Get-ImportClause '([^']*)' '([^']*)' (.+?) '(\w+)'\s*$", ok, re.MULTILINE)
+    clauses = re.findall(r"^\s*\$tail\+=Get-ImportClause '([^']*)' '([^']*)' (.+?) '(\w+)'\s*$", ok, re.MULTILINE)
     assert clauses == IMPORT_CLAUSES
-    assert ok.count("$msg+=Get-ImportClause") == len(IMPORT_CLAUSES)
-    lead = ok.index('$msg="Imported from "+(Format-ImportFileName ([System.IO.Path]::GetFileName($dlg.FileName)))')
-    groups = ok.index('$msg+=" Left unmanaged, because it is mutually exclusive with another imported row: "'
+    assert ok.count("$tail+=Get-ImportClause") == len(IMPORT_CLAUSES)
+    lead = ok.index('$lead="Imported from "+(Format-ImportFileName ([System.IO.Path]::GetFileName($dlg.FileName)))')
+    groups = ok.index('$tail+=" Left unmanaged, because it is mutually exclusive with another imported row: "'
                       '+(($script:importConflicts | Sort-Object -Unique) -join ", ")+"."')
-    assert lead < ok.index("$msg+=Get-ImportClause") < ok.index("$msg+=Get-ImportClause 'Ignored'") < groups
+    assert lead < ok.index("$tail+=Get-ImportClause") < ok.index("$tail+=Get-ImportClause 'Ignored'") < groups
+    # A full stop ends the lead only when a clause follows it.
+    join = ok.index("if($tail){ $msg=$lead+'.'+$tail } else { $msg=$lead }")
+    assert groups < join < ok.index("Set-Status $msg")
     assert "the imported value" not in PS1.read_text(encoding="utf-8")
 
 
@@ -536,12 +539,14 @@ def test_ps1_import_reads_dns_templates_as_the_python_scripts_do():
     template, an array of strings is joined with spaces. Anything else
     passed a [string] cast (5 became the template "5", [0] too), and is now
     refused with the Python scripts' reason, as is a template with a
-    control character (C0, DEL, C1, U+2028, U+2029). The refusal comes
+    control character (C0, DEL, C1, U+2028, U+2029) or a bidi control
+    (U+061C, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069). The refusal comes
     after the Features check and before any row is touched, and the status
     says it."""
     live = _ps1_live()
     tmpl = _ps1_function(live, "Read-ImportTemplate")
-    ctl = "'[\\x00-\\x1F\\x7F-\\x9F" + U + "2028" + U + "2029]'"
+    ctl = ("'[\\x00-\\x1F\\x7F-\\x9F" + U + "2028" + U + "2029" + U + "061C" + U + "200E"
+           + U + "200F" + U + "202A-" + U + "202E" + U + "2066-" + U + "2069]'")
     steps = [tmpl.index(s) for s in (
         "function Read-ImportTemplate($Value) {",
         "$text = $Value",
@@ -558,7 +563,8 @@ def test_ps1_import_reads_dns_templates_as_the_python_scripts_do():
     # .NET and Python read these escapes alike: the class is exactly the
     # control characters, over every UTF-16 code unit.
     cls = re.compile(ctl.strip("'"))
-    want = {c for c in range(0x10000) if c < 0x20 or 0x7F <= c <= 0x9F or c in (0x2028, 0x2029)}
+    bidi = {0x061C, 0x200E, 0x200F, *range(0x202A, 0x202F), *range(0x2066, 0x206A)}
+    want = {c for c in range(0x10000) if c < 0x20 or 0x7F <= c <= 0x9F or c in (0x2028, 0x2029) or c in bidi}
     assert {c for c in range(0x10000) if cls.search(chr(c))} == want
     handler = _handler()
     steps = [handler.index(s) for s in (
@@ -575,11 +581,12 @@ def test_ps1_import_reads_dns_templates_as_the_python_scripts_do():
 
 
 def test_ps1_import_lead_escapes_the_file_name():
-    """The lead names the file by the Python scripts' rule: each UTF-16
-    code unit outside printable ASCII as \\uXXXX in uppercase hex, no quotes
-    added and nothing cut. A Windows file name can carry a bidi override
-    (U+202E), which reordered the whole status bar; it cannot carry a quote
-    or a backslash, so those need no rule here."""
+    """The lead names the file by the Python scripts' rule: only what could
+    move, reorder or hide text - a control or bidi character, a zero-width
+    format character, a lone surrogate - as \\uXXXX in uppercase hex, no
+    quotes added and nothing cut; a Cyrillic, CJK or emoji name shows as it
+    is. A Windows file name can carry a bidi override (U+202E), which
+    reordered the whole status bar."""
     live = _ps1_live()
     name = _ps1_function(live, "Format-ImportFileName")
     steps = [name.index(s) for s in (
@@ -588,7 +595,12 @@ def test_ps1_import_lead_escapes_the_file_name():
         "for ($i = 0; $i -lt $Name.Length; $i++) {",
         "$ch = $Name[$i]",
         "$code = [int]$ch",
-        "if (($code -lt 0x20) -or ($code -gt 0x7E)) {\n"
+        "$unsafe = (($code -lt 0x20) -or (($code -ge 0x7F) -and ($code -le 0x9F)) -or",
+        "($code -eq 0x061C) -or ($code -eq 0x200E) -or ($code -eq 0x200F) -or",
+        "(($code -ge 0x200B) -and ($code -le 0x200D)) -or",
+        "if ((-not $unsafe) -and [char]::IsSurrogate($ch)) {",
+        "$unsafe = -not $paired",
+        "if ($unsafe) {\n"
         "            [void]$sb.Append('" + U + "' + $code.ToString('X4'))",
         "} else { [void]$sb.Append([string]$ch) }",
         "return $sb.ToString()",
@@ -596,7 +608,7 @@ def test_ps1_import_lead_escapes_the_file_name():
     assert steps == sorted(steps)
     assert "Substring" not in name and "-le $Max" not in name and "'\"'" not in name
     handler = _handler()
-    assert ('$msg="Imported from "+(Format-ImportFileName '
+    assert ('$lead="Imported from "+(Format-ImportFileName '
             '([System.IO.Path]::GetFileName($dlg.FileName)))') in handler
     assert "Imported from $(" not in handler
 

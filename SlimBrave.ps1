@@ -1391,10 +1391,12 @@ function Sync-FromRegistry {
                 if ([string]$row.choices[$i][1] -eq [string]$lv) { $script:state[$row.Id].Sel = $i; break }
             }
         } elseif ($row.value -is [array]) {
-            # Order means nothing to Chromium. Compared as Import and the
-            # ownership test compare, so a reordered copy of SlimBrave's list
-            # shows ticked instead of being removed by the next Apply; the
-            # Python scripts' sync compares the same way.
+            # Order means nothing to Chromium, so a reordered copy of
+            # SlimBrave's list shows ticked instead of being removed by the
+            # next Apply. Compared as the ownership test compares
+            # (Compare-Object, case-blind); Import compares exactly
+            # (Test-ImportSameList), and making Re-sync exact too is open
+            # (AUDIT.md What's next, Tool fixes (4)).
             $mine = @(); foreach ($x in $row.value) { $mine += [string]$x }
             if (($lv -is [array]) -and ($lv.Count -eq $mine.Count) -and -not (Compare-Object $lv $mine)) {
                 $script:state[$row.Id].On = $true
@@ -1773,8 +1775,9 @@ function Read-ImportFields($Cfg, $Top) {
 # DnsTemplates as the Python scripts read it: missing, null or "" is no
 # template, a string is the template, and an array of strings is joined
 # with spaces. Anything else is refused - a 5 used to become the template
-# "5" - and so is a template with a control character (C0, DEL, C1, or a
-# line or paragraph separator), as there: no DoH template holds one, and
+# "5" - and so is a template with a control character (C0, DEL, C1, a
+# line or paragraph separator, or a bidi control, which the template box
+# would draw reordered), as there: no DoH template holds one, and
 # Test-DohTemplate would strip the C0 ones and DEL unseen at Apply.
 # Returns the template as Text, and as Why the refusal for the Import
 # status ($null when there is none).
@@ -1790,7 +1793,7 @@ function Read-ImportTemplate($Value) {
     }
     if ($null -eq $text) { return @{ Text = ''; Why = $null } }
     if (-not ($text -is [string])) { return @{ Text = ''; Why = 'DnsTemplates must be a string' } }
-    if ($text -cmatch '[\x00-\x1F\x7F-\x9F\u2028\u2029]') {
+    if ($text -cmatch '[\x00-\x1F\x7F-\x9F\u2028\u2029\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]') {
         return @{ Text = ''; Why = 'DnsTemplates contains a control character' }
     }
     return @{ Text = $text; Why = $null }
@@ -1875,11 +1878,30 @@ function Format-ImportItem([string]$Key, $Value) {
 # can hold a bidi override (U+202E), which would reorder the whole status
 # bar; it cannot hold a quote or a backslash.
 function Format-ImportFileName([string]$Name) {
+    # Only what could move, reorder or hide text is escaped, as \uXXXX: the
+    # control and bidi characters a template may not hold, the zero-width
+    # format characters and a lone surrogate. Any other character, a
+    # Cyrillic, CJK or emoji name's included, shows as it is - the Python
+    # scripts' _shown_path rule.
     $sb = [System.Text.StringBuilder]::new()
     for ($i = 0; $i -lt $Name.Length; $i++) {
         $ch = $Name[$i]
         $code = [int]$ch
-        if (($code -lt 0x20) -or ($code -gt 0x7E)) {
+        $unsafe = (($code -lt 0x20) -or (($code -ge 0x7F) -and ($code -le 0x9F)) -or
+                   ($code -eq 0x2028) -or ($code -eq 0x2029) -or
+                   ($code -eq 0x061C) -or ($code -eq 0x200E) -or ($code -eq 0x200F) -or
+                   (($code -ge 0x202A) -and ($code -le 0x202E)) -or
+                   (($code -ge 0x2066) -and ($code -le 0x2069)) -or
+                   (($code -ge 0x200B) -and ($code -le 0x200D)) -or
+                   ($code -eq 0x2060) -or ($code -eq 0xFEFF))
+        if ((-not $unsafe) -and [char]::IsSurrogate($ch)) {
+            $paired = (([char]::IsHighSurrogate($ch) -and (($i + 1) -lt $Name.Length) -and
+                        [char]::IsLowSurrogate($Name[$i + 1])) -or
+                       ([char]::IsLowSurrogate($ch) -and ($i -gt 0) -and
+                        [char]::IsHighSurrogate($Name[$i - 1])))
+            $unsafe = -not $paired
+        }
+        if ($unsafe) {
             [void]$sb.Append('\u' + $code.ToString('X4'))
         } else { [void]$sb.Append([string]$ch) }
     }
@@ -2559,7 +2581,8 @@ function New-BarButton([string]$label,[bool]$accent){
                     if($ok){
                         Refresh-View
                         # The file's name is escaped as the Python scripts escape it.
-                        $msg="Imported from "+(Format-ImportFileName ([System.IO.Path]::GetFileName($dlg.FileName)))
+                        $lead="Imported from "+(Format-ImportFileName ([System.IO.Path]::GetFileName($dlg.FileName)))
+                        $tail=''
                         # Everything the file carries that nothing took, in the
                         # Python scripts' reasons and fixed order, each clause in
                         # file order (Get-ImportClause), its kind saying how its
@@ -2568,19 +2591,22 @@ function New-BarButton([string]$label,[bool]$accent){
                         # fields: a name in the wrong case inside Features comes
                         # before one at the top level, and an unknown DnsMode
                         # after the Features values.
-                        $msg+=Get-ImportClause 'Left unmanaged' 'names are case-sensitive' (@($script:importMiscased)+@($top.Case)) 'Case'
-                        $msg+=Get-ImportClause 'Left unmanaged' 'the value is not one this policy accepts' $script:importNotes 'Item'
-                        $msg+=Get-ImportClause 'Left unmanaged' 'no row sets that value' $script:importUnwritten 'Item'
-                        $msg+=Get-ImportClause 'Left unmanaged' 'SlimBrave Neo no longer offers it' $script:importRetired 'Name'
-                        $msg+=Get-ImportClause 'Left unmanaged' 'SlimBrave Neo does not offer it' $script:importUnknown 'Unknown'
-                        $msg+=Get-ImportClause 'Ignored' 'it is not a SlimBrave Neo setting' $top.Other 'Name'
+                        $tail+=Get-ImportClause 'Left unmanaged' 'names are case-sensitive' (@($script:importMiscased)+@($top.Case)) 'Case'
+                        $tail+=Get-ImportClause 'Left unmanaged' 'the value is not one this policy accepts' $script:importNotes 'Item'
+                        $tail+=Get-ImportClause 'Left unmanaged' 'no row sets that value' $script:importUnwritten 'Item'
+                        $tail+=Get-ImportClause 'Left unmanaged' 'SlimBrave Neo no longer offers it' $script:importRetired 'Name'
+                        $tail+=Get-ImportClause 'Left unmanaged' 'SlimBrave Neo does not offer it' $script:importUnknown 'Unknown'
+                        $tail+=Get-ImportClause 'Ignored' 'it is not a SlimBrave Neo setting' $top.Other 'Name'
                         # Unique: two rows can share a key and name it twice.
                         # Sorted and not capped, as before: a group drops a key
                         # only where its rows carry two keys (spellcheck and
                         # shields today).
                         if($script:importConflicts.Count -gt 0){
-                            $msg+=" Left unmanaged, because it is mutually exclusive with another imported row: "+(($script:importConflicts | Sort-Object -Unique) -join ", ")+"."
+                            $tail+=" Left unmanaged, because it is mutually exclusive with another imported row: "+(($script:importConflicts | Sort-Object -Unique) -join ", ")+"."
                         }
+                        # A full stop ends the lead when a clause follows, so the bar reads as
+                        # sentences; the Python scripts join their clauses with '; ' instead.
+                        if($tail){ $msg=$lead+'.'+$tail } else { $msg=$lead }
                         Set-Status $msg
                     } else {
                         # A case-only duplicate is said as such, with the error's
