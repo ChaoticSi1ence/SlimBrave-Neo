@@ -19,8 +19,10 @@ import ast
 import curses
 import importlib.util
 import json
+import os
 import pathlib
 import re
+import subprocess
 import sys
 
 import pytest
@@ -107,6 +109,31 @@ def _ps1_text():
     return (ROOT / "SlimBrave.ps1").read_text(encoding="utf-8")
 
 
+def _esc(text):
+    """How Import echoes a file name or path, written out again here: each
+    UTF-16 code unit outside printable ASCII as \\uXXXX in uppercase hex."""
+    units = text.encode("utf-16-le", "surrogatepass")
+    out = []
+    for i in range(0, len(units), 2):
+        unit = int.from_bytes(units[i:i + 2], "little")
+        out.append(chr(unit) if 0x20 <= unit <= 0x7E else "\\u%04X" % unit)
+    return "".join(out)
+
+
+# A file name holding what Import has to escape when it echoes one: a
+# non-ASCII letter and a bidi override, and where file names may hold them
+# (not on Windows) an ESC and a newline.
+ODD_NAME = "café ‮" + ("" if os.name == "nt" else "\x1b[31m\n") + ".json"
+
+
+def _write_named(tmp_path, config, name):
+    """_write, skipped where the file system cannot hold `name`."""
+    try:
+        return _write(tmp_path, config, name)
+    except (OSError, UnicodeEncodeError) as e:
+        pytest.skip(f"this file system cannot hold the name: {e!r}")
+
+
 # ---------------------------------------------------------------------------
 # The known names and the shared code
 # ---------------------------------------------------------------------------
@@ -132,6 +159,13 @@ def test_the_known_names_and_the_reasons_are_the_specified_ones(mod):
     assert [verb for _, verb, _ in mod.IMPORT_NOTES] == ["left unmanaged"] * 5 + ["ignored"]
     assert mod.EXCLUSIVE_REASON == "it is mutually exclusive with another imported row"
     assert (mod.SHOWN_MAX, mod.MAX_SHOWN_ITEMS, mod.STATUS_MAX_LINES) == (64, 5, 4)
+    # What a template may not hold (C0, DEL and C1, the line and paragraph
+    # separators), and the bidi controls the template field masks too.
+    assert mod._CONTROL_CHARS == frozenset(
+        chr(c) for c in list(range(0x00, 0x20)) + list(range(0x7F, 0xA0)) + [0x2028, 0x2029])
+    assert mod._BIDI_CONTROLS == frozenset(
+        chr(c) for c in list(range(0x202A, 0x202F)) + list(range(0x2066, 0x206A)))
+    assert len(mod._CONTROL_CHARS) == 67 and len(mod._BIDI_CONTROLS) == 9
 
 
 def _ps1_retired_names():
@@ -177,12 +211,16 @@ def test_platform_limited_keys_are_the_rows_some_platform_lacks():
 # The import path is one copy per script and must not drift: compared as
 # syntax trees, docstrings included, so the wording is held too.
 SHARED_DEFS = [
-    "_ASCII_LOWER", "_KeysDifferInCase", "_refuse_case_twins", "read_json_file",
+    "_is_json_int", "_value_fits_row", "_value_matches_row",
+    "_fold_case", "_KeysDifferInCase", "_EmptyKey", "_refuse_unreadable_keys",
+    "read_json_file",
     "CONFIG_FIELDS", "PLATFORM_LIMITED_KEYS", "FEATURES_NAME_HINTS",
     "IMPORT_NOTES", "EXCLUSIVE_REASON", "SHOWN_MAX", "MAX_SHOWN_ITEMS",
-    "_PLAIN_NAME_CHARS", "_quoted", "_shown_name", "_shown_value", "_shown_item",
-    "_note_clause", "import_settings", "_import_config", "STATUS_MAX_LINES",
-    "status_lines", "layout", "viewport_rows", "draw",
+    "_PLAIN_NAME_CHARS", "_CONTROL_CHARS", "_BIDI_CONTROLS", "_escaped",
+    "_shown_path", "_quoted", "_shown_name", "_shown_value", "_shown_item",
+    "_note_clause", "import_settings", "_import_config", "_take_config",
+    "STATUS_MAX_LINES", "status_lines", "layout", "viewport_rows",
+    "_field_text", "draw",
 ]
 
 
@@ -278,11 +316,15 @@ def test_the_cut_falls_on_the_escaped_text(mod):
 @pytest.mark.parametrize("value,shown", [
     (True, "true"), (False, "false"), (None, "null"), (3, "3"), (-7, "-7"),
     (0, "0"), (3000000000, "3000000000"),
-    (10 ** 70, str(10 ** 70)[:61] + "..."),
+    (2 ** 63 - 1, "9223372036854775807"), (-2 ** 63, "-9223372036854775808"),
+    # Windows PowerShell 5.1 reads a larger integer as a [decimal] or a
+    # [double], so it is no integer there and is not shown.
+    (2 ** 63, None), (-2 ** 63 - 1, None), (10 ** 70, None),
     ("x", '"x"'), ("", '""'), ("DISABLE_NON_PROXIED_UDP", '"DISABLE_NON_PROXIED_UDP"'),
     ("\x00", '"\\u0000"'),
     (2.0, None), (2.5, None), (float("inf"), None), ([], None), ([1], None), ({}, None),
-], ids=["true", "false", "null", "int", "negative", "zero", "big-int", "huge-int",
+], ids=["true", "false", "null", "int", "negative", "zero", "big-int", "int64-max",
+        "int64-min", "past-int64", "below-int64", "huge-int",
         "str", "empty-str", "enum-str", "nul-str", "float-integral", "float",
         "infinity", "empty-list", "list", "object"])
 def test_values_are_shown_by_one_rule(mod, value, shown):
@@ -312,6 +354,34 @@ def test_the_lead_names_the_file_not_its_path(mod, tmp_path):
     path = _write(folder, {"Features": {"BraveRewardsDisabled": True}}, "My Preset.json")
     ok, msg = mod.import_settings(mod.build_rows(), str(path))
     assert ok and msg == "Imported from My Preset.json"
+
+
+def test_a_path_is_echoed_in_printable_ascii_without_quotes(mod):
+    assert mod._shown_path("My Preset.json") == "My Preset.json"
+    assert mod._shown_path('/tmp/a "b" \\c.json') == '/tmp/a "b" \\c.json'
+    name = "caf\u00e9\n\x1b[2J\u202e\U0001F600\udcff.json"
+    assert mod._shown_path(name) == (
+        "caf\\u00E9\\u000A\\u001B[2J\\u202E\\uD83D\\uDE00\\uDCFF.json") == _esc(name)
+    assert mod._shown_path("y" * 300) == "y" * 300    # no cut
+
+
+def test_import_echoes_the_file_name_and_path_escaped(mod, tmp_path):
+    """The lead and every refusal that names the file: a newline, an ESC or
+    a bidi control in a name never reaches the status line or the terminal."""
+    path = _write_named(tmp_path, {"Features": {"BraveRewardsDisabled": True}}, ODD_NAME)
+    assert mod.import_settings(mod.build_rows(), str(path)) == (
+        True, "Imported from " + _esc(ODD_NAME))
+    assert _esc(ODD_NAME).startswith("caf\\u00E9 \\u202E")
+    missing = tmp_path / ("gone " + ODD_NAME)
+    assert mod.import_settings(mod.build_rows(), str(missing)) == (
+        False, "File not found: " + _esc(str(missing)))
+    folder = tmp_path / ("dir " + ODD_NAME)
+    folder.mkdir()
+    # The OSError's own text, its repr() of the path included, escaped.
+    ok, msg = mod.import_settings(mod.build_rows(), str(folder))
+    assert ok is False and msg.startswith("Read error: "), msg
+    assert all(" " <= c <= "~" for c in msg), repr(msg)
+    assert "dir caf\\u00E9 " in msg
 
 
 @pytest.mark.parametrize("config,items", [
@@ -396,6 +466,74 @@ def test_the_dns_mode_word_itself_stays_case_insensitive(mod, tmp_path, mode):
     assert mod.get_dns_mode(rows) == mode.lower()
 
 
+@pytest.mark.parametrize("mode,item", [
+    (False, "DnsMode=false"), (0, "DnsMode=0"), ([], "DnsMode"), ({}, "DnsMode"),
+    ([0], "DnsMode"), ("of\u00adf", 'DnsMode="of\\u00ADf"'),
+    ("\u017fecure", 'DnsMode="\\u017Fecure"'),    # casefold() would make it "secure"
+], ids=["false", "zero", "empty-list", "empty-object", "list-of-zero", "soft-hyphen",
+        "long-s"])
+def test_a_dns_mode_that_is_there_but_names_no_mode_is_named(mod, tmp_path, mode, item):
+    """Only a missing, null or "" DnsMode is no DnsMode, so a template next
+    to it does not make DNS custom; any other value names a mode in printable
+    ASCII, in any letter case, or is named. Python used to read false, 0, []
+    and {} as no DnsMode, and SlimBrave.ps1 reads [0] that way."""
+    config = {"Features": {}, "DnsMode": mode, "DnsTemplates": "https://dns.example/dns-query"}
+    rows, policy, tail = _import(mod, tmp_path, config)
+    assert tail == TYPE + item
+    assert mod.get_dns_mode(rows) == "unmanaged" and "DnsOverHttpsMode" not in policy
+
+
+@pytest.mark.parametrize("config", [
+    {"Features": {}}, {"Features": {}, "DnsMode": None}, {"Features": {}, "DnsMode": ""},
+], ids=["missing", "null", "empty-string"])
+@pytest.mark.parametrize("template", ["", "https://dns.example/dns-query"], ids=["alone", "with-template"])
+def test_a_missing_null_or_empty_dns_mode_is_no_dns_mode(mod, tmp_path, config, template):
+    if template:
+        config = {**config, "DnsTemplates": template}
+    rows, _, tail = _import(mod, tmp_path, config)
+    assert tail == ""
+    assert mod.get_dns_mode(rows) == ("custom" if template else "unmanaged")
+
+
+@pytest.mark.parametrize("tmpl", [
+    "https://dns.example/dns-query\n", "https://a.example/\rdns-query",
+    "\x00https://dns.example/dns-query", "https://dns.example/\tdns-query",
+    "https://dns.example/dns-query\x1b[2J", "https://dns.example/\x1f", "https://dns.example/\x7f",
+    "https://dns.example/\x85", "https://dns.example/\x9f", "https://dns.example/\u2028",
+    "https://dns.example/\u2029", ["https://a.example/dns-query", "https://b.example/\ndns-query"],
+], ids=["lf", "cr", "nul", "tab", "esc", "unit-separator", "del", "nel", "c1-last",
+        "line-separator", "paragraph-separator", "in-a-list"])
+def test_a_template_with_a_control_character_refuses_the_file(mod, tmp_path, tmpl):
+    """Never stripped: what would be left is a resolver the file did not
+    name, and the TUI painted a newline in the field as a new line."""
+    rows = _preticked(mod)
+    path = _write(tmp_path, {"Features": {"BraveRewardsDisabled": True}, "DnsMode": "custom",
+                             "DnsTemplates": tmpl})
+    assert mod.import_settings(rows, str(path)) == (
+        False, "Invalid config: DnsTemplates contains a control character")
+    assert _untouched(mod, rows)
+
+
+@pytest.mark.parametrize("tmpl", [
+    "https://r\u00e9solveur.example/dns-query",
+    "https://\u4f8b\u3048.example/dns-query{?dns}",
+    "https://dns.example/~ \u00a0\u2027\u202f/dns-query",
+], ids=["idn-host", "cjk-host", "next-to-the-controls"])
+def test_a_template_with_printable_non_ascii_imports_and_round_trips(mod, tmp_path, tmpl):
+    """An IDN host is a template, not a corrupted one: taken as written,
+    applied as written, and exported and imported back unchanged."""
+    rows, policy, tail = _import(mod, tmp_path, {"Features": {}, "DnsMode": "custom",
+                                                 "DnsTemplates": tmpl})
+    assert tail == ""
+    assert policy == {"DnsOverHttpsMode": "secure", "DnsOverHttpsTemplates": tmpl}
+    out = tmp_path / "exported.json"
+    ok, msg = mod.export_settings(rows, str(out))
+    assert ok, msg
+    again = mod.build_rows()
+    assert mod.import_settings(again, str(out)) == (True, "Imported from exported.json")
+    assert (mod.get_dns_mode(again), mod.get_dns_template(again)) == ("custom", tmpl)
+
+
 VALUE_CASES = [
     ("IncognitoModeAvailability", 0, "IncognitoModeAvailability=0"),
     ("ChromeVariations", 0, "ChromeVariations=0"),
@@ -454,6 +592,83 @@ def test_a_value_one_of_two_rows_takes_is_not_named(mod, tmp_path, features):
     assert tail == ""
 
 
+def test_an_integer_past_64_bits_is_no_integer(mod, tmp_path):
+    """Windows PowerShell 5.1 reads one as a [decimal] or a [double]: not a
+    value an integer or boolean policy accepts, and not shown, there or here."""
+    _, policy, tail = _import(mod, tmp_path, {"Features": {
+        "ChromeVariations": 2 ** 63,
+        "MetricsReportingEnabled": 2 ** 64,
+        "DefaultNotificationsSetting": -2 ** 63 - 1,
+        "IncognitoModeAvailability": 2 ** 63 - 1,
+        "BrowserSignin": -2 ** 63,
+    }, "DnsMode": 10 ** 30})
+    assert policy == {}
+    assert tail == (TYPE + "ChromeVariations, MetricsReportingEnabled, "
+                    "DefaultNotificationsSetting, DnsMode"
+                    + VALUE + "IncognitoModeAvailability=9223372036854775807, "
+                    "BrowserSignin=-9223372036854775808")
+    # In a legacy array such an entry has no rendering, so it is not listed.
+    _, policy, tail = _import(mod, tmp_path, {"Features": [
+        "BraveRewardsDisabled", 2 ** 63, 2 ** 63 - 1, -2 ** 63 - 1]})
+    assert policy == {"BraveRewardsDisabled": True}
+    assert tail == UNKNOWN + "9223372036854775807"
+
+
+def _row(mod, key, rows=None):
+    rows = mod.build_rows() if rows is None else rows
+    return next(r for r in rows if r["type"] == mod.ROW_FEATURE and r["key"] == key)
+
+
+def _deep_list(depth):
+    """["https://*"] inside `depth` more lists, built without recursing."""
+    value = ["https://*"]
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+def test_a_list_row_takes_only_json_strings_and_never_walks_an_entry(mod):
+    row = _row(mod, "BraveShieldsDisabledForUrls")
+    assert mod._value_matches_row(row, ["http://*", "https://*"])
+    assert not mod._value_matches_row(row, ["https://*", ["http://*"]])
+    assert not mod._value_matches_row(row, ["https://*", 5])
+    assert not mod._value_matches_row(row, ["https://*"])
+    # sorted(key=str) printed this entry, which raised RecursionError: past
+    # the stack on Python 3.14, past the recursion limit before it.
+    assert not mod._value_matches_row(row, ["http://*", _deep_list(200_000)])
+
+
+def test_a_deeply_nested_list_value_is_named_not_raised(mod, tmp_path, monkeypatch):
+    """A list-row value nested ~50,000 deep, a 95 KB file that json reads
+    on an 8 MB stack, ended the TUI and printed a traceback from --import.
+    How deep json reads depends on the stack, so the reader is stood in for."""
+    config = {"Features": {"BraveShieldsDisabledForUrls": ["http://*", _deep_list(200_000)]}}
+    monkeypatch.setattr(mod, "read_json_file", lambda path: config)
+    rows = mod.build_rows()
+    assert mod.import_settings(rows, str(tmp_path / "deep.json")) == (
+        True, "Imported from deep.json" + VALUE + "BraveShieldsDisabledForUrls")
+    assert mod._build_policy(rows) == ({}, "")
+
+
+def _recursion_error(*args, **kwargs):
+    raise RecursionError("maximum recursion depth exceeded")
+
+
+def test_a_recursion_error_while_taking_a_file_refuses_it_and_restores_the_rows(
+        mod, tmp_path, monkeypatch, applied, capsys):
+    """Nothing in the import walks a value's depth now; should anything
+    raise RecursionError all the same, the rows go back to what they were
+    and the import is refused, in the TUI's import_settings and in --import."""
+    path = _write(tmp_path, {"Features": {"BraveRewardsDisabled": True}, "DnsMode": "off"})
+    rows = _preticked(mod)
+    monkeypatch.setattr(mod, "_enforce_groups", _recursion_error)   # after every row is set
+    assert mod.import_settings(rows, str(path)) == (False, "Invalid config: nesting too deep")
+    assert _untouched(mod, rows)
+    assert mod.cli_import(str(path), None) == 1
+    assert applied == []
+    assert capsys.readouterr() == ("", "Error: Invalid config: nesting too deep\n")
+
+
 # RETIRED_POLICIES, the table RETIRED_KEYS is held equal to above.
 @pytest.mark.parametrize("key", sorted(MAC_MOD.RETIRED_POLICIES))
 @pytest.mark.parametrize("value", [False, True, 1])
@@ -509,8 +724,27 @@ def test_a_group_loser_is_named_only_as_mutually_exclusive(mod, tmp_path):
         "BraveShieldsDisabledForUrls": SHIELDS_WILDCARDS,
         "BraveShieldsEnabledForUrls": SHIELDS_WILDCARDS}})
     assert policy == {"SpellcheckEnabled": False, "BraveShieldsEnabledForUrls": SHIELDS_WILDCARDS}
-    # file order, not table order
-    assert tail == EXCLUSIVE + "SpellCheckServiceEnabled, BraveShieldsDisabledForUrls"
+    # sorted, as SlimBrave.ps1 lists them: not in file order, not table order
+    assert tail == EXCLUSIVE + "BraveShieldsDisabledForUrls, SpellCheckServiceEnabled"
+
+
+def test_the_exclusion_clause_is_sorted_in_any_letter_case_and_never_cut(mod, tmp_path, monkeypatch):
+    """SlimBrave.ps1 lists the losers through Sort-Object -Unique, which
+    ignores letter case and has no cap. Two keys at most can lose to a group
+    today, so a stand-in _enforce_groups drops every key the file names."""
+    rows = mod.build_rows()
+    features = {"SpellCheckServiceEnabled": False, "SpellcheckEnabled": False}
+    for row in rows:
+        if (row["type"] == mod.ROW_FEATURE and isinstance(row["value"], bool)
+                and not row.get("group") and len(features) < 8):
+            features.setdefault(row["key"], row["value"])
+    monkeypatch.setattr(mod, "_enforce_groups", lambda rows: list(features))
+    _, _, tail = _import(mod, tmp_path, {"Features": features}, rows=rows)
+    listed = tail[len(EXCLUSIVE):].split(", ")
+    assert tail.startswith(EXCLUSIVE) and " more" not in tail
+    assert listed == sorted(features, key=str.lower) and len(listed) == 8
+    # Ignoring case, Spellcheck-E sorts before SpellCheck-S; ordinally C < c.
+    assert listed.index("SpellcheckEnabled") < listed.index("SpellCheckServiceEnabled")
 
 
 def test_origin_built_ins_are_counted_by_distinct_key_whatever_their_value(mod, tmp_path):
@@ -551,20 +785,24 @@ def test_the_clauses_come_in_their_fixed_order(mod, tmp_path):
         + EXCLUSIVE + "BraveShieldsDisabledForUrls")
 
 
-@pytest.mark.parametrize("first", ["DnsMode", "Features"])
-def test_items_keep_file_order_across_the_top_level_and_features(mod, tmp_path, first):
+@pytest.mark.parametrize("layout", ["features-first", "features-between", "features-last"])
+def test_features_items_come_before_top_level_ones_wherever_features_sits(mod, tmp_path, layout):
+    """The order SlimBrave.ps1 builds its lists in: the Features entries in
+    file order, then the DnsMode, then the other top-level names in file
+    order, wherever in the file Features is."""
     features = {"ChromeVariations": "2", "metricsreportingenabled": False}
-    top = {"DnsMode": "bogus", "dnstemplates": "https://dns.example/dns-query"}
-    config = {"Features": features, **top} if first == "Features" else {**top, "Features": features}
+    before = {"dnstemplates": "https://dns.example/dns-query", "Comment": "x"}
+    after = {"DnsMode": "bogus", "Version": 2}
+    config = {
+        "features-first": {"Features": features, **before, **after},
+        "features-between": {**before, "Features": features, **after},
+        "features-last": {**before, **after, "Features": features},
+    }[layout]
     _, _, tail = _import(mod, tmp_path, config)
-    if first == "Features":
-        assert tail == (CASE + "metricsreportingenabled (use MetricsReportingEnabled), "
-                        "dnstemplates (use DnsTemplates)"
-                        + TYPE + 'ChromeVariations="2", DnsMode="bogus"')
-    else:
-        assert tail == (CASE + "dnstemplates (use DnsTemplates), "
-                        "metricsreportingenabled (use MetricsReportingEnabled)"
-                        + TYPE + 'DnsMode="bogus", ChromeVariations="2"')
+    assert tail == (CASE + "metricsreportingenabled (use MetricsReportingEnabled), "
+                    "dnstemplates (use DnsTemplates)"
+                    + TYPE + 'ChromeVariations="2", DnsMode="bogus"'
+                    + FIELD + "Comment, Version")
 
 
 def test_a_clause_keeps_file_order_and_stops_at_five(mod, tmp_path):
@@ -579,13 +817,13 @@ def test_what_the_message_copies_from_the_file_is_printable_ascii(mod, tmp_path)
     the message as root: no control character may reach either."""
     _, _, tail = _import(mod, tmp_path, {
         "Features": {"\x00x": 1, "a\x1b[2Jb": 1, "WebRtcIPHandling": "‮default",
-                     "\U0001F600": 1, "": 2, "x" * 500: 1},
+                     "\U0001F600": 1, "x" * 500: 1},
         "\x07": 1, "DnsMode": "\x00"})
     assert all(" " <= c <= "~" for c in tail), repr(tail)
     assert tail == (
         TYPE + 'DnsMode="\\u0000"'
         + VALUE + 'WebRtcIPHandling="\\u202Edefault"'
-        + UNKNOWN + '"\\u0000x", "a\\u001B[2Jb", "\\uD83D\\uDE00", "", "' + "x" * 61 + '..."'
+        + UNKNOWN + '"\\u0000x", "a\\u001B[2Jb", "\\uD83D\\uDE00", "' + "x" * 61 + '..."'
         + FIELD + '"\\u0007"')
 
 
@@ -661,12 +899,19 @@ CASE_TWINS = [
     ('{"Features": {}, "x": {"y": {"z": {"Deep": 1, "dEEP": 2}}}}', "Deep, dEEP"),
     ('{"Features": {"a b": 1, "A B": 2}}', '"a b", "A B"'),
     ('{"Features": {"Caf\\u00e9X": 1, "Caf\\u00e9x": 2}}', '"Caf\\u00E9X", "Caf\\u00E9x"'),
+    # .NET's OrdinalIgnoreCase folds more than ASCII, so these fail on
+    # Windows too: an accented letter, a dotless i, a long s.
+    ('{"Features": {"\\u00c9t\\u00e9": 1, "\\u00e9t\\u00e9": 2}}',
+     '"\\u00C9t\\u00E9", "\\u00E9t\\u00E9"'),
+    ('{"Features": {"I": 1, "\\u0131": 2}}', 'I, "\\u0131"'),
+    ('{"Features": {"\\u017fx": 1, "sx": 2}}', '"\\u017Fx", sx'),
 ]
 
 
 @pytest.mark.parametrize("text,names", CASE_TWINS, ids=[
     "top-level", "top-level-reversed", "features", "dns-field", "inside-a-list",
-    "deep", "quoted-names", "ascii-case-in-a-non-ascii-name"])
+    "deep", "quoted-names", "ascii-case-in-a-non-ascii-name", "non-ascii-letters",
+    "dotless-i", "long-s"])
 def test_keys_that_differ_only_in_letter_case_refuse_the_file(mod, tmp_path, text, names):
     """Windows PowerShell 5.1's ConvertFrom-Json cannot read such a file at
     any depth, so no script imports it."""
@@ -677,9 +922,20 @@ def test_keys_that_differ_only_in_letter_case_refuse_the_file(mod, tmp_path, tex
     assert _untouched(mod, rows)
 
 
-def test_read_json_file_raises_a_value_error_for_case_twins(mod, tmp_path):
+def test_read_json_file_raises_a_value_error_for_case_twins_and_empty_keys(mod, tmp_path):
     with pytest.raises(ValueError):
         mod.read_json_file(str(_write(tmp_path, '{"a": 1, "A": 2}')))
+    with pytest.raises(ValueError):
+        mod.read_json_file(str(_write(tmp_path, '{"a": {"": 1}}')))
+
+
+def test_an_accented_pair_differing_only_in_case_is_refused(mod, tmp_path):
+    # U+00C9 and U+00E9 are one name to Windows PowerShell 5.1, which cannot
+    # read the file, so no script imports it.
+    rows = _preticked(mod)
+    ok, msg = mod.import_settings(rows, str(_write(tmp_path, '{"Features": {"\\u00c9": 1, "\\u00e9": 2}}')))
+    assert ok is False and msg.startswith("Invalid config: keys differ only in letter case")
+    assert _untouched(mod, rows)
 
 
 def test_a_key_written_twice_in_the_same_case_is_left_to_json(mod, tmp_path):
@@ -687,11 +943,47 @@ def test_a_key_written_twice_in_the_same_case_is_left_to_json(mod, tmp_path):
     assert policy == {"ChromeVariations": 2} and tail == ""
 
 
-def test_only_ascii_letters_are_folded_when_looking_for_twins(mod, tmp_path):
-    """The rule Import's names follow; ConvertFrom-Json folds more, so this
-    pair is refused on Windows alone."""
-    _, _, tail = _import(mod, tmp_path, '{"Features": {"\\u00c9": 1, "\\u00e9": 2}}')
-    assert tail == UNKNOWN + '"\\u00C9", "\\u00E9"'
+@pytest.mark.parametrize("text,names", [
+    ('{"Features": {"Stra\\u00dfe": 1, "STRASSE": 2}}', '"Stra\\u00DFe", STRASSE'),
+    ('{"Features": {"\\ufb00": 1, "FF": 2}}', '"\\uFB00", FF'),
+    ('{"Features": {"\\u212a": 1, "k": 2}}', '"\\u212A", k'),
+    # Beyond U+FFFF: .NET Framework folds one UTF-16 unit at a time, so a
+    # surrogate pair never folds and Windows imports the pair as two names.
+    ('{"Features": {"\\ud801\\udc00": 1, "\\ud801\\udc28": 2}}', '"\\uD801\\uDC00", "\\uD801\\uDC28"'),
+], ids=["sharp-s", "ligature", "kelvin-sign", "beyond-bmp"])
+def test_letters_one_by_one_are_folded_when_looking_for_twins(mod, tmp_path, text, names):
+    """Each character folds to its own upper case, as in .NET, and only when
+    that is one character: the sharp s and the ff ligature stay as they are
+    (str.upper() would make them SS and FF), and the Kelvin sign is upper
+    case already. Such a pair is two names in every script."""
+    _, _, tail = _import(mod, tmp_path, text)
+    assert tail == UNKNOWN + names
+
+
+EMPTY_KEYS = [
+    '{"Features": {"": true}}',
+    '{"Features": {}, "": 1}',
+    '{"Features": {"ExtensionInstallBlocklist": [{"": 1}]}}',
+    '{"Features": {}, "x": {"y": {"z": {"": 2}}}}',
+    '{"Features": {"BraveRewardsDisabled": true, "": false}}',
+]
+
+
+@pytest.mark.parametrize("text", EMPTY_KEYS, ids=[
+    "features", "top-level", "inside-a-list", "deep", "beside-a-row-key"])
+def test_an_empty_key_refuses_the_file(mod, tmp_path, text):
+    """Windows PowerShell 5.1's ConvertFrom-Json cannot read a property
+    with an empty name, at any depth, so no script imports such a file."""
+    rows = _preticked(mod)
+    ok, msg = mod.import_settings(rows, str(_write(tmp_path, text)))
+    assert (ok, msg) == (False, "Invalid config: a key is empty")
+    assert _untouched(mod, rows)
+
+
+def test_an_empty_legacy_entry_is_a_name_not_a_key(mod, tmp_path):
+    _, policy, tail = _import(mod, tmp_path, {"Features": ["", "BraveRewardsDisabled"]})
+    assert policy == {"BraveRewardsDisabled": True}
+    assert tail == UNKNOWN + '""'
 
 
 @pytest.mark.parametrize("config,hint", [
@@ -740,21 +1032,89 @@ NOTHING_TAKEN = [
     {"Features": {"DynamicCodeSettings": 1}},
     {"Features": {"HomepageLocation": "x"}, "DnsMode": "bogus"},
     {"Features": {"HomepageLocation": "x"}, "DnsMode": "unmanaged"},
+    {"Features": {"HomepageLocation": "x"}, "DnsMode": False,
+     "DnsTemplates": "https://dns.example/dns-query"},
 ]
 
 
 @pytest.mark.parametrize("config", NOTHING_TAKEN, ids=[
     "unknown", "legacy-unknown", "retired", "miscased", "unoffered-value",
-    "platform-limited", "unknown-dns-mode", "unmanaged-dns"])
+    "platform-limited", "unknown-dns-mode", "unmanaged-dns", "false-dns-mode"])
 def test_cli_import_writes_nothing_when_no_entry_was_taken(mod, tmp_path, applied, capsys, config):
-    """Applying would write an empty policy and remove SlimBrave's own."""
+    """Applying would write an empty policy and remove SlimBrave's own. The
+    words hold after a --reset in the same command, which runs first."""
     path = _write(tmp_path, config)
     assert mod.cli_import(str(path), None) == 1
     assert applied == []
     out, err = capsys.readouterr()
     rows = mod.build_rows()
     assert out == mod.import_settings(rows, str(path))[1] + "\n"
-    assert err == f"Error: nothing in {path} can be applied; the policy was left as it was.\n"
+    assert err == f"Error: nothing in {path} can be applied; --import wrote nothing.\n"
+
+
+def test_cli_import_names_the_path_escaped_when_it_writes_nothing(mod, tmp_path, applied, capsys):
+    path = _write_named(tmp_path, {"Features": {"HomepageLocation": "x"}}, ODD_NAME)
+    assert mod.cli_import(str(path), None) == 1
+    out, err = capsys.readouterr()
+    assert out.startswith(f"Imported from {_esc(ODD_NAME)}; ")
+    assert err == f"Error: nothing in {_esc(str(path))} can be applied; --import wrote nothing.\n"
+    # The --doh-templates conflict names the file the same way.
+    path = _write_named(tmp_path, {"Features": {}, "DnsMode": "off"}, "off " + ODD_NAME)
+    assert mod.cli_import(str(path), None, doh_templates="https://dns.example/dns-query") == 1
+    err = capsys.readouterr().err
+    assert err == ("Error: --doh-templates conflicts with DnsMode 'off' in "
+                   f"{_esc(str(path))}. Remove one of them.\n")
+    assert applied == []
+
+
+# The child loads a script, stubs Apply (it never writes anything) and runs
+# cli_import, printing to an ASCII stdout with strict errors.
+ASCII_CHILD = r"""
+import importlib.util
+import sys
+
+assert (sys.stdout.encoding, sys.stdout.errors) == ("ascii", "strict"), sys.stdout
+script, platform, target = sys.argv[1:4]
+real = sys.platform
+if platform:
+    sys.platform = platform
+try:
+    spec = importlib.util.spec_from_file_location("slimbrave_ascii_child", script)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+finally:
+    sys.platform = real
+mod.apply_policy = lambda rows, *args, **kwargs: (True, "Applied.")
+mod._is_profile_installed = lambda: False
+sys.exit(mod.cli_import(target, None))
+"""
+
+
+def _cli_on_an_ascii_stdout(script, platform, target, cwd):
+    """(exit code, stdout, stderr) of the child; output that is not ASCII
+    fails to decode."""
+    env = dict(os.environ, LC_ALL="C", PYTHONIOENCODING="ascii:strict", PYTHONUTF8="1")
+    proc = subprocess.run([sys.executable, "-c", ASCII_CHILD, str(ROOT / script), platform, target],
+                          cwd=cwd, env=env, capture_output=True, encoding="ascii", timeout=120)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+@pytest.mark.parametrize("script,platform", [
+    ("slimbrave-linux.py", ""), ("slimbrave-mac.py", ""), ("slimbrave-mac.py", "darwin"),
+], ids=MODULE_IDS)
+def test_cli_import_on_an_ascii_stdout_prints_the_file_name_escaped(tmp_path, script, platform):
+    """With LC_ALL=C and PYTHONIOENCODING=ascii, print() raised
+    UnicodeEncodeError on 'Imported from caf\u00e9.json' before anything was
+    applied, and a newline or an ESC in a name went to the terminal. The
+    child runs without root; Apply is a stub there."""
+    good = _write_named(tmp_path, {"Features": {"BraveRewardsDisabled": True, "NotAPolicy": 1}}, ODD_NAME)
+    rc, out, err = _cli_on_an_ascii_stdout(script, platform, str(good), str(tmp_path))
+    assert (rc, out, err) == (0, f"Imported from {_esc(ODD_NAME)}{UNKNOWN}NotAPolicy\nApplied.\n", "")
+    bad = _write_named(tmp_path, {"Features": {"NotAPolicy": 1}}, "x" + ODD_NAME)
+    rc, out, err = _cli_on_an_ascii_stdout(script, platform, str(bad), str(tmp_path))
+    assert (rc, out) == (1, f"Imported from {_esc(bad.name)}{UNKNOWN}NotAPolicy\n")
+    assert err == f"Error: nothing in {_esc(str(bad))} can be applied; --import wrote nothing.\n"
 
 
 @pytest.mark.parametrize("config,policy", [
@@ -1049,3 +1409,43 @@ def test_put_survives_a_nul_in_any_text(tui, monkeypatch):
     tui.draw(screen, rows, 1, 0, tui.FOCUS_BUTTONS, 0, "a\x00b", False, show_desc=True)
     assert screen.refused == 1
     assert len(screen.frames) == 1
+
+
+def test_the_tui_refuses_an_import_that_raises_recursion_error(tui, monkeypatch, tmp_path):
+    """The RecursionError used to escape curses.wrapper and end the TUI."""
+    path = _write(tmp_path, {"Features": {"BraveRewardsDisabled": True}})
+    monkeypatch.setattr(tui, "_enforce_groups", _recursion_error)
+    screen = _run_tui(tui, monkeypatch, tmp_path, _import_keys(path))
+    assert "Invalid config: nesting too deep" in "\n".join(screen.frames[-1])
+
+
+# A template the policy file holds reaches the field unchecked (Import
+# refuses a control character, policy-sync does not): line feed, carriage
+# return, tab, ESC, NEL, the two separators, then four bidi controls.
+HIDDEN = "\n\r\t\x1b\x85\u2028\u2029\u202a\u202e\u2066\u2069"
+
+
+def test_the_template_field_draws_control_and_bidi_characters_as_question_marks(tui, monkeypatch, tmp_path):
+    """A line feed moved the cursor and painted the rest of the template
+    over the list, a bidi control reordered the row. Printable non-ASCII,
+    an IDN host's, is drawn as it is; the cursor's character is masked too."""
+    monkeypatch.setattr(tui, "curses", _FakeCurses())
+    monkeypatch.setattr(tui, "_box_glyphs", tui.BOX_ASCII)
+    monkeypatch.setattr(tui, "_disclosure_glyphs", tui.DISCLOSURE_ASCII)
+    rows = tui.build_rows([_install(tui, tmp_path)])
+    tmpl = "https://a" + HIDDEN + "b.r\u00e9solveur.example/q"
+    tui.sync_rows_with_policy(rows, {"DnsOverHttpsMode": "secure", "DnsOverHttpsTemplates": tmpl})
+    assert tui.get_dns_mode(rows) == "custom" and tui.get_dns_template(rows) == tmpl
+    idx = next(i for i, r in enumerate(rows) if r["type"] == tui.ROW_DNS_TEMPLATE)
+    rows[idx]["cursor"] = tmpl.index("\n")      # the cursor on the line feed
+    vis = tui.visible_indices(rows)
+    screen = _GridScreen(24, 80)
+    tui.draw(screen, rows, idx, max(0, vis.index(idx) - 1), tui.FOCUS_LIST, 0, "", True,
+             show_desc=True)
+    frame = screen.frames[-1]
+    line = next(row for row in frame if "Template: [" in row)
+    shown = "https://a" + "?" * len(HIDDEN) + "b.r\u00e9solveur.example/q"
+    assert "Template: [" + shown + " " in line, repr(line)
+    assert not any(c in HIDDEN for row in frame for c in row)
+    start = line.index("Template: [") + len("Template: [")
+    assert line[start + tmpl.index("\n")] == "?"

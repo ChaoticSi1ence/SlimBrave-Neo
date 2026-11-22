@@ -451,13 +451,24 @@ def test_import_joins_a_template_list_with_spaces(mod, tmp_path):
     assert mod.get_dns_template(rows) == "https://a/dns-query https://b/dns-query"
 
 
-@pytest.mark.parametrize("tmpl", [False, 0, []], ids=["false", "zero", "empty-list"])
-def test_import_takes_a_falsy_template_as_none(mod, tmp_path, tmpl):
+@pytest.mark.parametrize("tmpl", [None, "", [], [""]], ids=["null", "empty", "empty-list", "list-of-empty"])
+def test_import_takes_an_empty_template_as_none(mod, tmp_path, tmpl):
     rows = mod.build_rows()
     ok, msg = mod.import_settings(rows, str(_write_json(tmp_path, {"Features": {}, "DnsTemplates": tmpl})))
     assert ok, msg
     assert mod.get_dns_template(rows) == ""
     assert mod.get_dns_mode(rows) == "unmanaged"
+
+
+@pytest.mark.parametrize("tmpl", [False, 0, {}], ids=["false", "zero", "object"])
+def test_import_refuses_a_template_that_is_not_text(mod, tmp_path, tmpl):
+    # SlimBrave.ps1 refuses these too (Read-ImportTemplate), so the same file
+    # fails on every platform instead of meaning "no template" on one.
+    rows = _preticked_rows(mod)
+    ok, msg = mod.import_settings(rows, str(_write_json(tmp_path, {"Features": {}, "DnsTemplates": tmpl})))
+    assert ok is False
+    assert msg == "Invalid config: DnsTemplates must be a string"
+    _assert_untouched(mod, rows)
 
 
 @pytest.mark.parametrize("text, expected", [
@@ -4586,7 +4597,7 @@ def test_ps1_engine_guards_are_wired_not_merely_defined():
 
     imp = text[text.index("function Import-PresetIntoState"):]
     imp = imp[:imp.index("\n}\n")]
-    assert "Compare-Object" in imp, "Import stages a list row without comparing its value"
+    assert "(Test-ImportSameList $wantList $mine)" in imp, "Import stages a list row without comparing its value"
     assert "Enforce-ExclusionGroups" in imp, "Import can stage two members of one exclusion group"
 
     sync = text[text.index("function Sync-FromRegistry"):]

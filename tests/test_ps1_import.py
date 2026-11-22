@@ -15,28 +15,51 @@ from test_slimbrave import ROOT, _ps1_embedded_presets, _ps1_feature_rows, _ps1_
 
 PS1 = ROOT / "SlimBrave.ps1"
 
+# A backslash and a u, for the \u escapes the PS1's regexes and escapers
+# spell out as text: written out with four hex digits in a Python string, one
+# would be read as the character itself.
+U = "\\" + "u"
+
 # The Import status after 'Imported from <file>', clause by clause in its
-# fixed order: lead, reason, and the list it names. The reasons are the
-# Python scripts' words; only the lead and the punctuation differ (Python:
+# fixed order: lead, reason, the list it names, and the kind that says how
+# Format-ImportEntry shows that list's entries. The reasons are the Python
+# scripts' words; only the lead and the punctuation differ (Python:
 # '; left unmanaged because <reason>: <items>'). The exclusion-group clause
 # follows these, in its old form.
 IMPORT_CLAUSES = [
-    ("Left unmanaged", "names are case-sensitive", "(@($script:importMiscased)+@($top.Case))"),
-    ("Left unmanaged", "the value is not one this policy accepts", "$script:importNotes"),
-    ("Left unmanaged", "no row sets that value", "$script:importUnwritten"),
-    ("Left unmanaged", "SlimBrave Neo no longer offers it", "$script:importRetired"),
-    ("Left unmanaged", "SlimBrave Neo does not offer it", "$script:importUnknown"),
-    ("Ignored", "it is not a SlimBrave Neo setting", "$top.Other"),
+    ("Left unmanaged", "names are case-sensitive", "(@($script:importMiscased)+@($top.Case))", "Case"),
+    ("Left unmanaged", "the value is not one this policy accepts", "$script:importNotes", "Item"),
+    ("Left unmanaged", "no row sets that value", "$script:importUnwritten", "Item"),
+    ("Left unmanaged", "SlimBrave Neo no longer offers it", "$script:importRetired", "Name"),
+    ("Left unmanaged", "SlimBrave Neo does not offer it", "$script:importUnknown", "Unknown"),
+    ("Ignored", "it is not a SlimBrave Neo setting", "$top.Other", "Name"),
 ]
 
-# The lists Import-PresetIntoState fills, one per clause it names.
-IMPORT_LISTS = ("importMiscased", "importNotes", "importUnwritten", "importRetired", "importUnknown")
+# The lists Import-PresetIntoState fills, one per clause it names, and the
+# type of their entries: the case list pairs each name with its spelling.
+IMPORT_LISTS = {"importMiscased": "object", "importNotes": "string", "importUnwritten": "string",
+                "importRetired": "string", "importUnknown": "string"}
+
+# What each clause's list is filled with, Add by Add: an item Format-ImportItem
+# made ($missed and $wrong hold only those), a name as the file wrote it,
+# Format-ImportValue's text for a legacy entry that is no string, or a pair of
+# a name and the spelling it needs. Read-ImportFields fills $Top's two.
+IMPORT_ADDS = {
+    "$script:importNotes": {"$wrong[$n]", "(Format-ImportItem 'DnsMode' $preset.dns)"},
+    "$script:importUnwritten": {"$missed[$n]"},
+    "$script:importMiscased": {"@($Name, $canon)"},
+    "$top.Case": {"@($n, $canon)"},
+    "$script:importRetired": {"$Name"},
+    "$script:importUnknown": {"$Name", "$shown"},
+    "$top.Other": {"$n"},
+}
 
 # Every function the import's naming goes through.
-IMPORT_FUNCTIONS = ("Import-PresetIntoState", "Add-ImportNameNote", "Get-ImportDnsHint",
-                    "Get-ImportCanonical", "Read-ImportFields", "Format-ImportText",
-                    "Format-ImportString", "Format-ImportName", "Format-ImportValue",
-                    "Format-ImportItem", "Get-ImportClause")
+IMPORT_FUNCTIONS = ("Import-PresetIntoState", "Test-ImportSameList", "Add-ImportNameNote",
+                    "Get-ImportDnsHint", "Get-ImportCanonical", "Read-ImportFields",
+                    "Read-ImportTemplate", "Format-ImportText", "Format-ImportString",
+                    "Format-ImportName", "Format-ImportValue", "Format-ImportItem",
+                    "Format-ImportFileName", "Format-ImportEntry", "Get-ImportClause")
 
 
 def _imp():
@@ -126,10 +149,30 @@ def test_ps1_import_matches_values_in_exact_case():
     scripts' == compares them: "DISABLE_NON_PROXIED_UDP", which Chromium's
     strcmp enum check refuses, or ["HTTPS://*", "HTTP://*"] no longer ticks
     a row, and neither does a list whose entries are not strings (a nested
-    ["*"] used to pass the [string] cast)."""
+    ["*"] used to pass the [string] cast). A list compares ordinally, as
+    Python's sorted() and == do: Compare-Object went by the current
+    culture, which skips ignorable characters, so "https://*" with a soft
+    hyphen (U+00AD) in it ticked Disable Brave Shields."""
+    live = _ps1_live()
     imp = _imp()
-    assert "$strings -and -not (Compare-Object -CaseSensitive $wantList $mine)" in imp
-    assert "Compare-Object $wantList" not in imp
+    assert "$strings -and (Test-ImportSameList $wantList $mine)) {" in imp
+    for name in IMPORT_FUNCTIONS:
+        assert "Compare-Object" not in _ps1_function(live, name), name
+    same = _ps1_function(live, "Test-ImportSameList")
+    steps = [same.index(s) for s in (
+        "function Test-ImportSameList([string[]]$Want, [string[]]$Mine) {",
+        "if ($Want.Length -ne $Mine.Length) { return $false }",
+        "$a = [string[]]$Want.Clone()",
+        "$b = [string[]]$Mine.Clone()",
+        "[Array]::Sort($a, [System.StringComparer]::Ordinal)",
+        "[Array]::Sort($b, [System.StringComparer]::Ordinal)",
+        "for ($i = 0; $i -lt $a.Length; $i++) {",
+        "if (-not [string]::Equals($a[$i], $b[$i], [System.StringComparison]::Ordinal)) { return $false }",
+        "return $true",
+    )]
+    assert steps == sorted(steps)
+    for op in ("-eq ", "-ceq", "-ieq", "-contains", "-like", "Sort-Object"):
+        assert op not in same, op
     assert "if (-not ($x -is [string])) { $strings = $false }" in imp
     assert ("[string]::Equals([string](ConvertTo-RegValue $want), [string](ConvertTo-RegValue $row.value), "
             "[System.StringComparison]::Ordinal)") in imp
@@ -171,22 +214,35 @@ def test_ps1_import_names_every_key_no_row_reads():
     declined). A name that differs from a row's key only in letter case
     carries the spelling it needs; a retired key is named as no longer
     offered; anything else as not offered, with where a DNS name belongs. A
-    legacy entry that is not a string is named by its value."""
+    legacy entry that is not a string is named by its value, once per value
+    text as the Python scripts name it: [5, 5, null, null] names 5 and null
+    once each. Its set is not the names' set, so a string "5" and a number
+    5 are both named, as there."""
     live = _ps1_live()
     imp = _ps1_function(live, "Import-PresetIntoState")
     legacy = _legacy(imp)
     assert "if (-not $rowKeys.Contains($n)) { Add-ImportNameNote $n $rowFold $retired }" in legacy
-    assert "$shown = Format-ImportValue $n" in legacy
-    assert "if ($null -ne $shown) { $script:importUnknown.Add($shown) }" in legacy
+    assert ("$shownValues = [System.Collections.Generic.HashSet[string]]::new("
+            "[System.StringComparer]::Ordinal)") in legacy
+    steps = [legacy.index(s) for s in (
+        "$shown = Format-ImportValue $n",
+        "if (($null -ne $shown) -and $shownValues.Add($shown)) { $script:importUnknown.Add($shown) }",
+    )]
+    assert steps == sorted(steps)
+    assert "$names.Add($shown)" not in legacy and "$shownValues.Add($n)" not in legacy
     note = _ps1_function(live, "Add-ImportNameNote")
     steps = [note.index(s) for s in ("$canon = Get-ImportCanonical $Name $RowFold",
+                                     "$script:importMiscased.Add(@($Name, $canon))",
                                      "} elseif ($Retired.Contains($Name)) {",
-                                     "$hint = Get-ImportDnsHint $Name")]
+                                     "$script:importRetired.Add($Name)",
+                                     "} else { $script:importUnknown.Add($Name) }")]
     assert steps == sorted(steps)
-    assert "$script:importMiscased.Add((Format-ImportName $Name) + ' (use ' + $canon + ')')" in note
-    assert "$script:importRetired.Add((Format-ImportName $Name))" in note
-    assert "if ($null -ne $hint) { $item = $item + ' (' + $hint + ')' }" in note
-    assert "$script:importUnknown.Add($item)" in note
+    # Where a DNS name belongs is added when the clause is shown.
+    entry = _ps1_function(live, "Format-ImportEntry")
+    steps = [entry.index(s) for s in ("if ([string]::Equals($Kind, 'Unknown', [System.StringComparison]::Ordinal)) {",
+                                      "$hint = Get-ImportDnsHint $Entry",
+                                      "if ($null -ne $hint) { $item = $item + ' (' + $hint + ')' }")]
+    assert steps == sorted(steps)
     hints = re.findall(r"\[string\]::Equals\(\$Name, '(\w+)', \[System\.StringComparison\]::Ordinal\)\) "
                        r"\{ return '([^']*)' \}", _ps1_function(live, "Get-ImportDnsHint"))
     assert dict(hints) == {"DnsOverHttpsMode": "use DnsMode", "DnsOverHttpsTemplates": "use DnsTemplates",
@@ -213,9 +269,11 @@ def test_ps1_import_reads_the_three_fields_in_exact_case():
     assert "$cfg.DnsMode" not in handler and "$cfg.DnsTemplates" not in handler
     assert "$cfg.PSObject.Properties['Features']" not in handler
     try_at = handler.index("try{")
-    assert handler.index("$top=@{Case=[System.Collections.Generic.List[string]]::new(); "
+    # Case holds pairs of a name and its spelling; Other holds names.
+    assert handler.index("$top=@{Case=[System.Collections.Generic.List[object]]::new(); "
                          "Other=[System.Collections.Generic.List[string]]::new(); Found=\"\"}") < try_at
     assert handler.index("$dupWhy=$null") < try_at
+    assert handler.index("$failWhy=$null") < try_at
     guard_at = handler.index("if(-not ($cfg -is")
     assert handler.index("$field=Read-ImportFields $cfg $top") < guard_at
     guard = handler[guard_at:handler.index('throw "no Features block"')]
@@ -223,29 +281,30 @@ def test_ps1_import_reads_the_three_fields_in_exact_case():
     assert guard.index("$field.ContainsKey('Features')") < guard.index("$cfg.Features"), (
         "$cfg.Features is read before Features is known to be spelled exactly")
     assert ("Import-PresetIntoState @{features=$cfg.Features;dns=$field['DnsMode'];"
-            "tmpl=$field['DnsTemplates']}") in handler
+            "tmpl=$template.Text}") in handler
     fields = _ps1_function(_ps1_live(), "Read-ImportFields")
     for line in ("foreach ($f in @('Features', 'DnsMode', 'DnsTemplates')) { $fold.Add($f, $f) }",
                  "if ($fold.ContainsKey($n) -and [string]::Equals($fold[$n], $n, "
                  "[System.StringComparison]::Ordinal)) {",
                  "$canon = Get-ImportCanonical $n $fold",
-                 "$Top.Case.Add((Format-ImportName $n) + ' (use ' + $canon + ')')",
+                 "$Top.Case.Add(@($n, $canon))",
                  "if ([string]::Equals($canon, 'Features', [System.StringComparison]::Ordinal)) "
                  "{ $Top.Found = $n }",
-                 "} else { $Top.Other.Add((Format-ImportName $n)) }"):
+                 "} else { $Top.Other.Add($n) }"):
         assert line in fields, line
 
 
 def test_ps1_import_status_names_each_class_in_order():
     """One clause per class, in the fixed order and the reason words the
-    Python scripts use, after the unchanged lead. 'imported' is gone from the
-    value reason. A mis-cased name inside Features comes before one at the
-    top level. The exclusion-group clause is last and unchanged."""
+    Python scripts use, after the lead. 'imported' is gone from the value
+    reason. A mis-cased name inside Features comes before one at the top
+    level. The exclusion-group clause is last and unchanged."""
     handler = _handler()
     ok = handler[handler.index("if($ok){"):handler.index("} else {", handler.index("Set-Status $msg"))]
-    clauses = re.findall(r"^\s*\$msg\+=Get-ImportClause '([^']*)' '([^']*)' (.+?)\s*$", ok, re.MULTILINE)
+    clauses = re.findall(r"^\s*\$msg\+=Get-ImportClause '([^']*)' '([^']*)' (.+?) '(\w+)'\s*$", ok, re.MULTILINE)
     assert clauses == IMPORT_CLAUSES
-    lead = ok.index('$msg="Imported from $([System.IO.Path]::GetFileName($dlg.FileName))"')
+    assert ok.count("$msg+=Get-ImportClause") == len(IMPORT_CLAUSES)
+    lead = ok.index('$msg="Imported from "+(Format-ImportFileName ([System.IO.Path]::GetFileName($dlg.FileName)))')
     groups = ok.index('$msg+=" Left unmanaged, because it is mutually exclusive with another imported row: "'
                       '+(($script:importConflicts | Sort-Object -Unique) -join ", ")+"."')
     assert lead < ok.index("$msg+=Get-ImportClause") < ok.index("$msg+=Get-ImportClause 'Ignored'") < groups
@@ -255,17 +314,26 @@ def test_ps1_import_status_names_each_class_in_order():
 def test_ps1_import_clause_has_the_python_shape():
     """' <Lead>, because <reason>: a, b, c, d, e and 3 more.' - five items at
     most, as in the Python scripts, so a file naming a thousand keys cannot
-    bury the other clauses, and nothing at all when the list is empty."""
+    bury the other clauses, and nothing at all when the list is empty. Only
+    the items shown are formatted; the rest are counted, so the count
+    behind ' and N more' is every entry the list holds."""
     live = _ps1_live()
     assert re.search(r"^\$script:IMPORT_MAX_ITEMS = 5$", live, re.MULTILINE)
     clause = _ps1_function(live, "Get-ImportClause")
-    for line in ("if ($null -eq $Items) { return '' }",
-                 "if ($all.Count -eq 0) { return '' }",
-                 "$shown = [math]::Min($all.Count, $script:IMPORT_MAX_ITEMS)",
-                 "$text = ' ' + $Lead + ', because ' + $Reason + ': ' + ($all[0..($shown - 1)] -join ', ')",
-                 "if ($all.Count -gt $shown) { $text += ' and ' + ($all.Count - $shown) + ' more' }",
-                 "return $text + '.'"):
-        assert line in clause, line
+    steps = [clause.index(s) for s in (
+        "function Get-ImportClause([string]$Lead, [string]$Reason, $Items, [string]$Kind) {",
+        "if ($null -eq $Items) { return '' }",
+        "$all = @($Items)",
+        "if ($all.Count -eq 0) { return '' }",
+        "$shown = [math]::Min($all.Count, $script:IMPORT_MAX_ITEMS)",
+        "$parts = [System.Collections.Generic.List[string]]::new()",
+        "for ($i = 0; $i -lt $shown; $i++) { $parts.Add((Format-ImportEntry $Kind $all[$i])) }",
+        "$text = ' ' + $Lead + ', because ' + $Reason + ': ' + ($parts -join ', ')",
+        "if ($all.Count -gt $shown) { $text += ' and ' + ($all.Count - $shown) + ' more' }",
+        "return $text + '.'",
+    )]
+    assert steps == sorted(steps)
+    assert clause.count("Format-Import") == 1 and "foreach" not in clause and "$all[0..(" not in clause
 
 
 def test_ps1_import_escapes_by_the_one_rule():
@@ -310,47 +378,73 @@ def test_ps1_import_escapes_by_the_one_rule():
 
 
 def test_ps1_import_shows_file_text_only_through_the_escaper():
-    """Nothing from the file reaches a list unescaped: the old
+    """Nothing from the file reaches the status unescaped: the old
     "$($row.key)=$want" and "DnsMode=$want" items echoed raw text, a newline
-    or a bidi override included. Every append to a clause's list takes an
-    item a Format-Import* function made."""
+    or a bidi override included. A clause's list holds either items
+    Format-ImportItem made, which the clause's kind 'Item' shows as they
+    are, or the file's names as it wrote them, which every other kind shows
+    through Format-ImportName when the status is built. A spelling a pair
+    carries is a known name, from a fold's values."""
     live = _ps1_live()
     imp = _ps1_function(live, "Import-PresetIntoState")
     assert '"$($row.key)=$want"' not in imp and "DnsMode=$want" not in imp
     assert "$script:importNotes.Add((Format-ImportItem 'DnsMode' $preset.dns))" in imp
-    allowed = {
-        "$shown", "$missed[$n]", "$wrong[$n]", "$item",
-        "(Format-ImportItem 'DnsMode' $preset.dns)",
-        "(Format-ImportName $Name) + ' (use ' + $canon + ')'",
-        "(Format-ImportName $Name)",
-        "(Format-ImportName $n) + ' (use ' + $canon + ')'",
-        "(Format-ImportName $n)",
-    }
-    adds = list(re.finditer(r"(?:\$script:(?:" + "|".join(IMPORT_LISTS) + r")|\$Top\.(?:Case|Other))"
+    adds = list(re.finditer(r"(\$script:(?:" + "|".join(IMPORT_LISTS) + r")|\$Top\.(?:Case|Other))"
                             r"\.Add\((.*)\)\s*\}?\s*$", live, re.MULTILINE))
     # Import-PresetIntoState 4, Add-ImportNameNote 3, Read-ImportFields 2.
     assert len(adds) == 9
+    seen = {}
     for m in adds:
-        assert m.group(1) in allowed, m.group(0)
+        target = m.group(1).replace("$Top.", "$top.")
+        assert m.group(2) in IMPORT_ADDS[target], m.group(0)
         assert _function_at(live, m.start()) in ("Import-PresetIntoState", "Add-ImportNameNote",
                                                  "Read-ImportFields"), m.group(0)
-    # $missed, $wrong and $item hold only escaped items.
+        seen.setdefault(target, set()).add(m.group(2))
+    assert seen == IMPORT_ADDS
+    # $missed and $wrong hold only escaped items.
     assert not re.search(r"\$(?:missed|wrong)\[\$row\.key\] = (?!Format-ImportItem )", imp)
-    note = _ps1_function(live, "Add-ImportNameNote")
-    assert "$item = Format-ImportName $Name" in note
+    # The kind 'Item' only for lists every Add of which is a made item.
+    made = {"$wrong[$n]", "$missed[$n]", "(Format-ImportItem 'DnsMode' $preset.dns)"}
+    for _, _, items, kind in IMPORT_CLAUSES:
+        lists = re.findall(r"\$(?:script|top)[:.]\w+", items)
+        assert lists and all(x in IMPORT_ADDS for x in lists), items
+        assert (kind == "Item") == all(IMPORT_ADDS[x] <= made for x in lists), items
+        assert (kind == "Case") == all(a.startswith("@(") for x in lists for a in IMPORT_ADDS[x]), items
+    entry = _ps1_function(live, "Format-ImportEntry")
+    steps = [entry.index(s) for s in (
+        "function Format-ImportEntry([string]$Kind, $Entry) {",
+        "if ([string]::Equals($Kind, 'Item', [System.StringComparison]::Ordinal)) { return [string]$Entry }",
+        "if ([string]::Equals($Kind, 'Case', [System.StringComparison]::Ordinal)) {\n"
+        "        return (Format-ImportName $Entry[0]) + ' (use ' + $Entry[1] + ')'",
+        "$item = Format-ImportName $Entry",
+        "return $item",
+    )]
+    assert steps == sorted(steps)
+    # The spelling is a fold's value: a row key or one of the three fields.
+    canon = _ps1_function(live, "Get-ImportCanonical")
+    assert "if ($Fold.ContainsKey($Name)) { return $Fold[$Name] }" in canon
+    assert "$rowFold.Add($row.key, $row.key)" in imp
 
 
 def test_ps1_import_lists_are_made_before_use():
-    """Each clause's list is a fresh List[string] before anything is staged
-    or named. A List takes .Add; += on one silently turns it into an array,
-    and += onto $null joins strings, so no import list is ever +='d. The
-    handler's own collections exist before its try, so a failed read never
-    leaves a previous import's names behind."""
+    """Each clause's list is a fresh List before anything is staged or
+    named: a List[object] for the case list, whose entries are pairs (a
+    List[string] would join a pair into one string, silently), and a
+    List[string] for the rest. A List takes .Add; += on one silently turns
+    it into an array, and += onto $null joins strings, so no import list is
+    ever +='d. The handler's own collections exist before its try, so a
+    failed read never leaves a previous import's names behind."""
     live = _ps1_live()
     imp = _ps1_function(live, "Import-PresetIntoState")
     first = imp.index("$feat = $preset.features")
-    for name in IMPORT_LISTS:
-        assert imp.index(f"$script:{name} = [System.Collections.Generic.List[string]]::new()") < first, name
+    for name, held in IMPORT_LISTS.items():
+        assert imp.index(f"$script:{name} = [System.Collections.Generic.List[{held}]]::new()") < first, name
+    # Exactly the lists filled with pairs are List[object]; the handler makes
+    # $top's two (test_ps1_import_reads_the_three_fields_in_exact_case).
+    held = dict(IMPORT_LISTS, Case="object", Other="string")
+    for target, adds in IMPORT_ADDS.items():
+        name = re.split(r"[:.]", target)[-1]
+        assert (held[name] == "object") == all(a.startswith("@(") for a in adds), target
     assert not re.search(r"\$script:import(?:Miscased|Notes|Unwritten|Retired|Unknown)\s*\+=", live)
     for m in re.finditer(r"\$script:(" + "|".join(IMPORT_LISTS) + r")\s*=", live):
         assert _function_at(live, m.start()) == "Import-PresetIntoState", m.group(0)
@@ -379,10 +473,217 @@ def test_ps1_import_says_why_a_case_only_duplicate_fails():
         "if($null -ne $dupWhy){",
         '$why="keys differ only in letter case"',
         'if($dupWhy){ $why+=": "+(Format-ImportText $dupWhy 300) }',
+        "} elseif($failWhy){\n                            $why=$failWhy\n",
         '} elseif($top.Found){ $why+=" (found "+(Format-ImportName $top.Found)+"; names are case-sensitive)" }',
         'Set-Status "Import failed - $why"',
     )]
     assert steps == sorted(steps)
+
+
+def test_ps1_import_says_a_key_is_empty():
+    """Windows PowerShell 5.1 cannot read a file with a key "" at any depth.
+    Its ConvertFrom-Json (PopulateFromDictionary in the non-CoreCLR
+    JsonObject.cs) looks each key up in PSObject.Properties[...], whose
+    indexer throws PSTraceSource.NewArgumentException("name"): a
+    PSArgumentException, error id Argument, which CmdletInvocationException
+    keeps (FullyQualifiedErrorId Argument,...ConvertFromJsonCommand). The
+    catch knows it by all three - the id on ConvertFrom-Json, the type and
+    its parameter - before the restore loop, and the status says 'Import
+    failed - a key is empty' instead of 'not a SlimBrave config'. Read from
+    source; owed to a Windows run."""
+    live = _ps1_live()
+    handler = live[live.index('"Import" {'):]
+    catch = re.search(r"\} catch \{((?:[^{}]|\{[^{}]*\})*)\}", handler[handler.index("$ok=$true"):])
+    body = catch.group(1)
+    empty = ("if(([string]$_.FullyQualifiedErrorId -like 'Argument,*.ConvertFromJsonCommand') -and\n"
+             "                           ($_.Exception -is [System.Management.Automation.PSArgumentException]) -and\n"
+             "                           [string]::Equals([string]$_.Exception.ParamName, 'name', "
+             "[System.StringComparison]::Ordinal)){ $failWhy=\"a key is empty\" }")
+    assert empty in body
+    dup = "if([string]$_.FullyQualifiedErrorId -like 'DuplicateKeysInJsonString,*')"
+    assert body.index(dup) < body.index(empty) < body.index("foreach($id in @($snap.Keys))")
+    assert body.count("$failWhy=") == 1
+
+
+def test_ps1_import_reads_a_dns_mode_as_the_python_scripts_do():
+    """A DnsMode counts unless it is missing, null or "". PowerShell's own
+    truth test took [0] for no mode and {} for one, where the Python
+    scripts differ; now false, 0, a list or an object is a value that names
+    no mode, so it is named (DnsMode=false, DnsMode) and DNS stays
+    unmanaged. The mode word matches ignoring case, OrdinalIgnoreCase on
+    printable ASCII only, as Python's .lower() matches the ASCII words: -eq
+    compared linguistically, and "se" + U+00AD + "cure" set secure DNS."""
+    imp = _imp()
+    dns = imp[imp.index('$script:dnsState.Tmpl = ""'):imp.index("Enforce-ExclusionGroups")]
+    assert "if ($preset.dns) {" not in dns and "$_ -eq $want" not in dns
+    steps = [dns.index(s) for s in (
+        "if (($null -ne $preset.dns) -and -not (($preset.dns -is [string]) -and ($preset.dns.Length -eq 0))) {",
+        "if (($preset.dns -is [string]) -and ($want -cmatch '^[\\x20-\\x7E]*\\z')) {",
+        "$canon = @($script:dnsModes | Where-Object { [string]::Equals($_, $want, "
+        "[System.StringComparison]::OrdinalIgnoreCase) })",
+        "$script:dnsState.Mode = [Array]::IndexOf($script:dnsModes, $canon[0])",
+        "} else { $script:importNotes.Add((Format-ImportItem 'DnsMode' $preset.dns)) }",
+        "} elseif ($script:dnsState.Tmpl) {",
+    )]
+    assert steps == sorted(steps)
+    # The same printable-ASCII gate as the names' (Get-ImportCanonical).
+    gate = "-cmatch '^[\\x20-\\x7E]*\\z'"
+    assert gate in _ps1_function(_ps1_live(), "Get-ImportCanonical")
+
+
+def test_ps1_import_reads_dns_templates_as_the_python_scripts_do():
+    """DnsTemplates: missing, null or "" is no template, a string is the
+    template, an array of strings is joined with spaces. Anything else
+    passed a [string] cast (5 became the template "5", [0] too), and is now
+    refused with the Python scripts' reason, as is a template with a
+    control character (C0, DEL, C1, U+2028, U+2029). The refusal comes
+    after the Features check and before any row is touched, and the status
+    says it."""
+    live = _ps1_live()
+    tmpl = _ps1_function(live, "Read-ImportTemplate")
+    ctl = "'[\\x00-\\x1F\\x7F-\\x9F" + U + "2028" + U + "2029]'"
+    steps = [tmpl.index(s) for s in (
+        "function Read-ImportTemplate($Value) {",
+        "$text = $Value",
+        "if ($Value -is [array]) {",
+        "if (-not ($x -is [string])) { return @{ Text = ''; Why = 'DnsTemplates must be a string' } }",
+        "$text = $parts -join ' '",
+        "if ($null -eq $text) { return @{ Text = ''; Why = $null } }",
+        "if (-not ($text -is [string])) { return @{ Text = ''; Why = 'DnsTemplates must be a string' } }",
+        "if ($text -cmatch " + ctl + ") {",
+        "return @{ Text = ''; Why = 'DnsTemplates contains a control character' }",
+        "return @{ Text = $text; Why = $null }",
+    )]
+    assert steps == sorted(steps)
+    # .NET and Python read these escapes alike: the class is exactly the
+    # control characters, over every UTF-16 code unit.
+    cls = re.compile(ctl.strip("'"))
+    want = {c for c in range(0x10000) if c < 0x20 or 0x7F <= c <= 0x9F or c in (0x2028, 0x2029)}
+    assert {c for c in range(0x10000) if cls.search(chr(c))} == want
+    handler = _handler()
+    steps = [handler.index(s) for s in (
+        'throw "no Features block"',
+        "$template=Read-ImportTemplate $field['DnsTemplates']",
+        "if($null -ne $template.Why){ $failWhy=$template.Why; throw $failWhy }",
+        "Import-PresetIntoState @{features=$cfg.Features;dns=$field['DnsMode'];tmpl=$template.Text}",
+        "} elseif($failWhy){\n                            $why=$failWhy\n",
+    )]
+    assert steps == sorted(steps)
+    assert "tmpl=$field['DnsTemplates']" not in handler
+    # What Import-PresetIntoState is handed is a string, which it takes as is.
+    assert "if ($preset.tmpl) { $script:dnsState.Tmpl = [string]$preset.tmpl }" in _imp()
+
+
+def test_ps1_import_lead_escapes_the_file_name():
+    """The lead names the file by the Python scripts' rule: each UTF-16
+    code unit outside printable ASCII as \\uXXXX in uppercase hex, no quotes
+    added and nothing cut. A Windows file name can carry a bidi override
+    (U+202E), which reordered the whole status bar; it cannot carry a quote
+    or a backslash, so those need no rule here."""
+    live = _ps1_live()
+    name = _ps1_function(live, "Format-ImportFileName")
+    steps = [name.index(s) for s in (
+        "function Format-ImportFileName([string]$Name) {",
+        "$sb = [System.Text.StringBuilder]::new()",
+        "for ($i = 0; $i -lt $Name.Length; $i++) {",
+        "$ch = $Name[$i]",
+        "$code = [int]$ch",
+        "if (($code -lt 0x20) -or ($code -gt 0x7E)) {\n"
+        "            [void]$sb.Append('" + U + "' + $code.ToString('X4'))",
+        "} else { [void]$sb.Append([string]$ch) }",
+        "return $sb.ToString()",
+    )]
+    assert steps == sorted(steps)
+    assert "Substring" not in name and "-le $Max" not in name and "'\"'" not in name
+    handler = _handler()
+    assert ('$msg="Imported from "+(Format-ImportFileName '
+            '([System.IO.Path]::GetFileName($dlg.FileName)))') in handler
+    assert "Imported from $(" not in handler
+
+
+def test_ps1_import_formats_only_the_names_it_shows():
+    """A file can name a hundred thousand keys, and Windows PowerShell 5.1
+    pays for every script-function call on the UI thread. The lists keep
+    names as the file wrote them: nothing escapes a name or looks up a DNS
+    hint while they fill, only Get-ImportClause for the first
+    $script:IMPORT_MAX_ITEMS of each clause, as the Python scripts store
+    raw names and format five. A legacy value is the exception: its text
+    is what it is de-duplicated by, as there."""
+    live = _ps1_live()
+    for name in ("Add-ImportNameNote", "Read-ImportFields"):
+        body = _ps1_function(live, name)
+        assert "Format-Import" not in body and "Get-ImportDnsHint" not in body, name
+    imp = _ps1_function(live, "Import-PresetIntoState")
+    assert _legacy(imp).count("Format-Import") == 1
+    tail = imp[imp.index("foreach ($p in $feat.PSObject.Properties)"):imp.index("$script:dnsState.Mode = 0")]
+    assert "Format-Import" not in tail and "Get-ImportDnsHint" not in tail
+    calls = [m.start() for m in re.finditer(r"(?<!function )\bFormat-ImportEntry\b", live)]
+    assert [_function_at(live, c) for c in calls] == ["Get-ImportClause"]
+
+
+def test_ps1_import_shows_a_legacy_value_as_its_text():
+    """A legacy entry that is no string waits in importUnknown as the text
+    Format-ImportValue gives it, beside the names, and comes out of
+    Format-ImportEntry's 'Unknown' as it went in: true, false, null and any
+    Int64 in decimal look like a policy name to Format-ImportName, and no
+    DNS hint is for one of them."""
+    live = _ps1_live()
+    name = _ps1_function(live, "Format-ImportName")
+    pattern = re.search(r"\$Name -cmatch '([^']*)'", name).group(1)
+    assert pattern == "^[A-Za-z0-9_.-]{1,64}\\z"
+    plain = re.compile(pattern.replace("\\z", "\\Z"))
+    for text in ("true", "false", "null", "0", "-1", str(2**63 - 1), str(-2**63)):
+        assert plain.match(text), text
+    hints = re.findall(r"\[string\]::Equals\(\$Name, '(\w+)'", _ps1_function(live, "Get-ImportDnsHint"))
+    assert len(hints) == 4 and not any(plain.match(h) is None for h in hints)
+    assert not {"true", "false", "null"} & set(hints) and not any(h.lstrip("-").isdigit() for h in hints)
+    value = _ps1_function(live, "Format-ImportValue")
+    for line in ("if ($null -eq $Value) { return 'null' }",
+                 "if ($Value) { return 'true' }",
+                 "return 'false'",
+                 "$digits = $Value.ToString([System.Globalization.CultureInfo]::InvariantCulture)"):
+        assert line in value, line
+
+
+def test_ps1_import_takes_an_integer_past_int64_for_a_fraction():
+    """Windows PowerShell 5.1's ConvertFrom-Json reads an integer as an
+    [int], then a [long], then a [decimal] or a [double]. Only [int] and
+    [long] are integers anywhere in Import, so 2**63 and beyond is named by
+    its key alone under 'the value is not one this policy accepts', and a
+    legacy entry of one is left out, as the Python scripts now treat an
+    integer outside 64 bits."""
+    live = _ps1_live()
+    imp = _ps1_function(live, "Import-PresetIntoState")
+    value = _ps1_function(live, "Format-ImportValue")
+    for body in (imp, value):
+        for t in ("[decimal]", "[double]", "[single]", "[float]", "[bigint]", "BigInteger", "[ValueType]"):
+            assert t not in body, t
+    assert set(re.findall(r"\$want -is \[(\w+)\]", imp)) == {"int", "long", "bool", "string", "array"}
+    for line in ("$ok = ($want -is [int] -or $want -is [long])",
+                 "$fits = (($want -is [int]) -or ($want -is [long]))",
+                 "$fits = (($want -is [bool]) -or ($want -is [int]) -or ($want -is [long]))"):
+        assert line in imp, line
+    assert "if (($Value -is [int]) -or ($Value -is [long])) {" in value
+    # Anything the type checks refuse is named by Format-ImportItem, which
+    # shows the key alone where Format-ImportValue gives $null.
+    assert "if ($null -eq $shown) { return (Format-ImportName $Key) }" in _ps1_function(live, "Format-ImportItem")
+
+
+def test_ps1_import_puts_features_items_before_the_top_level():
+    """Inside a clause, items keep file order, Features first: the Features
+    keys (or legacy entries), then the DnsMode note, then the other
+    top-level fields - the order the Python scripts now walk. The
+    exclusion-group clause stays sorted and is never capped."""
+    live = _ps1_live()
+    imp = _ps1_function(live, "Import-PresetIntoState")
+    assert (imp.index("foreach ($n in $feat)") < imp.index("foreach ($p in $feat.PSObject.Properties)")
+            < imp.index("$script:importNotes.Add((Format-ImportItem 'DnsMode' $preset.dns))"))
+    handler = _handler()
+    ok = handler[handler.index("if($ok){"):]
+    assert "(@($script:importMiscased)+@($top.Case))" in ok
+    groups = ok[ok.index("if($script:importConflicts.Count -gt 0){"):ok.index("Set-Status $msg")]
+    assert '(($script:importConflicts | Sort-Object -Unique) -join ", ")' in groups
+    assert "Get-ImportClause" not in groups and "IMPORT_MAX_ITEMS" not in groups
 
 
 def _ps1_row_takes(rows, int_enum, key, want):

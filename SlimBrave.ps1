@@ -1468,14 +1468,18 @@ $script:intEnumKeys = @(
 
 function Import-PresetIntoState($preset) {
     # What the Import status names besides the exclusion groups, one list per
-    # clause, each in the file's order and already made safe to show (the
-    # Format-Import* functions): names in the wrong letter case, values outside
-    # their policy's JSON type (importNotes, the clause that came first),
-    # values of the right type that no row sets, keys an earlier version
-    # offered, and keys SlimBrave Neo does not offer. Lists, not arrays: +=
-    # copies the whole array, and a file can name thousands of keys. Nothing
-    # named in any of them is staged.
-    $script:importMiscased = [System.Collections.Generic.List[string]]::new()
+    # clause, each in the file's order: names in the wrong letter case (each
+    # a pair of the name and the spelling it needs, so a List[object]),
+    # values outside their policy's JSON type (importNotes, the clause that
+    # came first), values of the right type that no row sets, keys an
+    # earlier version offered, and keys SlimBrave Neo does not offer. A name
+    # is kept as the file wrote it: only the few a clause shows are made safe
+    # to show, when the status is built (Get-ImportClause), as the Python
+    # scripts do, since a file can name a hundred thousand keys. A value
+    # item is made safe here (Format-ImportItem); there is at most one per
+    # row key. Lists, not arrays: += copies the whole array. Nothing named
+    # in any of them is staged.
+    $script:importMiscased = [System.Collections.Generic.List[object]]::new()
     $script:importNotes = [System.Collections.Generic.List[string]]::new()
     $script:importUnwritten = [System.Collections.Generic.List[string]]::new()
     $script:importRetired = [System.Collections.Generic.List[string]]::new()
@@ -1504,18 +1508,22 @@ function Import-PresetIntoState($preset) {
         # Only a JSON string names a key. A [string] cast made one out of
         # anything: a nested ["BraveRewardsDisabled"] ticked its row, and a
         # number or null matched nothing and went unmentioned. An entry that
-        # is not a row's key is named in file order: a name by its class
-        # (Add-ImportNameNote), anything else by its value (5, null, true).
-        # A list, an object or a fraction has no text that both languages
-        # print alike (Format-ImportValue), so it is left out.
+        # is not a row's key is named once, in file order: a name by its
+        # class (Add-ImportNameNote), anything else by its value (5, null,
+        # true), as the Python scripts name it, once per text. That text is
+        # Format-ImportValue's, which Format-ImportName shows as it is, so
+        # it waits in importUnknown beside the names. A list, an object or a
+        # fraction has no text that both languages print alike, so it is
+        # left out. A string "5" and a number 5 are two entries, as there.
         $names = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        $shownValues = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         foreach ($n in $feat) {
             if ($n -is [string]) {
                 if (-not $names.Add($n)) { continue }
                 if (-not $rowKeys.Contains($n)) { Add-ImportNameNote $n $rowFold $retired }
             } else {
                 $shown = Format-ImportValue $n
-                if ($null -ne $shown) { $script:importUnknown.Add($shown) }
+                if (($null -ne $shown) -and $shownValues.Add($shown)) { $script:importUnknown.Add($shown) }
             }
         }
         # First row per KEY wins. Several keys carry two rows with opposite
@@ -1590,15 +1598,16 @@ function Import-PresetIntoState($preset) {
             # this row, and Apply then writes SlimBrave's own wildcard - turning
             # one site into the whole web. Only a JSON array is a list: a bare
             # "*" is named, not taken for ["*"]. Its entries match only as
-            # JSON strings in their exact letter case, as the Python scripts'
-            # == compares them; a list that is not SlimBrave's is a value no
-            # row sets, since the policy itself would take it.
+            # JSON strings, ordinally, as the Python scripts' sorted() and ==
+            # compare them (Test-ImportSameList); a list that is not
+            # SlimBrave's is a value no row sets, since the policy itself
+            # would take it.
             $fits = ($want -is [array])
             $strings = $true
             $wantList = @(); foreach ($x in @($want)) { if (-not ($x -is [string])) { $strings = $false }; $wantList += [string]$x }
             $mine = @();     foreach ($x in $row.value) { $mine += [string]$x }
             if ($fits -and $wantList.Count -eq $mine.Count -and
-                $strings -and -not (Compare-Object -CaseSensitive $wantList $mine)) {
+                $strings -and (Test-ImportSameList $wantList $mine)) {
                 $script:state[$row.Id].On = $true
                 [void]$taken.Add($row.key)
             } elseif ($fits) {
@@ -1645,16 +1654,25 @@ function Import-PresetIntoState($preset) {
     $script:dnsState.Mode = 0
     $script:dnsState.Tmpl = ""
     if ($preset.tmpl) { $script:dnsState.Tmpl = [string]$preset.tmpl }
-    if ($preset.dns) {
+    # A DnsMode is there unless the file leaves it out or gives null or "",
+    # as in the Python scripts. PowerShell's own truth test took [0] for no
+    # mode and {} for one; now false, 0, a list or an object is a value that
+    # names no mode, and is named.
+    if (($null -ne $preset.dns) -and -not (($preset.dns -is [string]) -and ($preset.dns.Length -eq 0))) {
         # Case-insensitive, as main was: a hand-edited "Automatic" must not
         # silently land on unmanaged and drop the resolver the file asked for.
         # Only a string names a mode, as in the Python scripts: a list such
-        # as ["off"] is named, not taken. An unknown one is named after the
-        # Features values, through Format-ImportItem like every value from
-        # the file: its text could be anything.
+        # as ["off"] is named, not taken. OrdinalIgnoreCase, and only on
+        # printable ASCII, as Python's .lower() matches the mode words: -eq
+        # compares linguistically, so "se" + U+00AD + "cure" was secure. An
+        # unknown one is named after the Features values, through
+        # Format-ImportItem like every value from the file: its text could be
+        # anything.
         $want = [string]$preset.dns
         $canon = @()
-        if ($preset.dns -is [string]) { $canon = @($script:dnsModes | Where-Object { $_ -eq $want }) }
+        if (($preset.dns -is [string]) -and ($want -cmatch '^[\x20-\x7E]*\z')) {
+            $canon = @($script:dnsModes | Where-Object { [string]::Equals($_, $want, [System.StringComparison]::OrdinalIgnoreCase) })
+        }
         if ($canon.Count -gt 0) {
             $script:dnsState.Mode = [Array]::IndexOf($script:dnsModes, $canon[0])
         } else { $script:importNotes.Add((Format-ImportItem 'DnsMode' $preset.dns)) }
@@ -1666,25 +1684,39 @@ function Import-PresetIntoState($preset) {
     Enforce-ExclusionGroups
 }
 
+# Whether a list from the file holds the same strings as a row's list, in
+# any order, compared ordinally as Python's sorted() and == compare them.
+# Compare-Object went by the current culture, which skips ignorable
+# characters: "https://*" with a soft hyphen (U+00AD) in it matched
+# SlimBrave's own wildcard. Sorts copies; the callers' lists stay as they
+# were.
+function Test-ImportSameList([string[]]$Want, [string[]]$Mine) {
+    if ($Want.Length -ne $Mine.Length) { return $false }
+    $a = [string[]]$Want.Clone()
+    $b = [string[]]$Mine.Clone()
+    [Array]::Sort($a, [System.StringComparer]::Ordinal)
+    [Array]::Sort($b, [System.StringComparer]::Ordinal)
+    for ($i = 0; $i -lt $a.Length; $i++) {
+        if (-not [string]::Equals($a[$i], $b[$i], [System.StringComparison]::Ordinal)) { return $false }
+    }
+    return $true
+}
+
 # A Features key or legacy entry no row has, named in the Import status:
 # one that differs from a row's key only in letter case, with the spelling
 # it needs; one an earlier version offered; and any other as a policy
-# SlimBrave Neo does not offer, with where a DNS name belongs. None is ever
-# written: issue #33 asked for such keys to pass through as custom policy,
-# and an elevated tool writing whatever machine policy a shared file names
-# is the risk that was declined.
+# SlimBrave Neo does not offer (Format-ImportEntry adds where a DNS name
+# belongs). Kept as the file wrote it; only the names a clause shows are
+# made safe to show. None is ever written: issue #33 asked for such keys to
+# pass through as custom policy, and an elevated tool writing whatever
+# machine policy a shared file names is the risk that was declined.
 function Add-ImportNameNote([string]$Name, $RowFold, $Retired) {
     $canon = Get-ImportCanonical $Name $RowFold
     if ($null -ne $canon) {
-        $script:importMiscased.Add((Format-ImportName $Name) + ' (use ' + $canon + ')')
+        $script:importMiscased.Add(@($Name, $canon))
     } elseif ($Retired.Contains($Name)) {
-        $script:importRetired.Add((Format-ImportName $Name))
-    } else {
-        $item = Format-ImportName $Name
-        $hint = Get-ImportDnsHint $Name
-        if ($null -ne $hint) { $item = $item + ' (' + $hint + ')' }
-        $script:importUnknown.Add($item)
-    }
+        $script:importRetired.Add($Name)
+    } else { $script:importUnknown.Add($Name) }
 }
 
 # Where a DNS name inside Features belongs: the two policies are set by the
@@ -1712,12 +1744,12 @@ function Get-ImportCanonical([string]$Name, $Fold) {
 # The three fields of a config, read by their exact names, as the Python
 # scripts read them: PSObject.Properties[...] and $cfg.Name ignore letter
 # case, so a "features" or a "dnsmode" used to be taken as if spelled right.
-# Every other top-level name goes into $Top for the status: one that differs
-# from a field only in letter case with the spelling it needs (Found keeps a
-# mis-cased Features for the refusal), anything else as not a SlimBrave Neo
-# setting. ConvertFrom-Json refuses two names that differ only in case, so a
-# field cannot also be there under another spelling. Returns the fields
-# found, by name.
+# Every other top-level name goes into $Top for the status, as the file
+# wrote it: one that differs from a field only in letter case paired with
+# the spelling it needs (Found keeps a mis-cased Features for the refusal),
+# anything else as not a SlimBrave Neo setting. ConvertFrom-Json refuses two
+# names that differ only in case, so a field cannot also be there under
+# another spelling. Returns the fields found, by name.
 function Read-ImportFields($Cfg, $Top) {
     $fields = @{}
     if (-not ($Cfg -is [System.Management.Automation.PSCustomObject])) { return $fields }
@@ -1731,11 +1763,37 @@ function Read-ImportFields($Cfg, $Top) {
         }
         $canon = Get-ImportCanonical $n $fold
         if ($null -ne $canon) {
-            $Top.Case.Add((Format-ImportName $n) + ' (use ' + $canon + ')')
+            $Top.Case.Add(@($n, $canon))
             if ([string]::Equals($canon, 'Features', [System.StringComparison]::Ordinal)) { $Top.Found = $n }
-        } else { $Top.Other.Add((Format-ImportName $n)) }
+        } else { $Top.Other.Add($n) }
     }
     return $fields
+}
+
+# DnsTemplates as the Python scripts read it: missing, null or "" is no
+# template, a string is the template, and an array of strings is joined
+# with spaces. Anything else is refused - a 5 used to become the template
+# "5" - and so is a template with a control character (C0, DEL, C1, or a
+# line or paragraph separator), as there: no DoH template holds one, and
+# Test-DohTemplate would strip the C0 ones and DEL unseen at Apply.
+# Returns the template as Text, and as Why the refusal for the Import
+# status ($null when there is none).
+function Read-ImportTemplate($Value) {
+    $text = $Value
+    if ($Value -is [array]) {
+        $parts = [System.Collections.Generic.List[string]]::new()
+        foreach ($x in $Value) {
+            if (-not ($x -is [string])) { return @{ Text = ''; Why = 'DnsTemplates must be a string' } }
+            $parts.Add($x)
+        }
+        $text = $parts -join ' '
+    }
+    if ($null -eq $text) { return @{ Text = ''; Why = $null } }
+    if (-not ($text -is [string])) { return @{ Text = ''; Why = 'DnsTemplates must be a string' } }
+    if ($text -cmatch '[\x00-\x1F\x7F-\x9F\u2028\u2029]') {
+        return @{ Text = ''; Why = 'DnsTemplates contains a control character' }
+    }
+    return @{ Text = $text; Why = $null }
 }
 
 # Text from an imported file as the status shows it, by the one rule the
@@ -1780,7 +1838,14 @@ function Format-ImportName([string]$Name) {
 # A value from the file as an item shows it after Key=, or $null where the
 # item is the key alone: true and false, null, an integer in decimal (cut at
 # 64 like the rest), a string quoted. A fraction, a list or an object is not
-# shown, since no two languages print one alike.
+# shown, since no two languages print one alike. An integer is an [int] or
+# a [long], as Windows PowerShell 5.1 reads JSON: past Int64 its reader
+# gives a [decimal] or a [double], which is not shown, and which every
+# row's type check refuses as it refuses a fraction - so such a number is
+# named by its key alone, under 'the value is not one this policy accepts',
+# and a legacy entry of one is left out, as the Python scripts treat an
+# integer outside 64 bits. The cut is the shared rule; an Int64's 20
+# characters never reach it.
 function Format-ImportValue($Value) {
     if ($null -eq $Value) { return 'null' }
     if ($Value -is [bool]) {
@@ -1804,18 +1869,55 @@ function Format-ImportItem([string]$Key, $Value) {
     return (Format-ImportName $Key) + '=' + $shown
 }
 
+# The imported file's own name, for the 'Imported from' lead, by the rule
+# the Python scripts apply to it: each UTF-16 code unit outside printable
+# ASCII as \uXXXX in uppercase hex, unquoted and uncut. A Windows file name
+# can hold a bidi override (U+202E), which would reorder the whole status
+# bar; it cannot hold a quote or a backslash.
+function Format-ImportFileName([string]$Name) {
+    $sb = [System.Text.StringBuilder]::new()
+    for ($i = 0; $i -lt $Name.Length; $i++) {
+        $ch = $Name[$i]
+        $code = [int]$ch
+        if (($code -lt 0x20) -or ($code -gt 0x7E)) {
+            [void]$sb.Append('\u' + $code.ToString('X4'))
+        } else { [void]$sb.Append([string]$ch) }
+    }
+    return $sb.ToString()
+}
+
+# One item of a clause, made only when the status is built: $Kind says what
+# its list holds. Case: a name and the spelling it needs. Unknown: a name,
+# with where a DNS name belongs (or a legacy value's text, which comes out
+# as it went in). Name: a name. Item: an item Format-ImportItem made.
+function Format-ImportEntry([string]$Kind, $Entry) {
+    if ([string]::Equals($Kind, 'Item', [System.StringComparison]::Ordinal)) { return [string]$Entry }
+    if ([string]::Equals($Kind, 'Case', [System.StringComparison]::Ordinal)) {
+        return (Format-ImportName $Entry[0]) + ' (use ' + $Entry[1] + ')'
+    }
+    $item = Format-ImportName $Entry
+    if ([string]::Equals($Kind, 'Unknown', [System.StringComparison]::Ordinal)) {
+        $hint = Get-ImportDnsHint $Entry
+        if ($null -ne $hint) { $item = $item + ' (' + $hint + ')' }
+    }
+    return $item
+}
+
 # One clause of the Import status, in the words and order the Python scripts
 # use (see the Import handler): ' <Lead>, because <Reason>: <items>.' with at
 # most $script:IMPORT_MAX_ITEMS items, in file order, then ' and N more'; ''
 # when there is nothing to name. The cap keeps a file naming a thousand keys
-# from burying every other clause.
+# from burying every other clause, and only the items shown are formatted
+# (Format-ImportEntry): the rest are only counted.
 $script:IMPORT_MAX_ITEMS = 5
-function Get-ImportClause([string]$Lead, [string]$Reason, $Items) {
+function Get-ImportClause([string]$Lead, [string]$Reason, $Items, [string]$Kind) {
     if ($null -eq $Items) { return '' }
     $all = @($Items)
     if ($all.Count -eq 0) { return '' }
     $shown = [math]::Min($all.Count, $script:IMPORT_MAX_ITEMS)
-    $text = ' ' + $Lead + ', because ' + $Reason + ': ' + ($all[0..($shown - 1)] -join ', ')
+    $parts = [System.Collections.Generic.List[string]]::new()
+    for ($i = 0; $i -lt $shown; $i++) { $parts.Add((Format-ImportEntry $Kind $all[$i])) }
+    $text = ' ' + $Lead + ', because ' + $Reason + ': ' + ($parts -join ', ')
     if ($all.Count -gt $shown) { $text += ' and ' + ($all.Count - $shown) + ' more' }
     return $text + '.'
 }
@@ -2395,10 +2497,13 @@ function New-BarButton([string]$label,[bool]$accent){
                     foreach($id in @($script:state.Keys)){ $snap[$id]=@{On=$script:state[$id].On; Sel=$script:state[$id].Sel} }
                     $dnsSnap=@{Mode=$script:dnsState.Mode; Tmpl=$script:dnsState.Tmpl}
                     # What the top level carries besides the three fields, for the
-                    # status (Read-ImportFields fills it), and why an import failed
-                    # when that is more than 'not a SlimBrave config'.
-                    $top=@{Case=[System.Collections.Generic.List[string]]::new(); Other=[System.Collections.Generic.List[string]]::new(); Found=""}
+                    # status (Read-ImportFields fills it; Case holds pairs), and
+                    # why an import failed when that is more than 'not a SlimBrave
+                    # config': a case-only duplicate ($dupWhy) or another reason
+                    # the file is refused ($failWhy).
+                    $top=@{Case=[System.Collections.Generic.List[object]]::new(); Other=[System.Collections.Generic.List[string]]::new(); Found=""}
                     $dupWhy=$null
+                    $failWhy=$null
                     try{
                         # ReadAllText reads UTF-8 by default and honours a UTF-8,
                         # UTF-16 or UTF-32 BOM, so the BOM-less UTF-8 Export writes
@@ -2420,7 +2525,12 @@ function New-BarButton([string]$label,[bool]$accent){
                            -not $field.ContainsKey('Features') -or
                            $null -eq $cfg.Features -or
                            -not (($cfg.Features -is [System.Management.Automation.PSCustomObject]) -or ($cfg.Features -is [array]))){ throw "no Features block" }
-                        Import-PresetIntoState @{features=$cfg.Features;dns=$field['DnsMode'];tmpl=$field['DnsTemplates']}
+                        # A DnsTemplates the Python scripts refuse is refused here
+                        # too, with their reason, before any row is touched
+                        # (Read-ImportTemplate).
+                        $template=Read-ImportTemplate $field['DnsTemplates']
+                        if($null -ne $template.Why){ $failWhy=$template.Why; throw $failWhy }
+                        Import-PresetIntoState @{features=$cfg.Features;dns=$field['DnsMode'];tmpl=$template.Text}
                         $ok=$true
                     } catch {
                         # Windows PowerShell keeps a JSON object as a PSObject, whose
@@ -2429,6 +2539,16 @@ function New-BarButton([string]$label,[bool]$accent){
                         # depth. The error id is the same in every language; the
                         # message, which names both keys, is in the user's.
                         if([string]$_.FullyQualifiedErrorId -like 'DuplicateKeysInJsonString,*'){ $dupWhy=[string]$_.Exception.Message }
+                        # Nor can a PSObject have a property named "", at any depth:
+                        # 5.1's ConvertFrom-Json looks each key up in Properties[...]
+                        # (PopulateFromDictionary in the non-CoreCLR JsonObject.cs),
+                        # whose indexer throws PSArgumentException for its parameter
+                        # 'name', error id Argument. On that path only an empty name
+                        # throws it (the reserved names fail as ReservedMemberName or
+                        # as a duplicate); PowerShell 7 says EmptyKeyInJsonString.
+                        if(([string]$_.FullyQualifiedErrorId -like 'Argument,*.ConvertFromJsonCommand') -and
+                           ($_.Exception -is [System.Management.Automation.PSArgumentException]) -and
+                           [string]::Equals([string]$_.Exception.ParamName, 'name', [System.StringComparison]::Ordinal)){ $failWhy="a key is empty" }
                         foreach($id in @($snap.Keys)){ $script:state[$id].On=$snap[$id].On; $script:state[$id].Sel=$snap[$id].Sel }
                         $script:dnsState.Mode=$dnsSnap.Mode; $script:dnsState.Tmpl=$dnsSnap.Tmpl
                         $ok=$false
@@ -2438,29 +2558,40 @@ function New-BarButton([string]$label,[bool]$accent){
                     # chain turns its own errors into the .NET crash dialog.
                     if($ok){
                         Refresh-View
-                        $msg="Imported from $([System.IO.Path]::GetFileName($dlg.FileName))"
+                        # The file's name is escaped as the Python scripts escape it.
+                        $msg="Imported from "+(Format-ImportFileName ([System.IO.Path]::GetFileName($dlg.FileName)))
                         # Everything the file carries that nothing took, in the
                         # Python scripts' reasons and fixed order, each clause in
-                        # file order (Get-ImportClause); a name in the wrong case
-                        # inside Features comes before one at the top level.
-                        $msg+=Get-ImportClause 'Left unmanaged' 'names are case-sensitive' (@($script:importMiscased)+@($top.Case))
-                        $msg+=Get-ImportClause 'Left unmanaged' 'the value is not one this policy accepts' $script:importNotes
-                        $msg+=Get-ImportClause 'Left unmanaged' 'no row sets that value' $script:importUnwritten
-                        $msg+=Get-ImportClause 'Left unmanaged' 'SlimBrave Neo no longer offers it' $script:importRetired
-                        $msg+=Get-ImportClause 'Left unmanaged' 'SlimBrave Neo does not offer it' $script:importUnknown
-                        $msg+=Get-ImportClause 'Ignored' 'it is not a SlimBrave Neo setting' $top.Other
+                        # file order (Get-ImportClause), its kind saying how its
+                        # list is shown (Format-ImportEntry). Features items come
+                        # first, then the DnsMode note, then the other top-level
+                        # fields: a name in the wrong case inside Features comes
+                        # before one at the top level, and an unknown DnsMode
+                        # after the Features values.
+                        $msg+=Get-ImportClause 'Left unmanaged' 'names are case-sensitive' (@($script:importMiscased)+@($top.Case)) 'Case'
+                        $msg+=Get-ImportClause 'Left unmanaged' 'the value is not one this policy accepts' $script:importNotes 'Item'
+                        $msg+=Get-ImportClause 'Left unmanaged' 'no row sets that value' $script:importUnwritten 'Item'
+                        $msg+=Get-ImportClause 'Left unmanaged' 'SlimBrave Neo no longer offers it' $script:importRetired 'Name'
+                        $msg+=Get-ImportClause 'Left unmanaged' 'SlimBrave Neo does not offer it' $script:importUnknown 'Unknown'
+                        $msg+=Get-ImportClause 'Ignored' 'it is not a SlimBrave Neo setting' $top.Other 'Name'
                         # Unique: two rows can share a key and name it twice.
+                        # Sorted and not capped, as before: a group drops a key
+                        # only where its rows carry two keys (spellcheck and
+                        # shields today).
                         if($script:importConflicts.Count -gt 0){
                             $msg+=" Left unmanaged, because it is mutually exclusive with another imported row: "+(($script:importConflicts | Sort-Object -Unique) -join ", ")+"."
                         }
                         Set-Status $msg
                     } else {
                         # A case-only duplicate is said as such, with the error's
-                        # own text made safe; a Features in the wrong case is named.
+                        # own text made safe; so is an empty key and a DnsTemplates
+                        # refused; a Features in the wrong case is named.
                         $why="not a SlimBrave config"
                         if($null -ne $dupWhy){
                             $why="keys differ only in letter case"
                             if($dupWhy){ $why+=": "+(Format-ImportText $dupWhy 300) }
+                        } elseif($failWhy){
+                            $why=$failWhy
                         } elseif($top.Found){ $why+=" (found "+(Format-ImportName $top.Found)+"; names are case-sensitive)" }
                         Set-Status "Import failed - $why"
                     }
